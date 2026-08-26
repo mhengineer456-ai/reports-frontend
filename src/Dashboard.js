@@ -171,7 +171,7 @@ export default function Dashboard() {
     },
     {
       title: "Packing Alloted Lot",
-      emoji: "📦✅",
+      emoji: "📦⏳",
       path: "/packing-alloted-lot",
       gradient: "linear-gradient(135deg, #0284c7 0%, #2563eb 100%)",
       glowColor: "rgba(2, 132, 199, 0.4)",
@@ -180,6 +180,18 @@ export default function Dashboard() {
       status: "active",
       features: ["Lot allocation", "Carton planning", "Operator assign", "Target tracking"],
       lastUpdated: "Today"
+    },
+    {
+      title: "Packing Complete Lots",
+      emoji: "📦✅",
+      path: "/packing-completed-lots",
+      gradient: "linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)",
+      glowColor: "rgba(37, 99, 235, 0.4)",
+      description: "View all packing issue lots with verified packing complete dates, aging analysis, and barcode linkages",
+      category: "Production",
+      status: "active",
+      features: ["Packing complete date", "Aging days analysis", "Barcode linkage", "Excel & PDF export"],
+      lastUpdated: "Real-time"
     },
     {
       title: "Overall Stitching Report",

@@ -20,6 +20,8 @@ const OverallCuttingToPacking = () => {
   const ISSUES_SHEET = SHEET_NAMES.ISSUES;
   const SHEET_ID_RAWPACK = SPREADSHEET_IDS.RAWPACK || '1xD8Uy1lUgvNTQ2RGRBI4ZjOrozbinUPRq2_UfIplP98';
   const RAWPACK_SHEET = SHEET_NAMES.RAWPACK || 'RAWPACK';
+  const SHEET_ID_BARCODE = SPREADSHEET_IDS.BARCODE || '1dOCjNFwaAel5qun0_ZJVIGmREqjI76CJBBFIjM3NHv8';
+  const BARCODE_SHEET = SHEET_NAMES.BARCODE || 'LotBarcodeData';
 
 // Reusable Multi-Select Dropdown Filter Component
 const MultiSelectFilter = ({ label, options = [], selected = [], onChange, placeholder = "Select..." }) => {
@@ -240,6 +242,7 @@ const DISPLAY_HEADERS = [
   const [indexData, setIndexData] = useState([]);
   const [issuesData, setIssuesData] = useState([]);
   const [rawpackData, setRawpackData] = useState([]);
+  const [barcodeData, setBarcodeData] = useState([]);
   const [headers, setHeaders] = useState(DISPLAY_HEADERS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -2212,8 +2215,93 @@ processedJobOrderData.slice(0, 5).forEach((item, index) => {
     }
 
     setRawpackData(processedRawpackData);
+
+    // ========== 5. FETCH LOT BARCODE DATA (PACKING COMPLETE) ==========
+    let processedBarcodeData = [];
+    try {
+      const barcodeRes = await fetchSheetDataFromBackend(SHEET_ID_BARCODE, `${BARCODE_SHEET}!A:Z`);
+      if (barcodeRes.ok) {
+        const barcodeRows = barcodeRes.values || [];
+        console.log(`Received ${barcodeRows.length} rows from ${BARCODE_SHEET} sheet`);
+
+        if (barcodeRows.length > 0) {
+          const barcodeHeaders = barcodeRows[0] || [];
+          console.log('Actual headers in LotBarcodeData sheet:', barcodeHeaders);
+
+          const bMap = {};
+          barcodeHeaders.forEach((h, idx) => {
+            const clean = String(h || '').trim().toLowerCase();
+            if (clean) bMap[clean] = idx;
+          });
+
+          const getBarcodeCol = (row, keyArr) => {
+            for (const key of keyArr) {
+              const idx = bMap[key];
+              if (idx !== undefined && row[idx] !== undefined) {
+                const val = String(row[idx]).trim();
+                if (val && val !== '#N/A') return val;
+              }
+            }
+            return '';
+          };
+
+          // Group by unique Lot Number, using Generated Date as Packing Complete date
+          const lotMap = new Map();
+
+          barcodeRows.slice(1).forEach((row, index) => {
+            if (!row || row.length === 0) return;
+            const lotNo = getBarcodeCol(row, ['lot number', 'lot no', 'lot no.', 'lot']);
+            if (!lotNo) return;
+
+            const normalizedLot = String(lotNo).trim().toUpperCase();
+            const genDateRaw = getBarcodeCol(row, ['generated date', 'timestamp', 'date', 'created at']);
+            const status = getBarcodeCol(row, ['status']);
+            const barcodeId = getBarcodeCol(row, ['barcode id', 'barcode']);
+            const brand = getBarcodeCol(row, ['brand']);
+            const style = getBarcodeCol(row, ['style']);
+
+            const formattedGenDate = genDateRaw ? formatDate(genDateRaw) : '';
+
+            const existing = lotMap.get(normalizedLot);
+            if (!existing) {
+              lotMap.set(normalizedLot, {
+                _id: `barcode-${index}`,
+                'Lot Number': String(lotNo).trim(),
+                'Barcode ID': barcodeId,
+                'Status': status,
+                'Brand': brand,
+                'Style': style,
+                'Generated Date': genDateRaw,
+                'Packing Complete': formattedGenDate || genDateRaw,
+                'Pkg Comp': formattedGenDate || genDateRaw,
+                _rawDate: genDateRaw
+              });
+            } else {
+              // If multiple barcode records for same lot, keep the latest valid generated date
+              if (genDateRaw) {
+                const newDate = parseDate(genDateRaw) || new Date(genDateRaw);
+                const oldDate = parseDate(existing._rawDate) || new Date(existing._rawDate);
+                if (!existing._rawDate || (newDate instanceof Date && !isNaN(newDate) && oldDate instanceof Date && !isNaN(oldDate) && newDate > oldDate)) {
+                  existing['Generated Date'] = genDateRaw;
+                  existing['Packing Complete'] = formattedGenDate || genDateRaw;
+                  existing['Pkg Comp'] = formattedGenDate || genDateRaw;
+                  existing._rawDate = genDateRaw;
+                }
+              }
+            }
+          });
+
+          processedBarcodeData = Array.from(lotMap.values());
+          console.log(`Processed ${processedBarcodeData.length} unique LotBarcodeData records`);
+        }
+      }
+    } catch (bErr) {
+      console.warn('LotBarcodeData sheet fetch error:', bErr);
+    }
+
+    setBarcodeData(processedBarcodeData);
     
-    mergeData(processedJobOrderData, processedIndexData, processedIssuesData, processedRawpackData);
+    mergeData(processedJobOrderData, processedIndexData, processedIssuesData, processedRawpackData, processedBarcodeData);
     
   } catch (err) {
     console.error('Error fetching data:', err);
@@ -2233,6 +2321,7 @@ processedJobOrderData.slice(0, 5).forEach((item, index) => {
     setIndexData([]);
     setIssuesData([]);
     setRawpackData([]);
+    setBarcodeData([]);
   } finally {
     setLoading(false);
   }
@@ -2240,21 +2329,21 @@ processedJobOrderData.slice(0, 5).forEach((item, index) => {
 
   // Merge data from all sheets
 // Merge data from all sheets
-// Merge data from all sheets
-const mergeData = (jobOrderData, indexData, issuesData, rawpackData = []) => {
+const mergeData = (jobOrderData, indexData, issuesData, rawpackData = [], barcodeData = []) => {
   console.log('Merging data from all sheets...');
   console.log('JobOrder records:', jobOrderData?.length || 0);
   console.log('Index records:', indexData?.length || 0);
   console.log('Issues records:', issuesData?.length || 0);
   console.log('RAWPACK records:', rawpackData?.length || 0);
+  console.log('Barcode records:', barcodeData?.length || 0);
   
   // Filter out cancelled lots from JobOrder data
   const validJobOrderData = jobOrderData.filter(item => !item._isCancelled);
   console.log(`Valid JobOrder records (excluding cancelled): ${validJobOrderData.length}`);
   console.log(`Cancelled lots filtered out: ${jobOrderData.length - validJobOrderData.length}`);
   
-  if ((!issuesData || issuesData.length === 0) && (!rawpackData || rawpackData.length === 0)) {
-    console.log('WARNING: Packing data (Issues & RAWPACK) is empty or undefined!');
+  if ((!issuesData || issuesData.length === 0) && (!rawpackData || rawpackData.length === 0) && (!barcodeData || barcodeData.length === 0)) {
+    console.log('WARNING: Packing data (Issues, RAWPACK & Barcode) is empty or undefined!');
     
     const mergedData = validJobOrderData.map(jobOrderItem => {
       const lotNumber = jobOrderItem['Lot No'];
@@ -2500,19 +2589,32 @@ const mergeData = (jobOrderData, indexData, issuesData, rawpackData = []) => {
       }
     });
   }
+
+  const barcodeMap = new Map();
+  if (Array.isArray(barcodeData)) {
+    barcodeData.forEach(item => {
+      const lotNumber = item['Lot Number'] || item['Lot No'];
+      if (lotNumber && String(lotNumber).trim() !== '') {
+        const normalizedKey = String(lotNumber).trim().toUpperCase();
+        barcodeMap.set(normalizedKey, item);
+      }
+    });
+  }
   
-  // Merge validJobOrderData (excluding cancelled) with Index, Issues, and RAWPACK data
+  // Merge validJobOrderData (excluding cancelled) with Index, Issues, RAWPACK, and Barcode data
   const mergedData = validJobOrderData.map((jobOrderItem) => {
     const lotNumber = jobOrderItem['Lot No'];
     let indexItem = null;
     let issuesItem = null;
     let rawpackItem = null;
+    let barcodeItem = null;
     
     if (lotNumber && String(lotNumber).trim() !== '') {
       const normalizedKey = String(lotNumber).trim().toUpperCase();
       indexItem = indexMap.get(normalizedKey);
       issuesItem = issuesMap.get(normalizedKey);
       rawpackItem = rawpackMap.get(normalizedKey);
+      barcodeItem = barcodeMap.get(normalizedKey);
     }
     
     const mergedItem = {};
@@ -2664,9 +2766,9 @@ const mergeData = (jobOrderData, indexData, issuesData, rawpackData = []) => {
       mergedItem._hasIndexData = false;
     }
     
-    // Add Packing data from Issues and/or RAWPACK sheet if available
-    if (issuesItem || rawpackItem) {
-      const pkgSupVal = issuesItem?.['Packing Supervisor'] || rawpackItem?.['Packing Supervisor'] || rawpackItem?.['Pkg Sup'] || '';
+    // Add Packing data from Issues, RAWPACK, and/or Barcode sheet if available
+    if (issuesItem || rawpackItem || barcodeItem) {
+      const pkgSupVal = issuesItem?.['Packing Supervisor'] || rawpackItem?.['Packing Supervisor'] || rawpackItem?.['Pkg Sup'] || barcodeItem?.['Packing Supervisor'] || '';
       mergedItem['Pkg Sup'] = pkgSupVal;
       mergedItem._raw['Packing Supervisor'] = pkgSupVal;
       
@@ -2738,10 +2840,19 @@ const mergeData = (jobOrderData, indexData, issuesData, rawpackData = []) => {
         }
       }
       
+      // Augment/fallback with Barcode Sheet Generated Date as Packing Complete date
+      if (!packingCompleteValue && barcodeItem && barcodeItem['Pkg Comp']) {
+        packingCompleteValue = barcodeItem['Pkg Comp'];
+      }
+      
       mergedItem['Pkg Comp'] = packingCompleteValue;
       mergedItem._raw['Packing Complete'] = packingCompleteValue;
       
-      mergedItem._packingSource = issuesItem && rawpackItem ? 'Issues & RAWPACK' : (issuesItem ? 'Issues Sheet' : 'RAWPACK Sheet');
+      const packingSources = [];
+      if (issuesItem) packingSources.push('Issues');
+      if (rawpackItem) packingSources.push('RAWPACK');
+      if (barcodeItem) packingSources.push('Barcode');
+      mergedItem._packingSource = packingSources.length > 0 ? packingSources.join(' & ') + ' Sheet' : 'No Data';
       mergedItem._issuesMatch = true;
       mergedItem._isHoldLot = parsedWIPPacking.isHold || false;
     } else {

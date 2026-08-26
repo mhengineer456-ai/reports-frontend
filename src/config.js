@@ -13,6 +13,7 @@ export const SPREADSHEET_IDS = {
   ZIP: process.env.REACT_APP_ZIP_SPREADSHEET_ID || '16mifNw0WMIlnZ1XRHsuH_8kVUm_6Y1O3uVsoM-Hjppo',
   DORI: process.env.REACT_APP_DORI_SPREADSHEET_ID || '1LjwZqU26F0xwL1tEyps8txsM1qS8LLUuE-sy_4CQK6k',
   RAWPACK: process.env.REACT_APP_RAWPACK_SPREADSHEET_ID || '1xD8Uy1lUgvNTQ2RGRBI4ZjOrozbinUPRq2_UfIplP98',
+  BARCODE: process.env.REACT_APP_BARCODE_SPREADSHEET_ID || '1dOCjNFwaAel5qun0_ZJVIGmREqjI76CJBBFIjM3NHv8',
 };
 
 export const SHEET_NAMES = {
@@ -21,6 +22,7 @@ export const SHEET_NAMES = {
   ISSUES: process.env.REACT_APP_ISSUES_SHEET_NAME || 'Issues',
   CUTTING: process.env.REACT_APP_CUTTING_SHEET_NAME || 'Cutting',
   RAWPACK: process.env.REACT_APP_RAWPACK_SHEET_NAME || 'RAWPACK',
+  BARCODE: process.env.REACT_APP_BARCODE_SHEET_NAME || 'LotBarcodeData',
 };
 
 export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';

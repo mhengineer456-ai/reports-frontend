@@ -55,13 +55,13 @@ const MultiSelectDropdown = ({ options = [], selectedValues = [], onChange, plac
 
   const displayText = () => {
     if (!selectedValues || selectedValues.length === 0) {
-      return placeholder || 'All Supervisors';
+      return placeholder || 'All';
     }
     if (selectedValues.length === 1) {
       return selectedValues[0];
     }
     if (selectedValues.length === options.length && options.length > 0) {
-      return 'All Supervisors';
+      return placeholder || 'All';
     }
     return `${selectedValues.length} Selected`;
   };
@@ -264,23 +264,23 @@ const StitchingCompleteLot = () => {
   // Filters
   // Add this to your filters state (around line 33-34)
   const [filters, setFilters] = useState({
-    globalSearch: '', // ADD THIS LINE
+    globalSearch: '',
     lotNumber: '',
-    fabric: '',
-    garmentType: '',
-    style: '',
-    brand: '',
-    partyName: '',
-    supervisor: [], // Changed to array for multi-select
-    season: '',
-    mwk: '',
-    directStitching: '',
+    fabric: [],
+    garmentType: [],
+    style: [],
+    brand: [],
+    partyName: [],
+    supervisor: [],
+    season: [],
+    mwk: [],
+    directStitching: [],
     challanHistory: '',
-    wipStatus: '',
+    wipStatus: [],
     completedStatus: '',
-    lotStatus: 'Completed', // CHANGED to "Completed" as default
+    lotStatus: 'Completed',
     dateRange: { from: '', to: '' },
-    stitchingDaysFilter: [] // CHANGED: Now an array for multi-select
+    stitchingDaysFilter: []
   });
 
   const [sortConfig, setSortConfig] = useState({
@@ -1376,14 +1376,27 @@ const StitchingCompleteLot = () => {
             return true;
           }
 
-          // Handle supervisor filter (array or string)
-          if (key === 'supervisor') {
-            if (!value || (Array.isArray(value) && value.length === 0)) return true;
-            const itemSupervisor = item.supervisor ? normalizeText(item.supervisor) : '';
-            if (Array.isArray(value)) {
+          // Handle array filters (multi-select for supervisor, fabric, garmentType, style, brand, partyName, season, mwk, directStitching, wipStatus)
+          if (Array.isArray(value)) {
+            if (value.length === 0) return true;
+
+            if (key === 'supervisor') {
+              const itemSupervisor = item.supervisor ? normalizeText(item.supervisor) : '';
               return value.some(v => normalizeText(v) === itemSupervisor);
             }
-            return itemSupervisor.includes(normalizeText(value));
+
+            if (key === 'wipStatus') {
+              const isCompleted = isLotCompleted(item.completedStatus);
+              const latestRemarks = getLatestWipRemarks(item[key], isCompleted);
+              const remarkNorm = normalizeText(latestRemarks);
+              return value.some(v => remarkNorm.includes(normalizeText(v)));
+            }
+
+            const itemVal = item[key] ? normalizeText(item[key]) : '';
+            return value.some(v => {
+              const normV = normalizeText(v);
+              return itemVal === normV || itemVal.includes(normV);
+            });
           }
 
           // Handle date range filter separately
@@ -1452,7 +1465,7 @@ const StitchingCompleteLot = () => {
             return normalizeText(embPrintDate).includes(filterValue);
           }
 
-          // Handle wipStatus filter - UPDATED
+          // Handle wipStatus filter (single string fallback)
           if (key === 'wipStatus') {
             const isCompleted = isLotCompleted(item.completedStatus);
             const latestRemarks = getLatestWipRemarks(item[key], isCompleted);
@@ -1628,22 +1641,23 @@ const StitchingCompleteLot = () => {
   const clearFilters = useCallback(async () => {
     // Default filters with ALL supervisors and Completed status
     const defaultFilters = {
+      globalSearch: '',
       lotNumber: '',
-      fabric: '',
-      garmentType: '',
-      style: '',
-      brand: '',
-      partyName: '',
-      supervisor: [], // Empty array for all supervisors
-      season: '',
-      mwk: '',
-      directStitching: '',
+      fabric: [],
+      garmentType: [],
+      style: [],
+      brand: [],
+      partyName: [],
+      supervisor: [],
+      season: [],
+      mwk: [],
+      directStitching: [],
       challanHistory: '',
-      wipStatus: '',
+      wipStatus: [],
       completedStatus: '',
-      lotStatus: 'Completed',  // Default to Completed for all
-      dateRange: { from: '', to: '' }, // Reset date range
-      stitchingDaysFilter: [] // Reset to empty array
+      lotStatus: 'Completed',
+      dateRange: { from: '', to: '' },
+      stitchingDaysFilter: []
     };
 
     setFilters(defaultFilters);
@@ -3488,27 +3502,27 @@ const StitchingCompleteLot = () => {
 
 
 
-  // Memoize render functions
+  // Memoize render functions with MultiSelectDropdown
   const renderDropdownFilter = useCallback((fieldName, label) => (
     <div key={fieldName} className="filter-item">
       <label className="filter-label">
         {label}
       </label>
-      <select
-        name={fieldName}
-        value={filters[fieldName]}
-        onChange={handleFilterChange}
-        className="filter-select"
-      >
-        <option value="">All {label}</option>
-        {filterOptions[fieldName].map((option, index) => (
-          <option key={index} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
+      <MultiSelectDropdown
+        options={filterOptions[fieldName] || []}
+        selectedValues={Array.isArray(filters[fieldName]) ? filters[fieldName] : (filters[fieldName] ? [filters[fieldName]] : [])}
+        onChange={(selected) => {
+          const newFilters = { ...filters, [fieldName]: selected };
+          setFilters(newFilters);
+          setTimeout(() => {
+            applyFilters(newFilters, data);
+          }, 0);
+        }}
+        placeholder={`All ${label}`}
+        disabled={loading}
+      />
     </div>
-  ), [filters, filterOptions, handleFilterChange]);
+  ), [filters, filterOptions, data, applyFilters, loading]);
 
   // Loading and error states
   if (isInitialLoad && loading) {
@@ -3745,15 +3759,14 @@ const StitchingCompleteLot = () => {
           </div>
 
           <div className="filters-info">
-            {/* UPDATED active filters count to handle dateRange object */}
             <span className="active-filters">
               {Object.entries(filters).filter(([key, value]) => {
                 if (key === 'dateRange') {
                   const { from, to } = value;
                   return from || to;
                 }
-                if (key === 'stitchingDaysFilter' || key === 'supervisor') {
-                  return Array.isArray(value) && value.length > 0;
+                if (Array.isArray(value)) {
+                  return value.length > 0;
                 }
                 return typeof value === 'string' && value.trim() !== '';
               }).length} active filters
@@ -3763,7 +3776,7 @@ const StitchingCompleteLot = () => {
               className="btn-clear"
               disabled={loading}
             >
-              {filters.supervisor === 'Monu' ? 'Clear Filters' : ''}
+              Clear Filters
             </button>
           </div>
         </div>
@@ -3801,20 +3814,19 @@ const StitchingCompleteLot = () => {
 
               <div className="filter-item">
                 <label>Party Name</label>
-                <select
-                  name="partyName"
-                  value={filters.partyName}
-                  onChange={handleFilterChange}
-                  className="filter-select"
+                <MultiSelectDropdown
+                  options={filterOptions.partyName || []}
+                  selectedValues={Array.isArray(filters.partyName) ? filters.partyName : (filters.partyName ? [filters.partyName] : [])}
+                  onChange={(selected) => {
+                    const newFilters = { ...filters, partyName: selected };
+                    setFilters(newFilters);
+                    setTimeout(() => {
+                      applyFilters(newFilters, data);
+                    }, 0);
+                  }}
+                  placeholder="All Parties"
                   disabled={loading}
-                >
-                  <option value="">All Parties</option>
-                  {filterOptions.partyName.map((option, index) => (
-                    <option key={index} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
             </div>
           </div>
@@ -3857,17 +3869,19 @@ const StitchingCompleteLot = () => {
               </div>
               <div className="filter-item">
                 <label>Direct Stitching</label>
-                <select
-                  name="directStitching"
-                  value={filters.directStitching}
-                  onChange={handleFilterChange}
-                  className="filter-select"
+                <MultiSelectDropdown
+                  options={['Yes', 'No']}
+                  selectedValues={Array.isArray(filters.directStitching) ? filters.directStitching : (filters.directStitching ? [filters.directStitching] : [])}
+                  onChange={(selected) => {
+                    const newFilters = { ...filters, directStitching: selected };
+                    setFilters(newFilters);
+                    setTimeout(() => {
+                      applyFilters(newFilters, data);
+                    }, 0);
+                  }}
+                  placeholder="All"
                   disabled={loading}
-                >
-                  <option value="">All</option>
-                  <option value="Yes">Yes</option>
-                  <option value="No">No</option>
-                </select>
+                />
               </div>
             </div>
           </div>

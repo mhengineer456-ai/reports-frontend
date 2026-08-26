@@ -243,6 +243,8 @@ const PackingAlloted = () => {
   const [financialYearFilter, setFinancialYearFilter] = useState(getCurrentFinancialYear());
   const [rawpackData, setRawpackData] = useState([]);
   const [rawpackLotMap, setRawpackLotMap] = useState(new Map());
+  const [barcodeData, setBarcodeData] = useState([]);
+  const [barcodeLotMap, setBarcodeLotMap] = useState(new Map());
 
   // Filter states - array of selected values for multi-selection
   const [filters, setFilters] = useState({
@@ -268,6 +270,10 @@ const PackingAlloted = () => {
   // RAWPACK spreadsheet configuration from .env / config
   const RAWPACK_SPREADSHEET_ID = SPREADSHEET_IDS.RAWPACK || '1xD8Uy1lUgvNTQ2RGRBI4ZjOrozbinUPRq2_UfIplP98';
   const RAWPACK_SPREADSHEET_RANGE = `${SHEET_NAMES.RAWPACK || 'RAWPACK'}!A:ZZ`;
+
+  // BARCODE spreadsheet configuration from .env / config
+  const BARCODE_SPREADSHEET_ID = SPREADSHEET_IDS.BARCODE || '1dOCjNFwaAel5qun0_ZJVIGmREqjI76CJBBFIjM3NHv8';
+  const BARCODE_SPREADSHEET_RANGE = `${SHEET_NAMES.BARCODE || 'LotBarcodeData'}!A:Z`;
 
   // Pending days ranges for filtering
   const pendingDaysRanges = [
@@ -472,6 +478,7 @@ const PackingAlloted = () => {
 
     return packingData.filter(item => {
       const lotNumber = item.lotNumber?.toString().trim();
+      const normalizedLot = lotNumber ? lotNumber.toUpperCase() : '';
 
       // Check if lot is in issues sheet (allocated to packing)
       const isInIssuesSheet = lotNumber && issuesLotMap.has(lotNumber);
@@ -492,10 +499,14 @@ const PackingAlloted = () => {
       const rawpackInfo = lotNumber ? rawpackLotMap.get(lotNumber) : null;
       const isExcludedByRawpack = rawpackInfo && rawpackInfo.isExcluded;
 
-      // Include lots that are in issues sheet AND packing is not complete AND not excluded by RAWPACK
-      return isInIssuesSheet && isPackingNotComplete && !isExcludedByRawpack;
+      // Barcode Check: Exclude lot if packing is marked complete in Barcode Data
+      const barcodeInfo = normalizedLot ? barcodeLotMap.get(normalizedLot) : null;
+      const isExcludedByBarcode = barcodeInfo && barcodeInfo.isCompleted;
+
+      // Include lots that are in issues sheet AND packing is not complete AND not excluded by RAWPACK / Barcode
+      return isInIssuesSheet && isPackingNotComplete && !isExcludedByRawpack && !isExcludedByBarcode;
     });
-  }, [packingData, issuesLotMap, rawpackLotMap]);
+  }, [packingData, issuesLotMap, rawpackLotMap, barcodeLotMap]);
 
   // Get unique values for filter dropdowns
   const filterOptions = useMemo(() => {
@@ -613,11 +624,15 @@ const PackingAlloted = () => {
       setLoading(true);
       setError(null);
 
-      const [indexData, issuesSheetData, rawpackSheetData] = await Promise.all([
+      const [indexData, issuesSheetData, rawpackSheetData, barcodeSheetData] = await Promise.all([
         fetchSheetData(SPREADSHEET_ID, RANGE),
         fetchSheetData(ISSUES_SPREADSHEET_ID, ISSUES_SPREADSHEET_RANGE),
         fetchSheetData(RAWPACK_SPREADSHEET_ID, RAWPACK_SPREADSHEET_RANGE).catch(err => {
           console.warn('Could not fetch RAWPACK sheet:', err);
+          return { values: [] };
+        }),
+        fetchSheetData(BARCODE_SPREADSHEET_ID, BARCODE_SPREADSHEET_RANGE).catch(err => {
+          console.warn('Could not fetch BARCODE sheet:', err);
           return { values: [] };
         })
       ]);
@@ -625,6 +640,7 @@ const PackingAlloted = () => {
       const transformedIndexData = transformSheetData(indexData.values || []);
       const { issuesData: transformedIssuesData, lotMap } = transformIssuesData(issuesSheetData.values || []);
       const { rawpackData: transformedRawpackData, rawpackLotMap: rawpackMap } = transformRawpackData(rawpackSheetData.values || []);
+      const { barcodeData: transformedBarcodeData, barcodeLotMap: barcodeMap } = transformBarcodeData(barcodeSheetData.values || []);
 
       try {
         localStorage.setItem('packingData', JSON.stringify(transformedIndexData));
@@ -632,6 +648,8 @@ const PackingAlloted = () => {
         localStorage.setItem('issuesLotMap', JSON.stringify(Array.from(lotMap.entries())));
         localStorage.setItem('rawpackData', JSON.stringify(transformedRawpackData));
         localStorage.setItem('rawpackLotMap', JSON.stringify(Array.from(rawpackMap.entries())));
+        localStorage.setItem('barcodeData', JSON.stringify(transformedBarcodeData));
+        localStorage.setItem('barcodeLotMap', JSON.stringify(Array.from(barcodeMap.entries())));
         localStorage.setItem('packingDataTimestamp', new Date().getTime().toString());
       } catch (storageErr) {
         console.warn('LocalStorage quota exceeded. Skipping cache persistence:', storageErr);
@@ -642,6 +660,8 @@ const PackingAlloted = () => {
       setIssuesLotMap(lotMap);
       setRawpackData(transformedRawpackData);
       setRawpackLotMap(rawpackMap);
+      setBarcodeData(transformedBarcodeData);
+      setBarcodeLotMap(barcodeMap);
       setError(null);
     } catch (err) {
       setError(err.message);
@@ -867,6 +887,54 @@ const PackingAlloted = () => {
     });
 
     return { rawpackData, rawpackLotMap };
+  };
+
+  const transformBarcodeData = (values) => {
+    if (!values || values.length === 0) return { barcodeData: [], barcodeLotMap: new Map() };
+
+    const headers = (values[0] || []).map(h => (h || '').toString().trim().toLowerCase());
+    const rows = values.slice(1);
+
+    const lotCol = headers.findIndex(h => h.includes('lot number') || h.includes('lot no') || h === 'lot');
+    const genDateCol = headers.findIndex(h => h.includes('generated date') || h.includes('timestamp') || h.includes('date'));
+    const barcodeIdCol = headers.findIndex(h => h.includes('barcode id') || h.includes('barcode'));
+    const statusCol = headers.findIndex(h => h.includes('status'));
+
+    const barcodeData = [];
+    const barcodeLotMap = new Map();
+
+    rows.forEach((row, idx) => {
+      const lotVal = lotCol >= 0 ? (row[lotCol] || '').toString().trim() : '';
+      if (!lotVal || lotVal === '-' || lotVal === '0') return;
+
+      const genDateRaw = genDateCol >= 0 ? (row[genDateCol] || '').toString().trim() : '';
+      const barcodeId = barcodeIdCol >= 0 ? (row[barcodeIdCol] || '').toString().trim() : '';
+      const status = statusCol >= 0 ? (row[statusCol] || '').toString().trim() : '';
+
+      const normalizedLot = lotVal.toUpperCase();
+      const hasDate = genDateRaw && genDateRaw !== '-' && genDateRaw !== '#N/A';
+
+      const existing = barcodeLotMap.get(normalizedLot);
+      if (!existing) {
+        const item = {
+          id: `barcode-${idx}`,
+          lotNumber: lotVal,
+          barcodeId: barcodeId,
+          status: status,
+          generatedDate: genDateRaw,
+          packingCompleteDate: hasDate ? formatDate(genDateRaw) : '',
+          isCompleted: Boolean(hasDate)
+        };
+        barcodeData.push(item);
+        barcodeLotMap.set(normalizedLot, item);
+      } else if (hasDate && !existing.isCompleted) {
+        existing.generatedDate = genDateRaw;
+        existing.packingCompleteDate = formatDate(genDateRaw);
+        existing.isCompleted = true;
+      }
+    });
+
+    return { barcodeData, barcodeLotMap };
   };
 
   const transformSheetData = (values) => {
@@ -1457,6 +1525,13 @@ const PackingAlloted = () => {
     setShowFilters(!showFilters);
   };
 
+  const totalPcsCount = useMemo(() => {
+    return displayData.reduce((sum, item) => {
+      const val = parseInt(item.totalPcs, 10);
+      return sum + (isNaN(val) ? 0 : val);
+    }, 0);
+  }, [displayData]);
+
   if (loading) {
     return (
       <div className="pending-packing-container">
@@ -1478,6 +1553,9 @@ const PackingAlloted = () => {
           <h2>📦 Packing In Progress Report</h2>
           <div className="stats-badge">
             Lots in Packing: {displayData.length}
+          </div>
+          <div className="stats-badge">
+            Total PCS: {totalPcsCount.toLocaleString()}
           </div>
         </div>
 

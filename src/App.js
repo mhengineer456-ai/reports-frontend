@@ -29,6 +29,7 @@ import DoriPurchaseDashboard from "./DoriComponent";
 import StickerReport from "./StickerReport";
 import PendingPackingtoIssue from "./PackingPendingtoIssue";
 import PackingAlloted from "./PackingAlloted";
+import PackingCompleted from "./PackingCompleted";
 import EmbroideryMaterialReceiving from './EmbroideryMaterialReceiving';
 import PrintingMaterialReceiving from './PrintingMaterialReceiving';
 import FabricRollPrediction from './FabricRollPrediction';
@@ -94,6 +95,7 @@ function App() {
         <ProtectedRoute path="/pending-packing-issue" component={PendingPackingtoIssue} />
         <ProtectedRoute path="/sticker-report" component={StickerReport} />
         <ProtectedRoute path="/packing-alloted-lot" component={PackingAlloted} />
+        <ProtectedRoute path="/packing-completed-lots" component={PackingCompleted} />
         <ProtectedRoute path="/embroidery-material-receiving" component={EmbroideryMaterialReceiving} />
         <ProtectedRoute path="/printing-material-receiving" component={PrintingMaterialReceiving} />
         <ProtectedRoute path="/fabric-roll-prediction" component={FabricRollPrediction} />
