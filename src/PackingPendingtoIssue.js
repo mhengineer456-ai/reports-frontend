@@ -152,6 +152,9 @@ const PendingPackingtoIssue = () => {
     directStitching: [],
     packingSupervisor: [],
     brand: [],
+    fabric: [],
+    garmentType: [],
+    style: [],
     season: [],
     pendingDaysRange: [],
     partyName: []
@@ -363,6 +366,21 @@ const PendingPackingtoIssue = () => {
       brand: [
         { value: 'all', label: 'All Brands' },
         ...Array.from(new Set(mergedLots.map(item => item.brand).filter(val => val && val !== '-')))
+          .map(value => ({ value, label: value }))
+      ],
+      fabric: [
+        { value: 'all', label: 'All Fabrics' },
+        ...Array.from(new Set(mergedLots.map(item => item.fabric).filter(val => val && val !== '-')))
+          .map(value => ({ value, label: value }))
+      ],
+      garmentType: [
+        { value: 'all', label: 'All Garment Types' },
+        ...Array.from(new Set(mergedLots.map(item => item.garmentType).filter(val => val && val !== '-')))
+          .map(value => ({ value, label: value }))
+      ],
+      style: [
+        { value: 'all', label: 'All Styles' },
+        ...Array.from(new Set(mergedLots.map(item => item.style).filter(val => val && val !== '-')))
           .map(value => ({ value, label: value }))
       ],
       season: [
@@ -758,6 +776,24 @@ const PendingPackingtoIssue = () => {
       );
     }
 
+    if (filters.fabric.length > 0) {
+      filteredData = filteredData.filter(item =>
+        filters.fabric.includes(item.fabric)
+      );
+    }
+
+    if (filters.garmentType.length > 0) {
+      filteredData = filteredData.filter(item =>
+        filters.garmentType.includes(item.garmentType)
+      );
+    }
+
+    if (filters.style.length > 0) {
+      filteredData = filteredData.filter(item =>
+        filters.style.includes(item.style)
+      );
+    }
+
     if (filters.season.length > 0) {
       filteredData = filteredData.filter(item =>
         filters.season.includes(item.season)
@@ -849,6 +885,9 @@ const PendingPackingtoIssue = () => {
       directStitching: [],
       packingSupervisor: [],
       brand: [],
+      fabric: [],
+      garmentType: [],
+      style: [],
       season: [],
       pendingDaysRange: [],
       partyName: []
@@ -1364,6 +1403,36 @@ const getBase64ImageFromUrl = async (imageUrl) => {
               selectedValues={filters.brand}
               onChange={(newVals) => {
                 setFilters(prev => ({ ...prev, brand: newVals }));
+                setCurrentPage(1);
+              }}
+            />
+
+            <MultiSelectDropdown
+              label="Fabric:"
+              options={filterOptions.fabric}
+              selectedValues={filters.fabric}
+              onChange={(newVals) => {
+                setFilters(prev => ({ ...prev, fabric: newVals }));
+                setCurrentPage(1);
+              }}
+            />
+
+            <MultiSelectDropdown
+              label="Garment Type:"
+              options={filterOptions.garmentType}
+              selectedValues={filters.garmentType}
+              onChange={(newVals) => {
+                setFilters(prev => ({ ...prev, garmentType: newVals }));
+                setCurrentPage(1);
+              }}
+            />
+
+            <MultiSelectDropdown
+              label="Style:"
+              options={filterOptions.style}
+              selectedValues={filters.style}
+              onChange={(newVals) => {
+                setFilters(prev => ({ ...prev, style: newVals }));
                 setCurrentPage(1);
               }}
             />

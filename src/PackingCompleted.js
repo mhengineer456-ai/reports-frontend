@@ -187,6 +187,9 @@ const PackingCompleted = () => {
     packingSupervisor: [],
     stitchingSupervisor: [],
     brand: [],
+    fabric: [],
+    garmentType: [],
+    style: [],
     season: [],
     partyName: [],
     source: [],
@@ -642,6 +645,9 @@ const PackingCompleted = () => {
       packingSupervisor: getOptions(item => item.supervisor, 'All Supervisors'),
       stitchingSupervisor: getOptions(item => item.stitchingSupervisor, 'All Stitching Supervisors'),
       brand: getOptions(item => item.brand, 'All Brands'),
+      fabric: getOptions(item => item.fabric, 'All Fabrics'),
+      garmentType: getOptions(item => item.garmentType, 'All Garment Types'),
+      style: getOptions(item => item.style, 'All Styles'),
       season: getOptions(item => item.season, 'All Seasons'),
       partyName: getOptions(item => item.partyName, 'All Parties'),
       source: getOptions(item => item.completionSource, 'All Sources'),
@@ -698,6 +704,18 @@ const PackingCompleted = () => {
     if (filters.brand.length > 0) {
       const selected = filters.brand.map(s => s.toLowerCase().trim());
       filtered = filtered.filter(item => selected.includes((item.brand || '').toLowerCase().trim()));
+    }
+    if (filters.fabric.length > 0) {
+      const selected = filters.fabric.map(s => s.toLowerCase().trim());
+      filtered = filtered.filter(item => selected.includes((item.fabric || '').toLowerCase().trim()));
+    }
+    if (filters.garmentType.length > 0) {
+      const selected = filters.garmentType.map(s => s.toLowerCase().trim());
+      filtered = filtered.filter(item => selected.includes((item.garmentType || '').toLowerCase().trim()));
+    }
+    if (filters.style.length > 0) {
+      const selected = filters.style.map(s => s.toLowerCase().trim());
+      filtered = filtered.filter(item => selected.includes((item.style || '').toLowerCase().trim()));
     }
     if (filters.season.length > 0) {
       const selected = filters.season.map(s => s.toLowerCase().trim());
@@ -944,6 +962,9 @@ const PackingCompleted = () => {
                   packingSupervisor: [],
                   stitchingSupervisor: [],
                   brand: [],
+                  fabric: [],
+                  garmentType: [],
+                  style: [],
                   season: [],
                   partyName: [],
                   source: [],
@@ -973,6 +994,24 @@ const PackingCompleted = () => {
               options={filterOptions.brand}
               selectedValues={filters.brand}
               onChange={(val) => setFilters(prev => ({ ...prev, brand: val }))}
+            />
+            <MultiSelectDropdown
+              label="Fabric"
+              options={filterOptions.fabric}
+              selectedValues={filters.fabric}
+              onChange={(val) => setFilters(prev => ({ ...prev, fabric: val }))}
+            />
+            <MultiSelectDropdown
+              label="Garment Type"
+              options={filterOptions.garmentType}
+              selectedValues={filters.garmentType}
+              onChange={(val) => setFilters(prev => ({ ...prev, garmentType: val }))}
+            />
+            <MultiSelectDropdown
+              label="Style"
+              options={filterOptions.style}
+              selectedValues={filters.style}
+              onChange={(val) => setFilters(prev => ({ ...prev, style: val }))}
             />
             <MultiSelectDropdown
               label="Season"

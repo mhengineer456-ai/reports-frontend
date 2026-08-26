@@ -13,6 +13,7 @@ const DailyPackingReport = () => {
     supervisor: '',
     garmentType: '',
     fabric: '',
+    style: '',
     brand: '',
     stitchingSupervisor: '',
     minAging: '',
@@ -292,6 +293,12 @@ const getRecentRemarks = (record) => {
     if (filters.fabric) {
       filtered = filtered.filter(item => 
         item['Fabric'].toLowerCase().includes(filters.fabric.toLowerCase())
+      );
+    }
+    
+    if (filters.style) {
+      filtered = filtered.filter(item => 
+        item['Style']?.toLowerCase().includes(filters.style.toLowerCase())
       );
     }
     
@@ -1258,6 +1265,7 @@ const exportToExcel = () => {
       supervisor: '',
       garmentType: '',
       fabric: '',
+      style: '',
       brand: '',
       stitchingSupervisor: '',
       minAging: '',
@@ -2234,6 +2242,22 @@ const exportToExcel = () => {
                 {getUniqueValues('Fabric').map((fabric, index) => (
                   <option key={index} value={fabric}>
                     {fabric}
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            <div className="filter-group">
+              <label className="filter-label">Style</label>
+              <select
+                className="filter-select"
+                value={filters.style}
+                onChange={(e) => handleFilterChange('style', e.target.value)}
+              >
+                <option value="">All Styles</option>
+                {getUniqueValues('Style').map((style, index) => (
+                  <option key={index} value={style}>
+                    {style}
                   </option>
                 ))}
               </select>
