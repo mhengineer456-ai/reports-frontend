@@ -148,6 +148,7 @@ const PendingPackingtoIssue = () => {
 
   // Filter states - array of selected values for multi-selection
   const [filters, setFilters] = useState({
+    supervisor: [],
     priority: [],
     directStitching: [],
     packingSupervisor: [],
@@ -322,13 +323,16 @@ const PendingPackingtoIssue = () => {
 
     return packingData.filter(item => {
       const lotNumber = item.lotNumber?.toString().trim();
+      if (!lotNumber) return false;
+      const normalizedLot = lotNumber.toUpperCase();
+
       const hasCompletedStatus = item.completedStatus && item.completedStatus !== '';
-      const isNotInIssuesSheet = lotNumber && !issuesLotMap.has(lotNumber);
+      const isNotInIssuesSheet = !issuesLotMap.has(lotNumber) && !issuesLotMap.has(normalizedLot);
 
-      const rawpackInfo = lotNumber ? rawpackLotMap.get(lotNumber) : null;
-      const isRawpackIssuedOrCompleted = rawpackLotMap.has(lotNumber) || (rawpackInfo && rawpackInfo.isCompleted);
+      const rawpackInfo = rawpackLotMap.get(lotNumber) || rawpackLotMap.get(normalizedLot) || null;
+      const isRawpackIssuedOrCompleted = rawpackInfo && (Boolean(rawpackInfo.packingPerson) || Boolean(rawpackInfo.packingIssueDate) || rawpackInfo.isCompleted);
 
-      // Exclude lot if present in Issues sheet OR present/completed in RAWPACK sheet
+      // Exclude lot if present in Issues sheet OR issued/completed in RAWPACK sheet
       return hasCompletedStatus && isNotInIssuesSheet && !isRawpackIssuedOrCompleted;
     });
   }, [packingData, issuesLotMap, rawpackLotMap]);
@@ -348,6 +352,12 @@ const PendingPackingtoIssue = () => {
     });
 
     const options = {
+      supervisor: [
+        { value: 'all', label: 'All Supervisors' },
+        ...Array.from(new Set(mergedLots.map(item => item.supervisor).filter(val => val && val !== '-')))
+          .sort()
+          .map(value => ({ value, label: value }))
+      ],
       priority: [
         { value: 'all', label: 'All Priorities' },
         ...Array.from(new Set(mergedLots.map(item => item.priority || 'Normal').filter(Boolean)))
@@ -398,42 +408,9 @@ const PendingPackingtoIssue = () => {
     return options;
   }, [getFilteredLots, issuesLotMap]);
 
-  // Optimized fetch with caching
+  // Always fetch fresh data on mount (bypassing stale localStorage)
   useEffect(() => {
-    const fetchAllData = async () => {
-      const cachedData = localStorage.getItem('packingData');
-      const cachedIssuesData = localStorage.getItem('issuesData');
-      const cachedIssuesMap = localStorage.getItem('issuesLotMap');
-      const cachedRawpackData = localStorage.getItem('rawpackData');
-      const cachedRawpackMap = localStorage.getItem('rawpackLotMap');
-      const cachedTimestamp = localStorage.getItem('packingDataTimestamp');
-
-      if (cachedData && cachedIssuesData && cachedIssuesMap && cachedTimestamp) {
-        const now = new Date().getTime();
-        if (now - parseInt(cachedTimestamp) < 5 * 60 * 1000) {
-          const parsedData = JSON.parse(cachedData);
-          const parsedMap = new Map(JSON.parse(cachedIssuesMap));
-          const parsedRawpackMap = cachedRawpackMap ? new Map(JSON.parse(cachedRawpackMap)) : new Map();
-
-          const updatedData = parsedData.map(item => ({
-            ...item,
-            pendingDays: calculatePendingDays(item.completedStatusDisplay)
-          }));
-
-          setPackingData(updatedData);
-          setIssuesData(JSON.parse(cachedIssuesData));
-          setIssuesLotMap(parsedMap);
-          if (cachedRawpackData) setRawpackData(JSON.parse(cachedRawpackData));
-          setRawpackLotMap(parsedRawpackMap);
-          setLoading(false);
-          return;
-        }
-      }
-
-      await fetchAllSheetData();
-    };
-
-    fetchAllData();
+    fetchAllSheetData();
   }, []);
 
   const fetchAllSheetData = async () => {
@@ -602,34 +579,37 @@ const PendingPackingtoIssue = () => {
       const lotNumber = lotVal1 || lotVal2;
 
       if (lotNumber && lotNumber !== '-' && lotNumber !== '0') {
+        const packingPersonVal = packingPersonCol >= 0 ? (row[packingPersonCol] || '').toString().trim() : '';
+        const packingIssueDateVal = packingIssueDateCol >= 0 ? (row[packingIssueDateCol] || '').toString().trim() : '';
         const packingCompleteDateVal = packingCompleteDateCol >= 0 ? (row[packingCompleteDateCol] || '').toString().trim() : '';
         const reportFindVal = reportFindCol >= 0 ? (row[reportFindCol] || '').toString().trim().toLowerCase() : '';
         const completedVal = completedCol >= 0 ? (row[completedCol] || '').toString().trim().toLowerCase() : '';
 
-        // Check if COMPLETED column contains "YES", "complete", "completed", or valid complete date
+        // Check if packing is completed (valid complete date or report find status) - ignoring remarks 3 / formula columns
         const isRawpackCompleted = (
-          completedVal === 'yes' || completedVal.includes('yes') || completedVal === 'complete' || completedVal === 'completed' ||
-          reportFindVal === 'yes' || reportFindVal === 'complete' || reportFindVal === 'completed' ||
-          (packingCompleteDateVal && packingCompleteDateVal !== '-' && packingCompleteDateVal !== '#N/A' && packingCompleteDateVal !== '00/01/00') ||
-          (row || []).some(cell => {
-            const cStr = String(cell || '').trim().toLowerCase();
-            return cStr === 'yes' || cStr === 'complete' || cStr === 'completed';
-          })
+          Boolean(packingCompleteDateVal && packingCompleteDateVal !== '-' && packingCompleteDateVal !== '#N/A' && packingCompleteDateVal !== '00/01/00') ||
+          completedVal === 'yes' || completedVal === 'complete' || completedVal === 'completed' ||
+          reportFindVal === 'complete' || reportFindVal === 'completed' || reportFindVal === 'yes'
         );
+
+        // Check if lot has been issued to packing
+        const isRawpackIssued = Boolean(packingPersonVal) || Boolean(packingIssueDateVal && packingIssueDateVal !== '-' && packingIssueDateVal !== '#N/A');
 
         const item = {
           id: `rawpack-${idx}`,
           lotNumber: lotNumber,
-          packingPerson: packingPersonCol >= 0 ? row[packingPersonCol] || '' : '',
+          packingPerson: packingPersonVal,
           supervisor: supervisorCol >= 0 ? row[supervisorCol] || '' : '',
-          packingIssueDate: packingIssueDateCol >= 0 ? row[packingIssueDateCol] || '' : '',
+          packingIssueDate: packingIssueDateVal,
           packingCompleteDate: packingCompleteDateVal,
           completedColValue: completedVal,
-          isCompleted: isRawpackCompleted
+          isCompleted: isRawpackCompleted,
+          isIssued: isRawpackIssued
         };
 
         rawpackData.push(item);
         rawpackLotMap.set(lotNumber, item);
+        rawpackLotMap.set(lotNumber.toUpperCase(), item);
       }
     });
 
@@ -764,6 +744,12 @@ const PendingPackingtoIssue = () => {
       );
     }
 
+    if (filters.supervisor.length > 0) {
+      filteredData = filteredData.filter(item =>
+        filters.supervisor.includes(item.supervisor)
+      );
+    }
+
     if (filters.packingSupervisor.length > 0) {
       filteredData = filteredData.filter(item =>
         filters.packingSupervisor.includes(item.packingSupervisor)
@@ -881,6 +867,7 @@ const PendingPackingtoIssue = () => {
 
   const clearAllFilters = useCallback(() => {
     setFilters({
+      supervisor: [],
       priority: [],
       directStitching: [],
       packingSupervisor: [],
@@ -1373,6 +1360,16 @@ const getBase64ImageFromUrl = async (imageUrl) => {
               selectedValues={filters.priority}
               onChange={(newVals) => {
                 setFilters(prev => ({ ...prev, priority: newVals }));
+                setCurrentPage(1);
+              }}
+            />
+
+            <MultiSelectDropdown
+              label="Supervisor:"
+              options={filterOptions.supervisor}
+              selectedValues={filters.supervisor}
+              onChange={(newVals) => {
+                setFilters(prev => ({ ...prev, supervisor: newVals }));
                 setCurrentPage(1);
               }}
             />

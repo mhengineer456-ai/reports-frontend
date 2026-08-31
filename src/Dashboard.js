@@ -81,6 +81,7 @@ export default function Dashboard() {
       glowColor: "rgba(99, 102, 241, 0.4)",
       description: "Create and manage embroidery production challans with real-time tracking",
       category: "Production",
+      department: "Embroidery & Printing",
       status: "active",
       features: ["Batch tracking", "Quality check", "Thread consumption"],
       lastUpdated: "Today"
@@ -93,6 +94,7 @@ export default function Dashboard() {
       glowColor: "rgba(236, 72, 153, 0.4)",
       description: "Handle printing orders, screen management, and production workflows",
       category: "Production",
+      department: "Embroidery & Printing",
       status: "active",
       features: ["Screen tracking", "Color wise", "Print quality"],
       lastUpdated: "Today"
@@ -105,6 +107,7 @@ export default function Dashboard() {
       glowColor: "rgba(139, 92, 246, 0.4)",
       description: "View and update remarks for pending Embroidery & Printing lots",
       category: "Reports",
+      department: "Embroidery & Printing",
       status: "reports",
       features: ["Embroidery Pending", "Printing Pending", "Remarks Tracking"],
       lastUpdated: "Real-time"
@@ -117,6 +120,7 @@ export default function Dashboard() {
       glowColor: "rgba(239, 68, 68, 0.4)",
       description: "Track garments pending for stitching after embroidery/printing completion",
       category: "Production",
+      department: "Embroidery & Printing",
       status: "pending",
       features: ["Ready for stitch", "Batch transfer", "Quality pending"],
       lastUpdated: "2 hrs ago"
@@ -129,6 +133,7 @@ export default function Dashboard() {
       glowColor: "rgba(6, 182, 212, 0.4)",
       description: "Manage daily stitching operations, line assignments, and production tracking",
       category: "Production",
+      department: "Stitching",
       status: "active",
       features: ["Line wise", "Operator tracking", "Hourly target"],
       lastUpdated: "Today"
@@ -141,6 +146,7 @@ export default function Dashboard() {
       glowColor: "rgba(245, 158, 11, 0.4)",
       description: "Monitor pending stitching operations and delayed batches after cutting",
       category: "Production",
+      department: "Stitching",
       status: "pending",
       features: ["Delay analysis", "Priority queue", "Resource allocation"],
       lastUpdated: "5 hrs ago"
@@ -153,6 +159,7 @@ export default function Dashboard() {
       glowColor: "rgba(16, 185, 129, 0.4)",
       description: "Manage packing operations, carton preparation, and shipment readiness",
       category: "Production",
+      department: "Packing & Finishing",
       status: "active",
       features: ["Carton tracking", "Quality check", "Shipment prep"],
       lastUpdated: "Today"
@@ -165,6 +172,7 @@ export default function Dashboard() {
       glowColor: "rgba(249, 115, 22, 0.4)",
       description: "Track garments that completed stitching and await packing operations",
       category: "Production",
+      department: "Packing & Finishing",
       status: "pending",
       features: ["Stitching done", "Ready for pack", "Quality pending", "Batch transfer"],
       lastUpdated: "Live"
@@ -177,6 +185,7 @@ export default function Dashboard() {
       glowColor: "rgba(2, 132, 199, 0.4)",
       description: "Manage lots allocated for packing with operator assignment and carton planning",
       category: "Production",
+      department: "Packing & Finishing",
       status: "active",
       features: ["Lot allocation", "Carton planning", "Operator assign", "Target tracking"],
       lastUpdated: "Today"
@@ -189,6 +198,7 @@ export default function Dashboard() {
       glowColor: "rgba(37, 99, 235, 0.4)",
       description: "View all packing issue lots with verified packing complete dates, aging analysis, and barcode linkages",
       category: "Production",
+      department: "Packing & Finishing",
       status: "active",
       features: ["Packing complete date", "Aging days analysis", "Barcode linkage", "Excel & PDF export"],
       lastUpdated: "Real-time"
@@ -201,6 +211,7 @@ export default function Dashboard() {
       glowColor: "rgba(5, 150, 105, 0.4)",
       description: "View and manage completed stitching lots with batch-wise performance metrics",
       category: "Production",
+      department: "Stitching",
       status: "active",
       features: ["Lot summary", "Efficiency calc", "Defect analysis"],
       lastUpdated: "Yesterday"
@@ -213,6 +224,7 @@ export default function Dashboard() {
       glowColor: "rgba(255, 126, 95, 0.4)",
       description: "Daily printing reports, screen usage, and production analytics",
       category: "Reports",
+      department: "Embroidery & Printing",
       status: "reports",
       features: ["Screen utilization", "Color output", "Operator wise"],
       lastUpdated: "Daily"
@@ -225,6 +237,7 @@ export default function Dashboard() {
       glowColor: "rgba(79, 70, 229, 0.4)",
       description: "Log lot modifications, authorization authority, and broadcast notifications",
       category: "Management",
+      department: "Executive & Analytics",
       status: "active",
       features: ["Permission log", "Lot # search", "Live Notifications"],
       lastUpdated: "Realtime"
@@ -237,6 +250,7 @@ export default function Dashboard() {
       glowColor: "rgba(0, 198, 255, 0.4)",
       description: "Daily embroidery progress, machine efficiency, and thread consumption",
       category: "Reports",
+      department: "Embroidery & Printing",
       status: "reports",
       features: ["Machine wise", "Stitch count", "Thread usage"],
       lastUpdated: "Daily"
@@ -249,6 +263,7 @@ export default function Dashboard() {
       glowColor: "rgba(17, 153, 142, 0.4)",
       description: "Cutting operations report with fabric consumption and layer details",
       category: "Reports",
+      department: "Cutting",
       status: "reports",
       features: ["Fabric usage", "Layer summary", "Marker efficiency"],
       lastUpdated: "Yesterday"
@@ -261,6 +276,7 @@ export default function Dashboard() {
       glowColor: "rgba(37, 99, 235, 0.4)",
       description: "Visual distribution matrix mapping overall volume and weights across tables & fabric styles",
       category: "Reports",
+      department: "Cutting",
       status: "reports",
       features: ["Table summary", "Fabric summary", "Weight & rolls analytics"],
       lastUpdated: "Daily"
@@ -273,6 +289,7 @@ export default function Dashboard() {
       glowColor: "rgba(245, 158, 11, 0.4)",
       description: "Daily packing output, carton utilization, and shipment tracking",
       category: "Reports",
+      department: "Packing & Finishing",
       status: "reports",
       features: ["Carton count", "Shipment ready", "Packing efficiency"],
       lastUpdated: "Daily"
@@ -285,6 +302,7 @@ export default function Dashboard() {
       glowColor: "rgba(16, 185, 129, 0.4)",
       description: "Daily folding operations, style-wise output, and productivity tracking",
       category: "Reports",
+      department: "Packing & Finishing",
       status: "reports",
       features: ["Style wise", "Operator output", "Quality check"],
       lastUpdated: "Daily"
@@ -297,6 +315,7 @@ export default function Dashboard() {
       glowColor: "rgba(236, 72, 153, 0.4)",
       description: "Daily button attachment, kaj work, and accessory tracking",
       category: "Reports",
+      department: "Stitching",
       status: "reports",
       features: ["Button count", "Kaj quantity", "Accessory used"],
       lastUpdated: "Daily"
@@ -309,6 +328,7 @@ export default function Dashboard() {
       glowColor: "rgba(99, 102, 241, 0.4)",
       description: "Daily overlock stitching production and quality check reports",
       category: "Reports",
+      department: "Stitching",
       status: "reports",
       features: ["Machine output", "Thread consumption", "Quality check"],
       lastUpdated: "Daily"
@@ -321,6 +341,7 @@ export default function Dashboard() {
       glowColor: "rgba(249, 115, 22, 0.4)",
       description: "Track stitching reports that require updates or pending entries",
       category: "Reports",
+      department: "Stitching",
       status: "reports",
       features: ["Missing entries", "Due reports", "Line pending"],
       lastUpdated: "2 hrs ago"
@@ -333,6 +354,7 @@ export default function Dashboard() {
       glowColor: "rgba(139, 92, 246, 0.4)",
       description: "Complete production tracking from cutting to packing with stage analysis",
       category: "Reports",
+      department: "Executive & Analytics",
       status: "reports",
       features: ["WIP tracking", "Stage analysis", "Bottleneck detect"],
       lastUpdated: "Weekly"
@@ -345,23 +367,12 @@ export default function Dashboard() {
       glowColor: "rgba(255, 65, 108, 0.5)",
       description: "Quick overview of key production metrics across all departments",
       category: "Reports",
+      department: "Executive & Analytics",
       status: "reports",
       isLive: true,
       features: ["Live dashboard", "KPI tracking", "Alerts & notifications"],
       lastUpdated: "Real-time"
     },
-    // {
-    //   title: "Daily Stitching Report",
-    //   emoji: "🪡",
-    //   path: "/daily-stitching-report",
-    //   gradient: "linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%)",
-    //   glowColor: "rgba(14, 165, 233, 0.4)",
-    //   description: "Daily stitching production, line performance, and quality metrics",
-    //   category: "Reports",
-    //   status: "reports",
-    //   features: ["Line output", "SMV achieved", "Defect rate"],
-    //   lastUpdated: "Daily"
-    // },
     {
       title: "Sticker Report",
       emoji: "🏷️",
@@ -370,6 +381,7 @@ export default function Dashboard() {
       glowColor: "rgba(255, 81, 47, 0.4)",
       description: "Track sticker printing, usage, and inventory management for labels and tags",
       category: "Materials & Inventory",
+      department: "Materials & Inventory",
       status: "reports",
       features: ["Sticker inventory", "Size wise", "Print quality", "Usage tracking"],
       lastUpdated: "Today"
@@ -382,6 +394,7 @@ export default function Dashboard() {
       glowColor: "rgba(38, 208, 206, 0.4)",
       description: "AI-powered fabric consumption prediction, roll optimization, and forecasting",
       category: "Reports",
+      department: "Cutting",
       status: "reports",
       isAI: true,
       features: ["Roll optimization", "Consumption forecast", "Smart cutting plan"],
@@ -395,6 +408,7 @@ export default function Dashboard() {
       glowColor: "rgba(71, 85, 105, 0.4)",
       description: "Centralized view of all job orders, cutting assignments, and order status",
       category: "Production",
+      department: "Cutting",
       status: "active",
       features: ["Job tracking", "Order status", "Cutting queues"],
       lastUpdated: "Today"
@@ -407,6 +421,7 @@ export default function Dashboard() {
       glowColor: "rgba(139, 92, 246, 0.4)",
       description: "Track embroidery raw material receipts including threads, backing, needles",
       category: "Materials & Inventory",
+      department: "Materials & Inventory",
       status: "active",
       features: ["Thread inventory", "Backing stock", "Supplier wise"],
       lastUpdated: "Today"
@@ -419,21 +434,10 @@ export default function Dashboard() {
       glowColor: "rgba(236, 72, 153, 0.4)",
       description: "Monitor printing raw material receipts including inks, screens, and chemicals",
       category: "Materials & Inventory",
+      department: "Materials & Inventory",
       status: "active",
       features: ["Ink inventory", "Screen stock", "Batch tracking"],
       lastUpdated: "Today"
-    },
-    {
-      title: "Lot Change Logs",
-      emoji: "📋",
-      path: "/lot-logs",
-      gradient: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
-      glowColor: "rgba(245, 158, 11, 0.4)",
-      description: "Log and track lot number changes, modifications, authorizer details, and audit history",
-      category: "Reports",
-      status: "active",
-      features: ["Lot audit logs", "Real-time broadcast", "Permission tracking", "Excel & PDF export"],
-      lastUpdated: "Real-time"
     },
     {
       title: "Notification Center",
@@ -441,8 +445,9 @@ export default function Dashboard() {
       path: "/notifications",
       gradient: "linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%)",
       glowColor: "rgba(236, 72, 153, 0.4)",
-      description: "Full-screen Instagram-style activity feed for all factory alerts, stitching, cutting, and lot changes",
+      description: "Full-screen activity feed for all factory alerts, stitching, cutting, and lot changes",
       category: "Reports",
+      department: "Executive & Analytics",
       status: "active",
       isLive: true,
       features: ["Instagram feed", "Category filters", "Real-time alerts", "1-click navigation"],
@@ -456,6 +461,7 @@ export default function Dashboard() {
       glowColor: "rgba(168, 85, 247, 0.4)",
       description: "Track knitting machine production, yarn conversion efficiency, and fabric roll outputs",
       category: "Reports",
+      department: "Materials & Inventory",
       status: "reports",
       features: ["Machine gauge", "Yarn conversion", "GSM & Loop length", "Shift output"],
       lastUpdated: "Real-time"
@@ -468,6 +474,7 @@ export default function Dashboard() {
       glowColor: "rgba(59, 130, 246, 0.4)",
       description: "Monitor collar and cuff knitting production, size-wise counts, and machine utilization",
       category: "Reports",
+      department: "Materials & Inventory",
       status: "reports",
       features: ["Collar & cuff count", "Size-wise breakdown", "Flat knitting gauge", "Defect tracking"],
       lastUpdated: "Daily"
@@ -477,9 +484,10 @@ export default function Dashboard() {
       emoji: "📜",
       path: "/kora-roll-report",
       gradient: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-      glowColor: "rgba(16, 185, 129, 0.4)",
+      glowColor: "rgba(168, 85, 247, 0.4)",
       description: "Comprehensive tracking for un-dyed kora fabric rolls, weight in kgs, meters, and stock status",
       category: "Materials & Inventory",
+      department: "Materials & Inventory",
       status: "reports",
       features: ["Kora roll inventory", "Weight (Kgs) & Meters", "Dyeing dispatch", "Roll barcode tracking"],
       lastUpdated: "Real-time"
@@ -492,6 +500,7 @@ export default function Dashboard() {
       glowColor: "rgba(67, 56, 202, 0.4)",
       description: "Knitting department yarn stock summary, packages count, and balance weight in kgs",
       category: "Materials & Inventory",
+      department: "Materials & Inventory",
       status: "reports",
       features: ["Yarn stock inventory", "Pkgs & Bal WT (Kgs)", "Negative stock alerts", "Date block navigation"],
       lastUpdated: "Real-time"
@@ -504,6 +513,7 @@ export default function Dashboard() {
       glowColor: "rgba(245, 158, 11, 0.4)",
       description: "Manage raw yarn stock, count-wise inventory, supplier receipts, and consumption analytics",
       category: "Materials & Inventory",
+      department: "Materials & Inventory",
       status: "reports",
       features: ["Yarn count & lot", "Bale & Bag stock", "Supplier receipts", "Consumption analytics"],
       lastUpdated: "Today"
@@ -516,8 +526,76 @@ export default function Dashboard() {
       glowColor: "rgba(67, 56, 202, 0.4)",
       description: "Track production lots requiring zips where Purchase Orders (PO) have NOT been created",
       category: "Reports",
+      department: "Materials & Inventory",
       status: "reports",
       features: ["Zip Required", "PO Pending", "Lot-wise tracking", "Export PDF/CSV"],
+      lastUpdated: "Real-time"
+    },
+    {
+      title: "Production Flowchart Poster",
+      emoji: "🗺️",
+      path: "/production-flowchart",
+      gradient: "linear-gradient(135deg, #6366f1 0%, #a855f7 100%)",
+      glowColor: "rgba(99, 102, 241, 0.5)",
+      description: "Comprehensive visual blueprint and infographic poster mapping all 37 reports across 6 stages",
+      category: "Reports",
+      department: "Executive & Analytics",
+      status: "active",
+      isLive: true,
+      features: ["Infographic Poster", "6 Production Stages", "Print / PDF Mode", "1-Click Launch"],
+      lastUpdated: "Real-time"
+    },
+    {
+      title: "Jaybir Printing Report",
+      emoji: "🖨️",
+      path: "/jaybir-printing-report",
+      gradient: "linear-gradient(135deg, #ec4899 0%, #be185d 100%)",
+      glowColor: "rgba(236, 72, 153, 0.4)",
+      description: "Jaybir printing unit production report, screen tracking, and lot-wise dispatch analytics",
+      category: "Reports",
+      department: "Embroidery & Printing",
+      status: "reports",
+      features: ["Jaybir Unit", "Screen tracking", "Lot-wise Output", "Dispatch Analytics"],
+      lastUpdated: "Daily"
+    },
+    {
+      title: "Jaybir Embroidery Report",
+      emoji: "🧵",
+      path: "/jaybir-embroidery-report",
+      gradient: "linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)",
+      glowColor: "rgba(139, 92, 246, 0.4)",
+      description: "Jaybir embroidery unit daily stitch output, head utilization, and challan tracking",
+      category: "Reports",
+      department: "Embroidery & Printing",
+      status: "reports",
+      features: ["Jaybir Unit", "Stitch count", "Challan Tracking", "Quality Inspection"],
+      lastUpdated: "Daily"
+    },
+    {
+      title: "Washing Report",
+      emoji: "🧼",
+      path: "/washing-report",
+      gradient: "linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%)",
+      glowColor: "rgba(14, 165, 233, 0.4)",
+      description: "Garment washing cycle status, lot receipts, shrinkage testing, and finishing handover",
+      category: "Reports",
+      department: "Packing & Finishing",
+      status: "reports",
+      features: ["Wash cycle tracking", "Shrinkage & Shade", "Lot receipts", "Dispatch to Packing"],
+      lastUpdated: "Real-time"
+    },
+    {
+      title: "Lot Lifecycle Timeline (Amazon Tracker)",
+      emoji: "📦⚡",
+      path: "/lot-timeline",
+      gradient: "linear-gradient(135deg, #f59e0b 0%, #ea580c 50%, #dc2626 100%)",
+      glowColor: "rgba(245, 158, 11, 0.5)",
+      description: "Amazon Order Tracking-style visual timeline: Cutting Date, EMB/Print, Stitching, Kaj Button, and Packing milestones",
+      category: "Management",
+      department: "Executive & Analytics",
+      status: "active",
+      isLive: true,
+      features: ["Amazon Stepper UI", "Cutting to Pack", "Live Stage Aging", "Lot Search"],
       lastUpdated: "Real-time"
     }
   ];
@@ -542,30 +620,56 @@ export default function Dashboard() {
     });
   }, [modules, isAdmin]);
 
-  // Filter modules based on search query and category
+  // Department definitions & colors
+  const departments = useMemo(() => [
+    { id: "Cutting", label: "Cutting", emoji: "✂️", color: "#2563eb", gradient: "linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)" },
+    { id: "Stitching", label: "Stitching", emoji: "🪡", color: "#06b6d4", gradient: "linear-gradient(135deg, #0e7490 0%, #06b6d4 100%)" },
+    { id: "Embroidery & Printing", label: "Emb & Print", emoji: "🎨", color: "#a855f7", gradient: "linear-gradient(135deg, #6b21a8 0%, #a855f7 100%)" },
+    { id: "Packing & Finishing", label: "Packing & Finishing", emoji: "📦", color: "#10b981", gradient: "linear-gradient(135deg, #047857 0%, #10b981 100%)" },
+    { id: "Materials & Inventory", label: "Materials & Inventory", emoji: "🧵", color: "#f59e0b", gradient: "linear-gradient(135deg, #b45309 0%, #f59e0b 100%)" },
+    { id: "Executive & Analytics", label: "Executive & Analytics", emoji: "📊", color: "#8b5cf6", gradient: "linear-gradient(135deg, #4c1d95 0%, #8b5cf6 100%)" }
+  ], []);
+
+  // Department-wise counts mapping
+  const departmentCounts = useMemo(() => {
+    const counts = {};
+    departments.forEach(dept => {
+      counts[dept.id] = accessibleModules.filter(m => m.department === dept.id).length;
+    });
+    return counts;
+  }, [accessibleModules, departments]);
+
+  // Filter modules based on search query and active department/category
   const filteredModules = useMemo(() => {
     return accessibleModules.filter((m) => {
       const matchesSearch =
         searchQuery.trim() === "" ||
         m.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         m.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (m.department && m.department.toLowerCase().includes(searchQuery.toLowerCase())) ||
         m.features.some((f) => f.toLowerCase().includes(searchQuery.toLowerCase()));
 
       if (!matchesSearch) return false;
 
       if (activeCategory === "All") return true;
       if (activeCategory === "Favorites") return pinnedModules.includes(m.title);
-      return m.category === activeCategory;
+      return m.department === activeCategory || m.category === activeCategory;
     });
   }, [accessibleModules, searchQuery, activeCategory, pinnedModules]);
 
   // Quick Stats
   const totalCount = accessibleModules.length;
-  const prodCount = accessibleModules.filter((m) => m.category === "Production").length;
-  const reportCount = accessibleModules.filter((m) => m.category === "Reports").length;
-  const pendingCount = accessibleModules.filter((m) => m.status === "pending").length;
 
-  const categories = ["All", "Favorites", "Production", "Reports", "Materials & Inventory"];
+  const categories = [
+    { id: "All", label: "All Reports", emoji: "📊", count: totalCount },
+    { id: "Favorites", label: "Favorites", emoji: "⭐", count: pinnedModules.length },
+    ...departments.map(d => ({
+      id: d.id,
+      label: d.label,
+      emoji: d.emoji,
+      count: departmentCounts[d.id] || 0
+    }))
+  ];
 
   // Departmental Hierarchy Directory Index (Parent Module -> Sub-Reports)
   const departmentIndex = [
@@ -946,13 +1050,28 @@ export default function Dashboard() {
               </p>
             </div>
 
-            {/* Header KPI Stats Cards */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "14px" }}>
-              <HeroStatCard label="Total Modules" value={totalCount} icon="📦" color="#818cf8" />
-              <HeroStatCard label="Production" value={prodCount} icon="🏭" color="#38bdf8" />
-              <HeroStatCard label="Analytics" value={reportCount} icon="📊" color="#34d399" />
-              <HeroStatCard label="Attention" value={pendingCount} icon="⏳" color="#fbbf24" alert={pendingCount > 0} />
-            </div>
+            {/* Header Department-Wise KPI Stats Cards */}
+            {/* <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: "12px" }}>
+              <HeroStatCard
+                label="All Modules"
+                value={totalCount}
+                icon="📊"
+                color="#818cf8"
+                active={activeCategory === "All"}
+                onClick={() => setActiveCategory("All")}
+              />
+              {departments.map((dept) => (
+                <HeroStatCard
+                  key={dept.id}
+                  label={dept.label}
+                  value={departmentCounts[dept.id] || 0}
+                  icon={dept.emoji}
+                  color={dept.color}
+                  active={activeCategory === dept.id}
+                  onClick={() => setActiveCategory(dept.id)}
+                />
+              ))}
+            </div> */}
           </div>
         </motion.div>
 
@@ -985,7 +1104,7 @@ export default function Dashboard() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search modules by title, feature, or description..."
+                placeholder="Search modules by title, department, feature, or description..."
                 style={{
                   width: "100%",
                   padding: "14px 44px 14px 48px",
@@ -1090,27 +1209,24 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Category Tabs */}
+          {/* Department-Wise Filter Tabs */}
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", borderTop: "1px solid #f1f5f9", paddingTop: "16px" }}>
             {categories.map((cat) => {
-              const isSelected = activeCategory === cat;
-              let count = modules.length;
-              if (cat === "Favorites") count = pinnedModules.length;
-              else if (cat !== "All") count = modules.filter((m) => m.category === cat).length;
+              const isSelected = activeCategory === cat.id;
 
               return (
                 <button
-                  key={cat}
-                  onClick={() => setActiveCategory(cat)}
+                  key={cat.id}
+                  onClick={() => setActiveCategory(cat.id)}
                   style={{
                     background: isSelected
                       ? "linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)"
                       : "#f8fafc",
                     color: isSelected ? "#ffffff" : "#475569",
                     border: isSelected ? "1px solid #4338ca" : "1px solid #e2e8f0",
-                    padding: "10px 20px",
+                    padding: "10px 18px",
                     borderRadius: "12px",
-                    fontSize: "0.9rem",
+                    fontSize: "0.88rem",
                     fontWeight: 600,
                     cursor: "pointer",
                     display: "flex",
@@ -1120,12 +1236,8 @@ export default function Dashboard() {
                     boxShadow: isSelected ? "0 6px 16px rgba(79, 70, 229, 0.25)" : "none"
                   }}
                 >
-                  {cat === "All" && "📊"}
-                  {cat === "Favorites" && "⭐"}
-                  {cat === "Production" && "🏭"}
-                  {cat === "Reports" && "📈"}
-                  {cat === "Materials & Inventory" && "📦"}
-                  <span>{cat}</span>
+                  <span>{cat.emoji}</span>
+                  <span>{cat.label}</span>
                   <span
                     style={{
                       background: isSelected ? "rgba(255, 255, 255, 0.25)" : "#e2e8f0",
@@ -1136,7 +1248,7 @@ export default function Dashboard() {
                       fontWeight: 700
                     }}
                   >
-                    {count}
+                    {cat.count}
                   </span>
                 </button>
               );
@@ -1503,24 +1615,33 @@ export default function Dashboard() {
 }
 
 // Subcomponent: Hero Stat Card inside Top Header
-function HeroStatCard({ label, value, icon, color, alert }) {
+function HeroStatCard({ label, value, icon, color, alert, active, onClick }) {
   return (
     <div
+      onClick={onClick}
       style={{
-        background: "rgba(255, 255, 255, 0.12)",
-        border: alert ? "1px solid rgba(251, 191, 36, 0.6)" : "1px solid rgba(255, 255, 255, 0.18)",
+        background: active ? "rgba(255, 255, 255, 0.28)" : "rgba(255, 255, 255, 0.12)",
+        border: active
+          ? "2px solid #ffffff"
+          : alert
+            ? "1px solid rgba(251, 191, 36, 0.6)"
+            : "1px solid rgba(255, 255, 255, 0.18)",
         borderRadius: "16px",
-        padding: "16px",
+        padding: "14px 16px",
         backdropFilter: "blur(12px)",
         display: "flex",
         alignItems: "center",
-        gap: "14px"
+        gap: "12px",
+        cursor: onClick ? "pointer" : "default",
+        transform: active ? "scale(1.03)" : "none",
+        transition: "all 0.22s ease",
+        boxShadow: active ? "0 8px 20px rgba(0,0,0,0.2)" : "none"
       }}
     >
       <div
         style={{
-          width: "44px",
-          height: "44px",
+          width: "42px",
+          height: "42px",
           borderRadius: "12px",
           background: "rgba(255, 255, 255, 0.2)",
           display: "flex",
@@ -1533,8 +1654,8 @@ function HeroStatCard({ label, value, icon, color, alert }) {
         {icon}
       </div>
       <div>
-        <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "#ffffff", lineHeight: 1.1 }}>{value}</div>
-        <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "#c7d2fe", marginTop: "4px" }}>{label}</div>
+        <div style={{ fontSize: "1.45rem", fontWeight: 800, color: "#ffffff", lineHeight: 1.1 }}>{value}</div>
+        <div style={{ fontSize: "0.74rem", fontWeight: 600, color: "#c7d2fe", marginTop: "4px", whiteSpace: "nowrap" }}>{label}</div>
       </div>
     </div>
   );
@@ -1586,8 +1707,13 @@ function LightModuleCard({ module, isPinned, togglePin, viewMode, hoveredCard, s
             {module.emoji}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
               <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700, color: "#0f172a" }}>{module.title}</h3>
+              {module.department && (
+                <span style={{ background: "#f1f5f9", color: "#475569", border: "1px solid #cbd5e1", padding: "2px 8px", borderRadius: "9999px", fontSize: "0.72rem", fontWeight: 700 }}>
+                  🏢 {module.department}
+                </span>
+              )}
               {module.isLive && (
                 <span style={{ background: "#fee2e2", color: "#ef4444", padding: "2px 8px", borderRadius: "9999px", fontSize: "0.7rem", fontWeight: 700 }}>
                   ⚡ LIVE
@@ -1690,31 +1816,31 @@ function LightModuleCard({ module, isPinned, togglePin, viewMode, hoveredCard, s
         }}
       />
 
-      {/* Header Row: Category Badge & Pin Star */}
+      {/* Header Row: Department Badge, Status Badges & Pin Star */}
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span
-              style={{
-                background: module.category === "Production"
-                  ? "#eff6ff"
-                  : module.category === "Reports"
-                    ? "#ecfdf5"
-                    : "#f3e8ff",
-                color: module.category === "Production"
-                  ? "#2563eb"
-                  : module.category === "Reports"
-                    ? "#059669"
-                    : "#7c3aed",
-                border: "1px solid " + (module.category === "Production" ? "#bfdbfe" : module.category === "Reports" ? "#a7f3d0" : "#ddd6fe"),
-                padding: "4px 12px",
-                borderRadius: "9999px",
-                fontSize: "0.75rem",
-                fontWeight: 700
-              }}
-            >
-              {module.category}
-            </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+            {module.department && (
+              <span
+                style={{
+                  background: "#f8fafc",
+                  color: "#334155",
+                  border: "1px solid #cbd5e1",
+                  padding: "4px 10px",
+                  borderRadius: "9999px",
+                  fontSize: "0.74rem",
+                  fontWeight: 700
+                }}
+              >
+                {module.department === "Cutting" && "✂️ "}
+                {module.department === "Stitching" && "🪡 "}
+                {module.department === "Embroidery & Printing" && "🎨 "}
+                {module.department === "Packing & Finishing" && "📦 "}
+                {module.department === "Materials & Inventory" && "🧵 "}
+                {module.department === "Executive & Analytics" && "📊 "}
+                {module.department}
+              </span>
+            )}
 
             {module.status === "pending" && (
               <span

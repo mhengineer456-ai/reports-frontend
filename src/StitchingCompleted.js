@@ -1376,6 +1376,42 @@ const StitchingCompleteLot = () => {
             return true;
           }
 
+          // Handle stitchingDaysFilter array (MUST BE CHECKED BEFORE GENERIC ARRAY HANDLER!)
+          if (key === 'stitchingDaysFilter') {
+            const selectedFilters = value;
+            if (!selectedFilters || selectedFilters.length === 0) return true;
+
+            const isCompleted = isLotCompleted(item.completedStatus);
+            const stitchingDays = calculateStitchingDays(item.dateOfIssue, item.completedStatus, isCompleted);
+
+            // Check if stitching days fall into any selected category
+            return selectedFilters.some(filter => {
+              if (filter === 'green') {
+                return stitchingDays <= 6;
+              } else if (filter === 'yellow') {
+                return stitchingDays >= 7 && stitchingDays <= 15;
+              } else if (filter === 'red') {
+                return stitchingDays > 15;
+              }
+              return false;
+            });
+          }
+
+          // Handle date range filter separately
+          if (key === 'dateRange') {
+            const { from, to } = value;
+            if (!from && !to) return true;
+
+            const completionDate = getCompletionDate(item.completedStatus);
+            if (!completionDate) return false;
+
+            const itemDate = completionDate.getTime();
+            const fromDate = from ? new Date(from).getTime() : 0;
+            const toDate = to ? new Date(to).getTime() : Infinity;
+
+            return itemDate >= fromDate && itemDate <= toDate;
+          }
+
           // Handle array filters (multi-select for supervisor, fabric, garmentType, style, brand, partyName, season, mwk, directStitching, wipStatus)
           if (Array.isArray(value)) {
             if (value.length === 0) return true;
@@ -1396,42 +1432,6 @@ const StitchingCompleteLot = () => {
             return value.some(v => {
               const normV = normalizeText(v);
               return itemVal === normV || itemVal.includes(normV);
-            });
-          }
-
-          // Handle date range filter separately
-          if (key === 'dateRange') {
-            const { from, to } = value;
-            if (!from && !to) return true;
-
-            const completionDate = getCompletionDate(item.completedStatus);
-            if (!completionDate) return false;
-
-            const itemDate = completionDate.getTime();
-            const fromDate = from ? new Date(from).getTime() : 0;
-            const toDate = to ? new Date(to).getTime() : Infinity;
-
-            return itemDate >= fromDate && itemDate <= toDate;
-          }
-
-          // Handle stitchingDaysFilter array
-          if (key === 'stitchingDaysFilter') {
-            const selectedFilters = value;
-            if (!selectedFilters || selectedFilters.length === 0) return true;
-
-            const isCompleted = isLotCompleted(item.completedStatus);
-            const stitchingDays = calculateStitchingDays(item.dateOfIssue, item.completedStatus, isCompleted);
-
-            // Check if stitching days fall into any selected category
-            return selectedFilters.some(filter => {
-              if (filter === 'green') {
-                return stitchingDays >= 1 && stitchingDays <= 6;
-              } else if (filter === 'yellow') {
-                return stitchingDays >= 7 && stitchingDays <= 15;
-              } else if (filter === 'red') {
-                return stitchingDays > 15;
-              }
-              return false;
             });
           }
 

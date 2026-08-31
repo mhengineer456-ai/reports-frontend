@@ -1046,7 +1046,7 @@ const applyFilters = useCallback((currentFilters, currentData) => {
           // Check if stitching days fall into any selected category
           return selectedFilters.some(filter => {
             if (filter === 'green') {
-              return stitchingDays >= 1 && stitchingDays <= 6;
+              return stitchingDays <= 6;
             } else if (filter === 'yellow') {
               return stitchingDays >= 7 && stitchingDays <= 15;
             } else if (filter === 'red') {

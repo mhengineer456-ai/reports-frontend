@@ -42,6 +42,11 @@ import YarnReport from './YarnReport';
 import PendingZipPOReport from './PendingZipPOReport';
 import EmbPrintRemarks from './EmbPrintRemarks';
 import DailyFabricIssueReport from './DailyFabricIssueReport';
+import ProductionFlowPoster from './ProductionFlowPoster';
+import JaybirPrintingReport from './JaybirPrintingReport';
+import JaybirEmbroideryReport from './JaybirEmbroideryReport';
+import WashingReport from './WashingReport';
+import LotTimelineReport from './LotTimelineReport';
 
 function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -108,6 +113,13 @@ function App() {
         <ProtectedRoute path="/pending-zip-po-report" component={PendingZipPOReport} />
         <ProtectedRoute path="/emb-print-remarks" component={EmbPrintRemarks} />
         <ProtectedRoute path="/daily-fabric-issue-report" component={DailyFabricIssueReport} />
+        <ProtectedRoute path="/production-flowchart" component={ProductionFlowPoster} />
+        <ProtectedRoute path="/reports-flow-poster" component={ProductionFlowPoster} />
+        <ProtectedRoute path="/jaybir-printing-report" component={JaybirPrintingReport} />
+        <ProtectedRoute path="/jaybir-embroidery-report" component={JaybirEmbroideryReport} />
+        <ProtectedRoute path="/washing-report" component={WashingReport} />
+        <ProtectedRoute path="/lot-timeline" component={LotTimelineReport} />
+        <ProtectedRoute path="/lot-tracking" component={LotTimelineReport} />
 
         <Route path="*">
           <Redirect to="/" />

@@ -302,6 +302,48 @@ const Navbar = () => {
         >
           📋 Lot Logs
         </button>
+
+        <button
+          onClick={() => history.push("/production-flowchart")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            background: location.pathname === "/production-flowchart" ? "linear-gradient(135deg, #6366f1 0%, #4338ca 100%)" : "#f8fafc",
+            color: location.pathname === "/production-flowchart" ? "#ffffff" : "#4338ca",
+            border: "1.5px solid #818cf8",
+            padding: "8px 16px",
+            borderRadius: "10px",
+            fontSize: "0.85rem",
+            fontWeight: "800",
+            cursor: "pointer",
+            boxShadow: location.pathname === "/production-flowchart" ? "0 4px 12px rgba(99, 102, 241, 0.3)" : "none",
+            transition: "all 0.2s ease"
+          }}
+        >
+          🗺️ Flow Poster
+        </button>
+
+        <button
+          onClick={() => history.push("/lot-timeline")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            background: location.pathname === "/lot-timeline" ? "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)" : "#f8fafc",
+            color: location.pathname === "/lot-timeline" ? "#ffffff" : "#b45309",
+            border: "1.5px solid #fbbf24",
+            padding: "8px 16px",
+            borderRadius: "10px",
+            fontSize: "0.85rem",
+            fontWeight: "800",
+            cursor: "pointer",
+            boxShadow: location.pathname === "/lot-timeline" ? "0 4px 12px rgba(245, 158, 11, 0.35)" : "none",
+            transition: "all 0.2s ease"
+          }}
+        >
+          📦⚡ Lot Tracker
+        </button>
       </div>
 
       {/* Right Controls */}

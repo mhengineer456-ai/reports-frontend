@@ -1554,12 +1554,19 @@ const exportToExcel = () => {
             margin-left: 8px;
           }
           
-          .table-container {
+          .table-card {
             background: white;
             border-radius: 16px;
-            overflow: hidden;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            overflow-x: auto;
+            overflow: hidden;
+            margin-bottom: 40px;
+          }
+
+          .table-container {
+            overflow: auto;
+            max-height: calc(100vh - 280px);
+            min-height: 350px;
+            position: relative;
           }
           
           .table-header {
@@ -2352,7 +2359,7 @@ const exportToExcel = () => {
         </div>
         
         {/* Main Table with Navy Blue Headers */}
-        <div className="table-container">
+        <div className="table-card">
           <div className="table-header">
             <h3 className="table-title">
               Packing Lots Details
@@ -2370,91 +2377,93 @@ const exportToExcel = () => {
             </span>
           </div>
           
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Lot #</th>
-                <th>Fabric</th>
-                <th>Garment Type</th>
-                <th>Style</th>
-                <th>Brand</th>
-                <th>Total Pcs</th>
-                <th>Packing Date</th>
-                <th>Packing Supervisor</th>
-                <th>Aging (Days)</th>
-                <th>Status</th>
-                <th>Recent Remarks</th>
-                <th>Stitching Supervisor</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredData.length > 0 ? (
-                filteredData.map((item, index) => {
-                  const isHold = isLotOnHold(item);
-                  return (
-                    <tr key={index} onClick={() => openRowDetails(item)}>
-                      <td>{item['Lot Number']}</td>
-                      <td>{item['Fabric']}</td>
-                      <td>{item['Garment Type']}</td>
-                      <td>{item['Style']}</td>
-                      <td>
-                        {item['BRAND'] && (
-                          <span className="brand-tag">{item['BRAND']}</span>
-                        )}
-                      </td>
-                      <td>{item['Total Pcs']}</td>
-                      <td>{item['Packing Date']}</td>
-                      <td><span className="supervisor-tag">{item['Packing Supervisor']}</span></td>
-                      <td>
-                        <span 
-                          className="aging-badge" 
-                          style={{ backgroundColor: getAgingColor(item['Aging']) }}
-                        >
-                          {item['Aging']}
-                        </span>
-                      </td>
-                      <td>
-                        <span 
-                          className="status-badge" 
-                          style={{ 
-                            backgroundColor: `${getStatusColor(item['Status'])}1A`, 
-                            color: getStatusColor(item['Status']) 
-                          }}
-                        >
-                          {item['Status']}
-                        </span>
-                      </td>
-                      <td>
-                        <div 
-                          className={`remarks-cell ${isHold ? 'hold' : ''}`} 
-                          title={getRecentRemarks(item)}
-                        >
-                          {isHold && <span style={{ color: '#EF4444', fontWeight: 'bold' }}>⏸️ </span>}
-                          {getRecentRemarks(item)}
-                        </div>
-                      </td>
-                      <td>
-                        {item['STITCHING SUPERVISOR'] && (
-                          <span className="stitching-supervisor-tag">
-                            {item['STITCHING SUPERVISOR']}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              ) : (
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <td colSpan="12">
-                    <div className="no-data">
-                      <div className="no-data-icon">📭</div>
-                      No packing lots match your current filters.
-                    </div>
-                  </td>
+                  <th>Lot #</th>
+                  <th>Fabric</th>
+                  <th>Garment Type</th>
+                  <th>Style</th>
+                  <th>Brand</th>
+                  <th>Total Pcs</th>
+                  <th>Packing Date</th>
+                  <th>Packing Supervisor</th>
+                  <th>Aging (Days)</th>
+                  <th>Status</th>
+                  <th>Recent Remarks</th>
+                  <th>Stitching Supervisor</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filteredData.length > 0 ? (
+                  filteredData.map((item, index) => {
+                    const isHold = isLotOnHold(item);
+                    return (
+                      <tr key={index} onClick={() => openRowDetails(item)}>
+                        <td>{item['Lot Number']}</td>
+                        <td>{item['Fabric']}</td>
+                        <td>{item['Garment Type']}</td>
+                        <td>{item['Style']}</td>
+                        <td>
+                          {item['BRAND'] && (
+                            <span className="brand-tag">{item['BRAND']}</span>
+                          )}
+                        </td>
+                        <td>{item['Total Pcs']}</td>
+                        <td>{item['Packing Date']}</td>
+                        <td><span className="supervisor-tag">{item['Packing Supervisor']}</span></td>
+                        <td>
+                          <span 
+                            className="aging-badge" 
+                            style={{ backgroundColor: getAgingColor(item['Aging']) }}
+                          >
+                            {item['Aging']}
+                          </span>
+                        </td>
+                        <td>
+                          <span 
+                            className="status-badge" 
+                            style={{ 
+                              backgroundColor: `${getStatusColor(item['Status'])}1A`, 
+                              color: getStatusColor(item['Status']) 
+                            }}
+                          >
+                            {item['Status']}
+                          </span>
+                        </td>
+                        <td>
+                          <div 
+                            className={`remarks-cell ${isHold ? 'hold' : ''}`} 
+                            title={getRecentRemarks(item)}
+                          >
+                            {isHold && <span style={{ color: '#EF4444', fontWeight: 'bold' }}>⏸️ </span>}
+                            {getRecentRemarks(item)}
+                          </div>
+                        </td>
+                        <td>
+                          {item['STITCHING SUPERVISOR'] && (
+                            <span className="stitching-supervisor-tag">
+                              {item['STITCHING SUPERVISOR']}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan="12">
+                      <div className="no-data">
+                        <div className="no-data-icon">📭</div>
+                        No packing lots match your current filters.
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </>

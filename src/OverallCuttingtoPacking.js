@@ -2185,7 +2185,7 @@ processedJobOrderData.slice(0, 5).forEach((item, index) => {
               const lotNo = getColVal(row, ['lot no.', 'lot no', 'lot no.2', 'lot number', 'lot']);
               if (!lotNo) return null;
 
-              const supervisor = getColVal(row, ['packing person', 'packing supervisor', 'packing person name', 'supervisior', 'supervisor']);
+              const supervisor = getColVal(row, ['packing person', 'packing supervisor', 'packing person name']);
               const pkgIssueDateRaw = getColVal(row, ['date of packing issue', 'sticker issue', 'date of packing', 'packing date', 'timestamp']);
               const pkgCompDateRaw = getColVal(row, ['date of packing complete', 'packing complete', 'complete date']);
               const remarks = getColVal(row, ['remarks', 'wip packing', 'wip']);

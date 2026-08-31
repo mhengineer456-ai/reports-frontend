@@ -1510,12 +1510,19 @@ const getRecentRemarks = (record) => {
             margin-left: 8px;
           }
           
-          .table-container {
+          .table-card {
             background: white;
             border-radius: 16px;
-            overflow: hidden;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            overflow-x: auto;
+            overflow: hidden;
+            margin-bottom: 40px;
+          }
+
+          .table-container {
+            overflow: auto;
+            max-height: calc(100vh - 280px);
+            min-height: 350px;
+            position: relative;
           }
           
           .table-header {
@@ -2292,10 +2299,10 @@ const getRecentRemarks = (record) => {
         </div>
         
         {/* Main Table with Navy Blue Headers */}
-        <div className="table-container">
+        <div className="table-card">
           <div className="table-header">
             <h3 className="table-title">
-              FOLDING Lots Details
+              Folding Lots Details
               {filters.holdLots && (
                 <span style={{ color: '#EF4444', marginLeft: '10px' }}>
                   (Hold Lots Only)
@@ -2310,23 +2317,24 @@ const getRecentRemarks = (record) => {
             </span>
           </div>
           
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Lot #</th>
-                <th>Fabric</th>
-                <th>Garment Type</th>
-                <th>Style</th>
-                <th>Brand</th>
-                <th>Total Pcs</th>
-                <th>Folding Date</th>
-                <th>Folding Supervisor</th>
-                <th>Aging (Days)</th>
-                <th>Status</th>
-                <th>Recent Remarks</th>
-                <th>Stiching Supervisor</th>
-              </tr>
-            </thead>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Lot #</th>
+                  <th>Fabric</th>
+                  <th>Garment Type</th>
+                  <th>Style</th>
+                  <th>Brand</th>
+                  <th>Total Pcs</th>
+                  <th>Folding Date</th>
+                  <th>Folding Supervisor</th>
+                  <th>Aging (Days)</th>
+                  <th>Status</th>
+                  <th>Recent Remarks</th>
+                  <th>Stiching Supervisor</th>
+                </tr>
+              </thead>
             <tbody>
               {filteredData.length > 0 ? (
                 filteredData.map((item, index) => {
@@ -2397,8 +2405,9 @@ const getRecentRemarks = (record) => {
           </table>
         </div>
       </div>
-    </>
-  );
+    </div>
+  </>
+);
 };
 
 export default DailyFoldingReport;

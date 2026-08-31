@@ -248,6 +248,7 @@ const PackingAlloted = () => {
 
   // Filter states - array of selected values for multi-selection
   const [filters, setFilters] = useState({
+    wipPacking: [],
     priority: [],
     directStitching: [],
     stitchingSupervisor: [],
@@ -526,6 +527,12 @@ const PackingAlloted = () => {
     });
 
     const options = {
+      wipPacking: [
+        { value: 'all', label: 'All WIP Status' },
+        ...Array.from(new Set(mergedLots.map(item => item.wipPacking || issuesLotMap.get(item.lotNumber?.toString().trim())?.wipPacking).filter(val => val !== undefined && val !== null && val !== '')))
+          .sort()
+          .map(value => ({ value: String(value), label: String(value) }))
+      ],
       priority: [
         { value: 'all', label: 'All Priorities' },
         ...Array.from(new Set(mergedLots.map(item => item.priority || 'Normal').filter(Boolean)))
@@ -1146,6 +1153,12 @@ const PackingAlloted = () => {
       );
     }
 
+    if (filters.wipPacking && filters.wipPacking.length > 0) {
+      filteredData = filteredData.filter(item =>
+        filters.wipPacking.includes(String(item.wipPacking || '0'))
+      );
+    }
+
     // Apply pending days range multi-filter using packing pending days
     if (filters.pendingDaysRange.length > 0) {
       filteredData = filteredData.filter(item =>
@@ -1240,6 +1253,7 @@ const PackingAlloted = () => {
 
   const clearAllFilters = useCallback(() => {
     setFilters({
+      wipPacking: [],
       priority: [],
       directStitching: [],
       stitchingSupervisor: [],
@@ -1768,6 +1782,16 @@ const PackingAlloted = () => {
               selectedValues={filters.partyName}
               onChange={(newVals) => {
                 setFilters(prev => ({ ...prev, partyName: newVals }));
+                setCurrentPage(1);
+              }}
+            />
+
+            <MultiSelectDropdown
+              label="WIP Packing:"
+              options={filterOptions.wipPacking}
+              selectedValues={filters.wipPacking}
+              onChange={(newVals) => {
+                setFilters(prev => ({ ...prev, wipPacking: newVals }));
                 setCurrentPage(1);
               }}
             />
