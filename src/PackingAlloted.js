@@ -1357,6 +1357,7 @@ const PackingAlloted = () => {
         'Priority',
         'Pkg Date',
         'Pkg Days',
+        'WIP Status',
         'Supervisor',
         'Pkg Supervisor'
       ];
@@ -1365,17 +1366,18 @@ const PackingAlloted = () => {
         0: 6,   // Sr
         1: 12,  // Image
         2: 18,  // Lot No
-        3: 26,  // Party Name
-        4: 28,  // Fabric
-        5: 22,  // Brand
-        6: 22,  // Garment
-        7: 22,  // Style
+        3: 25,  // Party Name
+        4: 26,  // Fabric
+        5: 20,  // Brand
+        6: 20,  // Garment
+        7: 20,  // Style
         8: 16,  // Total Pcs
-        9: 16,  // Priority
-        10: 20, // Pkg Date
-        11: 16, // Pkg Days
-        12: 22, // Supervisor
-        13: 22  // Pkg Supervisor
+        9: 15,  // Priority
+        10: 19, // Pkg Date
+        11: 15, // Pkg Days
+        12: 18, // WIP Status
+        13: 20, // Supervisor
+        14: 20  // Pkg Supervisor
       };
 
       const totalBaseWidth = Object.values(baseWidths).reduce((a, b) => a + b, 0);
@@ -1403,6 +1405,8 @@ const PackingAlloted = () => {
 
       const body = displayData.map((item, rowIndex) => {
         const rowBgColor = rowIndex % 2 === 0 ? [255, 255, 255] : [250, 250, 250];
+        const wipVal = String(item.wipPacking !== undefined && item.wipPacking !== null ? item.wipPacking : (item.wipStatus || '0')).trim();
+        const isHold = wipVal.toUpperCase().includes('HOLD');
 
         return [
           { content: (rowIndex + 1).toString(), styles: { cellWidth: columnWidths[0], fontSize: 9, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor } },
@@ -1417,8 +1421,19 @@ const PackingAlloted = () => {
           { content: item.priority || 'Normal', styles: { cellWidth: columnWidths[9], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
           { content: item.packingDate || '-', styles: { cellWidth: columnWidths[10], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
           { content: (item.packingPendingDays || 0).toString(), styles: { cellWidth: columnWidths[11], fontSize: 9, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor } },
-          { content: item.supervisor || item.stitchingSupervisor || '-', styles: { cellWidth: columnWidths[12], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
-          { content: item.packingSupervisor || '-', styles: { cellWidth: columnWidths[13], fontSize: 9, halign: 'center', fillColor: rowBgColor } }
+          {
+            content: wipVal || '0',
+            styles: {
+              cellWidth: columnWidths[12],
+              fontSize: 9,
+              halign: 'center',
+              fontStyle: isHold ? 'bold' : 'normal',
+              textColor: isHold ? [220, 38, 38] : textColor,
+              fillColor: isHold ? [254, 226, 226] : rowBgColor
+            }
+          },
+          { content: item.supervisor || item.stitchingSupervisor || '-', styles: { cellWidth: columnWidths[13], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
+          { content: item.packingSupervisor || '-', styles: { cellWidth: columnWidths[14], fontSize: 9, halign: 'center', fillColor: rowBgColor } }
         ];
       });
 

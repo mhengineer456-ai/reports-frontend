@@ -229,6 +229,7 @@ const PendingIssue = ({ onBack }) => {
   const [fabricFilter, setFabricFilter] = useState([]);
   const [styleFilter, setStyleFilter] = useState([]);
   const [partyFilter, setPartyFilter] = useState([]);
+  const [seasonFilter, setSeasonFilter] = useState([]); // Season filter
   const [daysFilter, setDaysFilter] = useState('');
   const [garmentTypeFilter, setGarmentTypeFilter] = useState([]);
   const [mwkFilter, setMwkFilter] = useState([]); // M/W/K filter
@@ -238,6 +239,7 @@ const PendingIssue = ({ onBack }) => {
   const [availableFabrics, setAvailableFabrics] = useState([]);
   const [availableStyles, setAvailableStyles] = useState([]);
   const [availableParties, setAvailableParties] = useState([]);
+  const [availableSeasons, setAvailableSeasons] = useState([]); // Season options
   const [availableGarmentTypes, setAvailableGarmentTypes] = useState([]);
   const [availableMwkValues, setAvailableMwkValues] = useState([]); // M/W/K options
 
@@ -267,6 +269,7 @@ const PendingIssue = ({ onBack }) => {
       const fabrics = [...new Set(issues.map(issue => issue.fabric).filter(f => f && f !== 'N/A'))].sort();
       const stylesList = [...new Set(issues.map(issue => issue.style).filter(s => s && s !== 'N/A'))].sort();
       const parties = [...new Set(issues.map(issue => issue.partyName).filter(p => p && p !== 'N/A'))].sort();
+      const seasons = [...new Set(issues.map(issue => issue.season).filter(s => s && s !== 'N/A' && s !== ''))].sort();
       const garmentTypes = [...new Set(issues.map(issue => issue.garmentType).filter(g => g && g !== 'N/A'))].sort();
       const mwkValues = [...new Set(issues.map(issue => issue.mwk).filter(m => m && m !== 'N/A' && m !== ''))].sort();
 
@@ -274,6 +277,7 @@ const PendingIssue = ({ onBack }) => {
       setAvailableFabrics(fabrics);
       setAvailableStyles(stylesList);
       setAvailableParties(parties);
+      setAvailableSeasons(seasons);
       setAvailableGarmentTypes(garmentTypes);
       setAvailableMwkValues(mwkValues);
     }
@@ -290,6 +294,7 @@ const PendingIssue = ({ onBack }) => {
         issue.garmentType.toLowerCase().includes(term) ||
         issue.brand.toLowerCase().includes(term) ||
         issue.partyName.toLowerCase().includes(term) ||
+        (issue.season && issue.season.toLowerCase().includes(term)) ||
         issue.mwk.toLowerCase().includes(term)
       );
     }
@@ -327,6 +332,10 @@ const PendingIssue = ({ onBack }) => {
       result = result.filter(issue => partyFilter.includes(issue.partyName));
     }
 
+    if (seasonFilter && seasonFilter.length > 0) {
+      result = result.filter(issue => seasonFilter.includes(issue.season));
+    }
+
     if (garmentTypeFilter && garmentTypeFilter.length > 0) {
       result = result.filter(issue => garmentTypeFilter.includes(issue.garmentType));
     }
@@ -359,7 +368,7 @@ const PendingIssue = ({ onBack }) => {
     }
 
     setFilteredIssues(result);
-  }, [searchTerm, activeFilter, issues, brandFilter, fabricFilter, styleFilter, partyFilter, garmentTypeFilter, mwkFilter, daysFilter]);
+  }, [searchTerm, activeFilter, issues, brandFilter, fabricFilter, styleFilter, partyFilter, seasonFilter, garmentTypeFilter, mwkFilter, daysFilter]);
 
   // Clear all filters
   const clearAllFilters = () => {
@@ -367,6 +376,7 @@ const PendingIssue = ({ onBack }) => {
     setFabricFilter([]);
     setStyleFilter([]);
     setPartyFilter([]);
+    setSeasonFilter([]);
     setGarmentTypeFilter([]);
     setMwkFilter([]);
     setDaysFilter('');
@@ -1036,6 +1046,18 @@ const PendingIssue = ({ onBack }) => {
 
       console.log(`Using M/W/K column index: ${mwkIndex}`);
 
+      // Find Season column index
+      let seasonIndex = -1;
+      headers.forEach((header, index) => {
+        const headerLower = header.trim().toLowerCase();
+        if (headerLower === 'season' || headerLower.includes('season')) {
+          console.log(`Found Season column: ${index}: "${header}"`);
+          seasonIndex = index;
+        }
+      });
+
+      console.log(`Using Season column index: ${seasonIndex}`);
+
       const headerIndices = {};
       headers.forEach((header, index) => {
         headerIndices[header.trim()] = index;
@@ -1116,7 +1138,12 @@ const PendingIssue = ({ onBack }) => {
         // Get M/W/K value
         const mwkValue = (mwkIndex !== -1 && row[mwkIndex]) ? row[mwkIndex].toString().trim() : 'N/A';
 
-        console.log(`Lot ${lotNumber}: priority="${priority}", isRepeatedLot=${isRepeatedLot}, mwk="${mwkValue}"`);
+        // Get Season value
+        const seasonValue = (seasonIndex !== -1 && row[seasonIndex])
+          ? row[seasonIndex].toString().trim()
+          : (row[headerIndices['SEASON']] || row[headerIndices['Season']] || row[headerIndices['season']] || 'N/A');
+
+        console.log(`Lot ${lotNumber}: priority="${priority}", isRepeatedLot=${isRepeatedLot}, mwk="${mwkValue}", season="${seasonValue}"`);
 
         return {
           id: rowIndex + 1,
@@ -1125,7 +1152,7 @@ const PendingIssue = ({ onBack }) => {
           garmentType: row[headerIndices['Garment Type']] || 'N/A',
           style: row[headerIndices['Style']] || 'N/A',
           brand: row[headerIndices['BRAND']] || 'N/A',
-          season: row[headerIndices['SEASON']] || 'N/A',
+          season: seasonValue,
           directStitching: directStitchingValue,
           challanHistory: challanHistory,
           partyName: row[headerIndices['PARTY NAME']] || 'N/A',
@@ -1211,6 +1238,7 @@ const PendingIssue = ({ onBack }) => {
       'Garment Type': issue.garmentType,
       'Brand': issue.brand,
       'Style': issue.style,
+      'Season': issue.season || 'N/A',
       'M/W/K': issue.mwk,
       'Total Pcs': calculateTotalPieces(issue),
       'Cutting Date': formatDateDisplay(issue.cuttingDate),
@@ -1230,6 +1258,7 @@ const PendingIssue = ({ onBack }) => {
       'Garment Type': '',
       'Brand': '',
       'Style': '',
+      'Season': '',
       'M/W/K': '',
       'Total Pcs': '',
       'Cutting Date': '',
@@ -1246,6 +1275,7 @@ const PendingIssue = ({ onBack }) => {
       'Garment Type': '',
       'Brand': '',
       'Style': '',
+      'Season': '',
       'M/W/K': '',
       'Total Pcs': totalPieces,
       'Cutting Date': '',
@@ -1262,6 +1292,7 @@ const PendingIssue = ({ onBack }) => {
       'Garment Type': '',
       'Brand': '',
       'Style': '',
+      'Season': '',
       'M/W/K': '',
       'Total Pcs': '',
       'Cutting Date': '',
@@ -1278,6 +1309,7 @@ const PendingIssue = ({ onBack }) => {
       'Garment Type': '',
       'Brand': '',
       'Style': '',
+      'Season': '',
       'M/W/K': '',
       'Total Pcs': '',
       'Cutting Date': '',
@@ -1518,17 +1550,18 @@ const PendingIssue = ({ onBack }) => {
           <table>
             <thead>
               <tr>
-                <th style="width: 4%; text-align: center;">#</th>
-                <th style="width: 10%;">Lot Number</th>
-                <th style="width: 11%;">Fabric</th>
-                <th style="width: 11%;">Garment Type</th>
-                <th style="width: 11%;">Style</th>
-                <th style="width: 8%;">Image</th>
-                <th style="width: 9%;">Brand</th>
-                <th style="width: 7%; text-align: center;">M/W/K</th>
+                <th style="width: 3%; text-align: center;">#</th>
+                <th style="width: 9%;">Lot Number</th>
+                <th style="width: 10%;">Fabric</th>
+                <th style="width: 10%;">Garment Type</th>
+                <th style="width: 10%;">Style</th>
+                <th style="width: 8%;">Season</th>
+                <th style="width: 7%;">Image</th>
+                <th style="width: 8%;">Brand</th>
+                <th style="width: 6%; text-align: center;">M/W/K</th>
                 <th style="width: 7%; text-align: center;">Pieces</th>
                 <th style="width: 10%;">Emb/Print Date</th>
-                <th style="width: 8%; text-align: center;">Days</th>
+                <th style="width: 6%; text-align: center;">Days</th>
                 <th style="width: 12%;">Color/Status</th>
               </tr>
             </thead>
@@ -1547,6 +1580,7 @@ const PendingIssue = ({ onBack }) => {
                     <td>${issue.fabric}</td>
                     <td>${issue.garmentType}</td>
                     <td>${issue.style}</td>
+                    <td>${issue.season || 'N/A'}</td>
                     <td style="text-align: center;">
                       ${issue.imageUrl
           ? `<img src="${issue.imageUrl}" referrerpolicy="no-referrer" style="width: 35px; height: 35px; object-fit: cover; border: 1px solid #000000; border-radius: 3px;" />`
@@ -1620,6 +1654,10 @@ const PendingIssue = ({ onBack }) => {
                 <div className="detail-row">
                   <span className="detail-label">Brand:</span>
                   <span className="detail-value">{issue.brand}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="detail-label">Season:</span>
+                  <span className="detail-value">{issue.season || 'N/A'}</span>
                 </div>
                 <div className="detail-row">
                   <span className="detail-label">M/W/K:</span>
@@ -1811,6 +1849,9 @@ const PendingIssue = ({ onBack }) => {
           <div className="brand-cell">{issue.brand}</div>
         </td>
         <td>
+          <div className="season-cell">{issue.season || 'N/A'}</div>
+        </td>
+        <td>
           <div className="mwk-cell">{issue.mwk}</div>
         </td>
         <td className="text-center">
@@ -1901,6 +1942,10 @@ const PendingIssue = ({ onBack }) => {
                 <div className="info-row">
                   <span className="info-label">Brand:</span>
                   <span className="info-value">{issue.brand}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-label">Season:</span>
+                  <span className="info-value">{issue.season || 'N/A'}</span>
                 </div>
                 <div className="info-row">
                   <span className="info-label">M/W/K:</span>
@@ -1994,6 +2039,7 @@ const PendingIssue = ({ onBack }) => {
               <th>Garment Type</th>
               <th>Style</th>
               <th>Brand</th>
+              <th>Season</th>
               <th>M/W/K</th>
               <th className="text-center">Total Pcs</th>
               <th>Cutting Date</th>
@@ -2005,7 +2051,7 @@ const PendingIssue = ({ onBack }) => {
           <tbody>
             {filteredIssues.length === 0 ? (
               <tr>
-                <td colSpan="12" className="empty-state">
+                <td colSpan="14" className="empty-state">
                   <div className="empty-message">
                     <span className="empty-icon">📭</span>
                     <h3>No pending issues found</h3>
@@ -2053,6 +2099,7 @@ const PendingIssue = ({ onBack }) => {
     fabricFilter && fabricFilter.length > 0 ? 1 : 0,
     styleFilter && styleFilter.length > 0 ? 1 : 0,
     partyFilter && partyFilter.length > 0 ? 1 : 0,
+    seasonFilter && seasonFilter.length > 0 ? 1 : 0,
     garmentTypeFilter && garmentTypeFilter.length > 0 ? 1 : 0,
     mwkFilter && mwkFilter.length > 0 ? 1 : 0,
     daysFilter ? 1 : 0,
@@ -2765,7 +2812,7 @@ const PendingIssue = ({ onBack }) => {
     }
 
     /* Table Cell Styles */
-    .lot-cell, .fabric-cell, .garment-type-cell, .brand-cell, .style-cell, .date-cell, .mwk-cell {
+    .lot-cell, .fabric-cell, .garment-type-cell, .brand-cell, .style-cell, .season-cell, .date-cell, .mwk-cell {
       font-size: 14px;
       color: #334155;
       font-weight: 500;
@@ -3769,6 +3816,16 @@ const PendingIssue = ({ onBack }) => {
             </div>
 
             <div className="filter-group">
+              <label className="filter-label">Season</label>
+              <MultiSelectDropdown
+                placeholder="All Seasons"
+                options={availableSeasons}
+                selectedValues={seasonFilter}
+                onChange={setSeasonFilter}
+              />
+            </div>
+
+            <div className="filter-group">
               <label className="filter-label">M/W/K</label>
               <MultiSelectDropdown
                 placeholder="All"
@@ -3813,7 +3870,7 @@ const PendingIssue = ({ onBack }) => {
               <input
                 type="text"
                 className="search-input"
-                placeholder="Search by Lot Number, Fabric, Brand, Party, M/W/K..."
+                placeholder="Search by Lot Number, Fabric, Brand, Party, Season, M/W/K..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />

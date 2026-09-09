@@ -282,6 +282,7 @@ const DISPLAY_HEADERS = [
   "Garment Type",
   "Section",
   "Style",
+  "Season",
   "Fabric",
   "Brand",
   "Printing",
@@ -291,6 +292,341 @@ const DISPLAY_HEADERS = [
   "Challan Date",
   "Challan Total Qty",
 ];
+
+/* ================== EXPORT CONFIG & MODAL ================== */
+const ALL_EXPORT_COLUMNS = [
+  { id: 'S. No', label: 'S. No', key: 'S. No', defaultSelected: true, baseWidth: 28 },
+  { id: 'Lot No.', label: 'Lot No.', key: 'Lot No.', defaultSelected: true, baseWidth: 55 },
+  { id: 'Fabric', label: 'Fabric', key: 'Fabric', defaultSelected: true, baseWidth: 60 },
+  { id: 'Brand', label: 'Brand', key: 'Brand', defaultSelected: true, baseWidth: 65 },
+  { id: 'Style', label: 'Style', key: 'Style', defaultSelected: true, baseWidth: 70 },
+  { id: 'Season', label: 'Season', key: 'Season', defaultSelected: true, baseWidth: 45 },
+  { id: 'Section', label: 'Section (M/W/K)', key: 'Section', defaultSelected: true, baseWidth: 32 },
+  { id: 'Garment Type', label: 'Garment Type', key: 'Garment Type', defaultSelected: true, baseWidth: 65 },
+  { id: 'Party Name', label: 'Party Name', key: 'Party Name', defaultSelected: true, baseWidth: 45 },
+  { id: 'Printing', label: 'Printing Party', key: 'Printing', defaultSelected: true, baseWidth: 45 },
+  { id: 'Challan Date', label: 'Challan Date', key: 'Challan Date', defaultSelected: true, baseWidth: 55 },
+  { id: 'Challan Total Qty', label: 'Challan Qty', key: 'Challan Total Qty', defaultSelected: true, baseWidth: 45 },
+  { id: 'Printing Status', label: 'Printing Status', key: 'Printing Status', defaultSelected: true, baseWidth: 58 },
+  { id: 'Pending Challan Shade', label: 'Pending Shade', key: 'Pending Challan Shade', defaultSelected: true, baseWidth: 70 },
+  { id: 'Remarks', label: 'Remarks', key: 'Remarks', defaultSelected: true, baseWidth: 60 },
+  { id: 'Printing Done', label: 'Printing Done Date', key: 'Printing Done', defaultSelected: true, baseWidth: 55 },
+  { id: 'Days', label: 'Days', key: 'Days', defaultSelected: true, baseWidth: 35 },
+  { id: 'HOD Remarks', label: 'HOD Remarks', key: 'HOD Remarks', defaultSelected: true, baseWidth: 80 },
+];
+
+const ExportColumnModal = ({
+  isOpen,
+  onClose,
+  exportType,
+  allColumns,
+  selectedColumns,
+  setSelectedColumns,
+  onConfirmExport
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  if (!isOpen) return null;
+
+  const isExcel = exportType === 'excel';
+  const headerBg = isExcel
+    ? 'linear-gradient(135deg, #065f46 0%, #047857 50%, #059669 100%)'
+    : 'linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%)';
+  const confirmBtnBg = isExcel
+    ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+    : 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)';
+
+  const handleToggle = (id) => {
+    if (selectedColumns.includes(id)) {
+      setSelectedColumns(selectedColumns.filter(colId => colId !== id));
+    } else {
+      setSelectedColumns([...selectedColumns, id]);
+    }
+  };
+
+  const handleSelectAll = () => {
+    setSelectedColumns(allColumns.map(c => c.id));
+  };
+
+  const handleClearAll = () => {
+    setSelectedColumns([]);
+  };
+
+  const handleResetDefault = () => {
+    setSelectedColumns(allColumns.filter(c => c.defaultSelected !== false).map(c => c.id));
+  };
+
+  const filteredColumns = allColumns.filter(c =>
+    c.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.id.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(15, 23, 42, 0.7)',
+        backdropFilter: 'blur(6px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 99999,
+        padding: '20px'
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: '#ffffff',
+          borderRadius: '20px',
+          maxWidth: '660px',
+          width: '100%',
+          maxHeight: '85vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+          overflow: 'hidden',
+          border: '1px solid rgba(226, 232, 240, 0.8)'
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            background: headerBg,
+            color: '#ffffff',
+            padding: '20px 24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}
+        >
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '1.4rem' }}>{isExcel ? '📊' : '📄'}</span>
+              <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: '800', letterSpacing: '-0.02em' }}>
+                Select Headers for {isExcel ? 'Excel (.xlsx)' : 'PDF'} Export
+              </h3>
+            </div>
+            <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem', color: isExcel ? '#a7f3d0' : '#c7d2fe' }}>
+              Choose which columns you want to include in the downloaded file
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255, 255, 255, 0.2)',
+              border: 'none',
+              color: '#ffffff',
+              fontSize: '1.2rem',
+              borderRadius: '10px',
+              width: '36px',
+              height: '36px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div
+          style={{
+            padding: '14px 24px',
+            background: '#f8fafc',
+            borderBottom: '1px solid #e2e8f0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '10px'
+          }}
+        >
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={handleSelectAll}
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: '600',
+                background: '#ffffff',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                color: '#2563eb',
+                cursor: 'pointer'
+              }}
+            >
+              ✓ Select All
+            </button>
+            <button
+              onClick={handleClearAll}
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: '600',
+                background: '#ffffff',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                color: '#dc2626',
+                cursor: 'pointer'
+              }}
+            >
+              ✕ Clear All
+            </button>
+            <button
+              onClick={handleResetDefault}
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: '600',
+                background: '#ffffff',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                color: '#475569',
+                cursor: 'pointer'
+              }}
+            >
+              ↺ Reset Default
+            </button>
+          </div>
+
+          <div style={{
+            fontSize: '13px',
+            fontWeight: '700',
+            color: selectedColumns.length > 0 ? (isExcel ? '#059669' : '#4f46e5') : '#dc2626',
+            background: selectedColumns.length > 0 ? (isExcel ? '#ecfdf5' : '#eef2ff') : '#fee2e2',
+            padding: '4px 12px',
+            borderRadius: '20px',
+            border: `1px solid ${selectedColumns.length > 0 ? (isExcel ? '#a7f3d0' : '#c7d2fe') : '#fecaca'}`
+          }}>
+            {selectedColumns.length} of {allColumns.length} headers selected
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 24px 0 24px' }}>
+          <input
+            type="text"
+            placeholder="🔍 Search column headers..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              borderRadius: '8px',
+              border: '1.5px solid #cbd5e1',
+              fontSize: '13px',
+              outline: 'none',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
+
+        <div style={{
+          padding: '16px 24px',
+          overflowY: 'auto',
+          flex: 1,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gap: '10px'
+        }}>
+          {filteredColumns.map(col => {
+            const isSelected = selectedColumns.includes(col.id);
+            return (
+              <label
+                key={col.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  padding: '10px 12px',
+                  borderRadius: '10px',
+                  border: `1.5px solid ${isSelected ? (isExcel ? '#059669' : '#6366f1') : '#e2e8f0'}`,
+                  background: isSelected ? (isExcel ? '#f0fdf4' : '#f5f3ff') : '#ffffff',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  userSelect: 'none'
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => handleToggle(col.id)}
+                  style={{
+                    width: '17px',
+                    height: '17px',
+                    accentColor: isExcel ? '#059669' : '#4f46e5',
+                    cursor: 'pointer'
+                  }}
+                />
+                <span style={{
+                  fontSize: '13px',
+                  fontWeight: isSelected ? '700' : '500',
+                  color: isSelected ? (isExcel ? '#065f46' : '#1e1b4b') : '#475569'
+                }}>
+                  {col.label}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        <div
+          style={{
+            padding: '16px 24px',
+            background: '#f8fafc',
+            borderTop: '1px solid #e2e8f0',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}
+        >
+          <button
+            onClick={onClose}
+            style={{
+              background: '#e2e8f0',
+              color: '#334155',
+              border: 'none',
+              padding: '10px 20px',
+              borderRadius: '10px',
+              fontWeight: '700',
+              fontSize: '0.9rem',
+              cursor: 'pointer'
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirmExport(selectedColumns)}
+            disabled={selectedColumns.length === 0}
+            style={{
+              background: confirmBtnBg,
+              color: '#ffffff',
+              border: 'none',
+              padding: '10px 26px',
+              borderRadius: '10px',
+              fontWeight: '800',
+              fontSize: '0.92rem',
+              cursor: selectedColumns.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: selectedColumns.length === 0 ? 0.5 : 1,
+              boxShadow: isExcel ? '0 4px 12px rgba(16, 185, 129, 0.3)' : '0 4px 12px rgba(99, 102, 241, 0.35)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}
+          >
+            <span>{isExcel ? '📊 Download Excel' : '📄 Download PDF'}</span>
+            <span style={{ fontSize: '0.85rem', opacity: 0.9 }}>({selectedColumns.length} cols)</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const RemarksHistoryModal = ({ isOpen, onClose, lotNumber, remarksHistory }) => {
   if (!isOpen) return null;
@@ -433,6 +769,7 @@ const PRIORITY_HEADERS = [
   "Fabric",
   "Brand",
   "Style",
+  "Season",
   "Section",
   "Garment Type",
   "Party Name",
@@ -453,6 +790,7 @@ const FILTER_HEADERS = [
   "Fabric",
   "Brand",
   "Style",
+  "Season",
   "Garment Type",
   "Section",
   "Party Name",
@@ -981,6 +1319,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
   const [fabricFilter, setFabricFilter] = useState([]);
   const [brandFilter, setBrandFilter] = useState([]);
   const [styleFilter, setStyleFilter] = useState([]);
+  const [seasonFilter, setSeasonFilter] = useState([]); // Season filter
   const [garmentTypeFilter, setGarmentTypeFilter] = useState([]);
   const [sectionFilter, setSectionFilter] = useState([]);
   const [partyNameFilter, setPartyNameFilter] = useState([]);
@@ -991,6 +1330,10 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
   const [printingStatusFilter, setPrintingStatusFilter] = useState(initialPrintingStatusFilter);
   const [daysFilter, setDaysFilter] = useState("all");
   const [financialYearFilter, setFinancialYearFilter] = useState(getCurrentFinancialYear());
+
+  // Export Header Selection Modal State
+  const [exportModalConfig, setExportModalConfig] = useState({ isOpen: false, type: 'excel' });
+  const [selectedExportColumns, setSelectedExportColumns] = useState(() => ALL_EXPORT_COLUMNS.filter(c => c.defaultSelected !== false).map(c => c.id));
 
   // Custom Head Remarks History state (Stored 100% in Google Sheets)
   const [headRemarksMap, setHeadRemarksMap] = useState({});
@@ -1066,10 +1409,16 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       }
 
       const [headers, ...rows] = jobRes.values || [];
+      const seasonCol = headers ? headers.findIndex(h => h && h.trim().toLowerCase() === 'season') : -1;
+
       const formatted = (rows || [])
         .map((row) => {
           const entry = {};
           (headers || []).forEach((header, i) => (entry[header] = row[i] ?? ""));
+          const seasonVal = seasonCol !== -1 && row[seasonCol] !== undefined
+            ? String(row[seasonCol] || '').trim()
+            : String(row[headers.indexOf('SEASON')] || row[headers.indexOf('Season')] || '').trim();
+          entry["Season"] = seasonVal;
           return entry;
         })
         .filter((row) => row["Challan No"]?.trim().startsWith("CH-PRINT-"));
@@ -1176,6 +1525,12 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
         if (!matched) return false;
       }
 
+      if (seasonFilter && seasonFilter.length > 0) {
+        const rowSeason = normalizeValue(row["Season"] || row["SEASON"]);
+        const matched = seasonFilter.some(s => normalizeValue(s) === rowSeason);
+        if (!matched) return false;
+      }
+
       if (garmentTypeFilter && garmentTypeFilter.length > 0) {
         const rowGarmentType = normalizeValue(row["Garment Type"]);
         const matched = garmentTypeFilter.some(g => normalizeValue(g) === rowGarmentType);
@@ -1219,7 +1574,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
     });
   }, [
     challanData, searchTerm, financialYearFilter, printingStatusFilter, daysFilter, cancelledByLot,
-    fabricFilter, brandFilter, styleFilter, garmentTypeFilter,
+    fabricFilter, brandFilter, styleFilter, seasonFilter, garmentTypeFilter,
     sectionFilter, partyNameFilter, printingFilterDropdown, priorityFilter
   ]);
 
@@ -1301,6 +1656,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       // Store repeated flag for PDF styling
       base["_isRepeated"] = isRepeated;
       base["_priority"] = row["Priority"];
+      base["Season"] = String(row["Season"] || "");
 
       // Add extra columns with proper defaults
       base["Status"] = String(status.text || "");
@@ -1320,6 +1676,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       case "Fabric": return fabricFilter;
       case "Brand": return brandFilter;
       case "Style": return styleFilter;
+      case "Season": return seasonFilter;
       case "Garment Type": return garmentTypeFilter;
       case "Section": return sectionFilter;
       case "Party Name": return partyNameFilter;
@@ -1335,6 +1692,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       case "Fabric": setFabricFilter(value); break;
       case "Brand": setBrandFilter(value); break;
       case "Style": setStyleFilter(value); break;
+      case "Season": setSeasonFilter(value); break;
       case "Garment Type": setGarmentTypeFilter(value); break;
       case "Section": setSectionFilter(value); break;
       case "Party Name": setPartyNameFilter(value); break;
@@ -1364,14 +1722,34 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
     return Array.from(normalizedMap.values()).sort();
   };
 
-  const exportToExcel = async () => {
-    if (!exportedRows.length) return;
+  const exportToExcelWithColumns = async (selectedCols) => {
+    if (!exportedRows.length || !selectedCols.length) return;
     try {
       const XLSX = await ensureXLSX();
-      const ws = XLSX.utils.json_to_sheet(exportedRows);
-      const cols = Object.keys(exportedRows[0] || {});
+
+      const activeColumns = selectedCols.map(id => {
+        const def = ALL_EXPORT_COLUMNS.find(c => c.id === id);
+        return def || { id, label: id, key: id };
+      });
+
+      const filteredExportRows = exportedRows.map((row) => {
+        const rowObj = {};
+        activeColumns.forEach((col) => {
+          if (col.id === 'HOD Remarks') {
+            const lotNum = row["Lot No."] ? String(row["Lot No."]).replace(/★\s*/, '').trim() : "";
+            const lotHist = headRemarksMap[lotNum] || [];
+            rowObj[col.label] = lotHist.length > 0 ? lotHist[lotHist.length - 1].text : "";
+          } else {
+            rowObj[col.label] = row[col.key] ?? "";
+          }
+        });
+        return rowObj;
+      });
+
+      const ws = XLSX.utils.json_to_sheet(filteredExportRows);
+      const cols = Object.keys(filteredExportRows[0] || {});
       ws["!cols"] = cols.map((c) => {
-        const max = Math.max(c.length, ...exportedRows.map((r) => String(r[c] ?? "").length));
+        const max = Math.max(c.length, ...filteredExportRows.map((r) => String(r[c] ?? "").length));
         return { wch: Math.min(Math.max(max + 2, 10), 60) };
       });
       const wb = XLSX.utils.book_new();
@@ -1383,28 +1761,37 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       );
     } catch (e) {
       console.error(e);
-      const cols = Object.keys(exportedRows[0] || {});
+      const activeColumns = selectedCols.map(id => {
+        const def = ALL_EXPORT_COLUMNS.find(c => c.id === id);
+        return def || { id, label: id, key: id };
+      });
+      const cols = activeColumns.map(c => c.label);
       const csv =
         [cols.join(",")]
           .concat(
-            exportedRows.map((r) => cols.map((k) => `"${String(r[k] ?? "").replace(/"/g, '""')}"`).join(","))
+            exportedRows.map((r) => activeColumns.map((col) => {
+              let val = r[col.key] ?? "";
+              if (col.id === 'HOD Remarks') {
+                const lotNum = r["Lot No."] ? String(r["Lot No."]).replace(/★\s*/, '').trim() : "";
+                const lotHist = headRemarksMap[lotNum] || [];
+                val = lotHist.length > 0 ? lotHist[lotHist.length - 1].text : "";
+              }
+              return `"${String(val).replace(/"/g, '""')}"`;
+            }).join(","))
           )
           .join("\n") + "\n";
       downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), "Printing-Challans.csv");
-      alert("Excel export fell back to CSV because the XLSX library couldn't be loaded.");
     }
   };
 
-  const exportToPDF = async () => {
-    if (!exportedRows.length) return;
+  const exportToPDFWithColumns = async (selectedCols) => {
+    if (!exportedRows.length || !selectedCols.length) return;
 
     try {
       const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "A3" });
 
-      // ---- Palette ----
-      // ---- Palette (matching StitchingCompleted.js) ----
       const COLOR = {
-        headerFill: [15, 76, 129],      // Deep Navy Blue
+        headerFill: [15, 76, 129],      // Deep Navy Blue (matching StitchingCompleted.js)
         headerText: [255, 255, 255],    // White bold text
         grid: [0, 0, 0],                // Solid Black grid lines
         stripe: [248, 250, 252],        // Light slate alternating stripe
@@ -1422,7 +1809,6 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
         starColor: [217, 119, 6],       // Gold star
       };
 
-      // ---- ENHANCED STAR DRAWING FUNCTION ----
       const drawStarSymbol = (doc, x, y, size = 4.5) => {
         const currentFillColor = doc.getFillColor();
         const currentDrawColor = doc.getDrawColor();
@@ -1461,7 +1847,6 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
         doc.setLineWidth(currentLineWidth);
       };
 
-      // ---- Calculate totals ----
       const totalLots = exportedRows.length;
       const totalPcs = exportedRows.reduce((sum, row) => {
         const qty = parseFloat(row["Challan Total Qty"]) || 0;
@@ -1469,7 +1854,6 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       }, 0);
       const repeatedLotsCount = exportedRows.filter(row => row["_isRepeated"]).length;
 
-      // ---- Calculate Printing party statistics ----
       const printingParties = {};
       exportedRows.forEach(row => {
         const printingParty = row["Printing"] || "Unassigned";
@@ -1489,7 +1873,6 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
 
       const sortedPrintingParties = Object.values(printingParties).sort((a, b) => b.totalPcs - a.totalPcs);
 
-      // ---- Title block ----
       const title = "PRINTING CHALLAN PRODUCTION REPORT";
       const now = new Date();
       const subtitle = `Report Date: ${now.toLocaleDateString()} ${now.toLocaleTimeString()} • Factory Suite Pro`;
@@ -1507,9 +1890,9 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       doc.setFont('helvetica', 'normal');
       doc.text(subtitle, pageW / 2, 54, { align: 'center' });
 
-      // ---- Main Summary section ----
       let currentY = 66;
 
+      // Summary Bar
       doc.setFillColor(...COLOR.totalBg);
       doc.roundedRect(30, currentY - 5, pageW - 60, 24, 6, 6, 'F');
       doc.setDrawColor(191, 219, 254);
@@ -1528,52 +1911,24 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
 
       currentY += 26;
 
-      // ---- Define columns ----
-      const columns = [
-        "S. No",
-        "Lot No.",
-        "Fabric",
-        "Brand",
-        "Style",
-        "Section",
-        "Garment Type",
-        "Party Name",
-        "Printing",
-        "Challan Date",
-        "Challan Total Qty",
-        "Printing Status",
-        "Pending Challan Shade",
-        "Remarks",
-        "Printing Done",
-        "Days",
-        "HOD Remarks"
-      ];
+      const activeColumns = selectedCols.map(id => {
+        const def = ALL_EXPORT_COLUMNS.find(c => c.id === id);
+        return def || { id, label: id, key: id, baseWidth: 50 };
+      });
 
-      // Build body data
+      const columns = activeColumns.map(c => c.label);
+
       const body = exportedRows.map((row, index) => {
         const lotNum = row["Lot No."] ? String(row["Lot No."]).replace(/★\s*/, '').trim() : "";
         const lotHist = headRemarksMap[lotNum] || [];
         const latestHod = lotHist.length > 0 ? lotHist[lotHist.length - 1].text : "";
 
-        return [
-          String(index + 1),
-          lotNum,
-          row["Fabric"] || "",
-          row["Brand"] || "",
-          row["Style"] || "",
-          row["Section"] || "",
-          row["Garment Type"] || "",
-          row["Party Name"] || "",
-          row["Printing"] || "",
-          row["Challan Date"] || "",
-          row["Challan Total Qty"] || "",
-          row["Printing Status"] || "",
-          row["Pending Challan Shade"] || "",
-          row["Remarks"] || "",
-          row["Printing Done"] || "",
-          row["Days"] || "",
-          latestHod || ""
-        ];
+        return activeColumns.map(col => {
+          if (col.id === "S. No") return String(index + 1);
+          if (col.id === "Lot No.") return lotNum;
+          if (col.id === "HOD Remarks") return latestHod || "";
+          return String(row[col.key] || "");
+        });
       });
 
       const daysColIdx = columns.indexOf("Days");
@@ -1581,27 +1936,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
 
       const availableWidth = pageW - 30;
 
-      // Proportional base widths for 17 columns (sum exactly to availableWidth)
-      const baseWidths = [
-        28,  // 0: S. No
-        55,  // 1: Lot No.
-        60,  // 2: Fabric
-        65,  // 3: Brand
-        70,  // 4: Style
-        30,  // 5: Section
-        65,  // 6: Garment Type
-        40,  // 7: Party Name
-        42,  // 8: Printing
-        55,  // 9: Challan Date
-        45,  // 10: Challan Total Qty
-        58,  // 11: Printing Status
-        70,  // 12: Pending Challan Shade
-        60,  // 13: Remarks
-        55,  // 14: Printing Done
-        35,  // 15: Days
-        82   // 16: HOD Remarks
-      ];
-
+      const baseWidths = activeColumns.map(c => c.baseWidth || 50);
       const baseSum = baseWidths.reduce((a, b) => a + b, 0);
       const columnStyles = {};
       baseWidths.forEach((w, i) => {
@@ -1613,7 +1948,6 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
 
       const starPositions = [];
 
-      // ---- Create main table - USING autoTable(doc, {...}) like Embroidery component ----
       autoTable(doc, {
         head: [columns],
         body,
@@ -1658,13 +1992,13 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
             const row = exportedRows[rowIndex];
             const isRepeated = row && row["_isRepeated"];
 
-            if (isRepeated && data.column.index === lotColIdx) {
+            if (isRepeated && data.column.index === lotColIdx && lotColIdx !== -1) {
               data.cell.styles.fillColor = COLOR.repeatedLotBg;
               data.cell.styles.fontStyle = "bold";
               data.cell.styles.fontSize = 10;
             }
 
-            if (data.column.index === daysColIdx) {
+            if (data.column.index === daysColIdx && daysColIdx !== -1) {
               const rawVal = data.cell.raw !== undefined && data.cell.raw !== null ? String(data.cell.raw).trim() : "";
               const n = parseFloat(rawVal);
               if (!isNaN(n) && rawVal !== "") {
@@ -1683,7 +2017,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
         },
 
         willDrawCell: function (data) {
-          if (data.section === "body" && data.column.index === lotColIdx) {
+          if (data.section === "body" && data.column.index === lotColIdx && lotColIdx !== -1) {
             const rowIndex = data.row.index;
             const row = exportedRows[rowIndex];
             const isRepeated = row && row["_isRepeated"];
@@ -1703,7 +2037,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
         },
 
         didDrawCell: function (data) {
-          if (data.section === "body" && data.column.index === lotColIdx) {
+          if (data.section === "body" && data.column.index === lotColIdx && lotColIdx !== -1) {
             const rowIndex = data.row.index;
             const starData = starPositions.find(s => s.rowIndex === rowIndex);
 
@@ -1818,7 +2152,6 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       }
 
       // ---- PRINTING PARTY SUMMARY ----
-
       let lastAutoTable = doc.lastAutoTable;
       let yPosition = lastAutoTable.finalY + 40;
 
@@ -1833,7 +2166,6 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
       }
 
       if (sortedPrintingParties.length > 0) {
-
         doc.setFontSize(22);
         doc.setFont(undefined, 'bold');
         doc.setTextColor(...COLOR.headerFill);
@@ -2076,10 +2408,18 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
             >
               {loading ? "⏳ Refreshing..." : "⟳ Refresh"}
             </button>
-            <button style={styles.exportBtnExcel} onClick={exportToExcel} title="Export to Excel">
+            <button
+              style={styles.exportBtnExcel}
+              onClick={() => setExportModalConfig({ isOpen: true, type: 'excel' })}
+              title="Export to Excel"
+            >
               📊 Excel
             </button>
-            <button style={styles.exportBtnPdf} onClick={exportToPDF} title="Export to PDF">
+            <button
+              style={styles.exportBtnPdf}
+              onClick={() => setExportModalConfig({ isOpen: true, type: 'pdf' })}
+              title="Export to PDF"
+            >
               📄 PDF
             </button>
             <button style={styles.backBtn} onClick={goBack} title="Go back">
@@ -2097,6 +2437,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
                 fabricFilter.length > 0,
                 brandFilter.length > 0,
                 styleFilter.length > 0,
+                seasonFilter.length > 0,
                 garmentTypeFilter.length > 0,
                 sectionFilter.length > 0,
                 partyNameFilter.length > 0,
@@ -2111,6 +2452,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
                         fabricFilter.length > 0,
                         brandFilter.length > 0,
                         styleFilter.length > 0,
+                        seasonFilter.length > 0,
                         garmentTypeFilter.length > 0,
                         sectionFilter.length > 0,
                         partyNameFilter.length > 0,
@@ -2125,6 +2467,7 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
                         setFabricFilter([]);
                         setBrandFilter([]);
                         setStyleFilter([]);
+                        setSeasonFilter([]);
                         setGarmentTypeFilter([]);
                         setSectionFilter([]);
                         setPartyNameFilter([]);
@@ -2631,6 +2974,24 @@ export default function PrintingChallan({ initialPrintingStatusFilter = "pending
         onClose={() => setRemarksModalOpen(false)}
         lotNumber={selectedRemarksLot}
         remarksHistory={selectedRemarksHistory}
+      />
+
+      {/* Column Selection Export Modal */}
+      <ExportColumnModal
+        isOpen={exportModalConfig.isOpen}
+        onClose={() => setExportModalConfig({ isOpen: false, type: 'excel' })}
+        exportType={exportModalConfig.type}
+        allColumns={ALL_EXPORT_COLUMNS}
+        selectedColumns={selectedExportColumns}
+        setSelectedColumns={setSelectedExportColumns}
+        onConfirmExport={(cols) => {
+          if (exportModalConfig.type === 'excel') {
+            exportToExcelWithColumns(cols);
+          } else {
+            exportToPDFWithColumns(cols);
+          }
+          setExportModalConfig({ isOpen: false, type: 'excel' });
+        }}
       />
     </div>
   );

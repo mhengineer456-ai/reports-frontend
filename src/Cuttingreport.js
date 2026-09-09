@@ -7,7 +7,7 @@ import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend } from "./co
 /** ====== CONFIG ====== */
 const JOB_SHEET_ID = SPREADSHEET_IDS.JOBORDER;
 const API_KEY = GOOGLE_API_KEY;
-const JOB_RANGE = "JobOrder!A:AL";
+const JOB_RANGE = "JobOrder!A:AZ";
 
 // Budget Report spreadsheet
 const BUDGET_SHEET_ID = SPREADSHEET_IDS.MAIN;
@@ -66,6 +66,11 @@ const HEADER_ALIAS_TO_CANON = {
   date: "Date",
   status: "Status",
   priority: "Priority",
+  cancellationtimestamp: "Cancellation Timestamp",
+  "cancellation timestamp": "Cancellation Timestamp",
+  cancellationdate: "Cancellation Timestamp",
+  "cancellation date": "Cancellation Timestamp",
+  cancellationtime: "Cancellation Timestamp",
 };
 
 /** ====== UTILS ====== */
@@ -148,6 +153,42 @@ function daysAfter(poDateStr, cuttingDateVal) {
   return Number.isFinite(diff) ? String(diff) : "";
 }
 
+function formatCancellationDate(ts) {
+  if (!ts) return "";
+  const s = String(ts).trim();
+  if (!s) return "";
+
+  // Match YYYY-MM-DD or YYYY MM DD or YYYY/MM/DD
+  const ymdMatch = s.match(/^(\d{4})[-/\s](\d{1,2})[-/\s](\d{1,2})/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = String(ymdMatch[2]).padStart(2, "0");
+    const d = String(ymdMatch[3]).padStart(2, "0");
+    return `${d}-${m}-${y}`;
+  }
+
+  // Match DD-MM-YYYY or DD/MM/YYYY
+  const dmyMatch = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmyMatch) {
+    const d = String(dmyMatch[1]).padStart(2, "0");
+    const m = String(dmyMatch[2]).padStart(2, "0");
+    const y = dmyMatch[3];
+    return `${d}-${m}-${y}`;
+  }
+
+  try {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      const day = String(d.getDate()).padStart(2, "0");
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const year = d.getFullYear();
+      return `${day}-${month}-${year}`;
+    }
+  } catch (e) {}
+
+  return s;
+}
+
 function convertValuesToObjects(values) {
   if (!values || values.length === 0) return [];
   const rawHeaders = values[0];
@@ -174,6 +215,7 @@ function convertValuesToObjects(values) {
       "Lot No",
       "Status",
       "Priority",
+      "Cancellation Timestamp",
     ].forEach((canonHeader) => {
       const idx = canonToIndex[canonHeader];
       let value = idx != null ? (row[idx] ?? "") : "";
@@ -184,6 +226,15 @@ function convertValuesToObjects(values) {
 
       obj[canonHeader] = value;
     });
+
+    if (!obj["Cancellation Timestamp"]) {
+      rawHeaders.forEach((h, idx) => {
+        const normH = normalizeKey(h);
+        if (normH.includes("cancellationtimestamp") || normH.includes("cancellationdate") || (normH.includes("cancellation") && normH.includes("time"))) {
+          obj["Cancellation Timestamp"] = row[idx] ?? "";
+        }
+      });
+    }
 
     if (canonToIndex["Date"] != null) {
       const originalDate = row[canonToIndex["Date"]] ?? "";
@@ -906,7 +957,15 @@ export default function CuttingStatsReport() {
 
   const distinctRemarks = useMemo(() => {
     const set = new Set();
-    rows.forEach((r) => splitRemarks(r.Remarks).forEach((t) => set.add(t)));
+    rows.forEach((r) => {
+      splitRemarks(r.Remarks).forEach((t) => {
+        if (norm(t).startsWith("cancel") || norm(t).includes("cancel")) {
+          set.add("Cancel");
+        } else {
+          set.add(t);
+        }
+      });
+    });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
@@ -1015,11 +1074,11 @@ export default function CuttingStatsReport() {
       );
       let jobRows = convertValuesToObjects(job.values);
 
-      jobRows = jobRows.filter((r) => {
-        const s = (r.Status ?? "").toString();
+      const isCancel = (s) => {
+        if (!s) return false;
         const sn = norm(s);
-        return !sn.startsWith("cancel");
-      });
+        return sn.startsWith("cancel") || sn.includes("cancel");
+      };
 
       const idxRes = await fetchSheet(
         {
@@ -1113,6 +1172,9 @@ export default function CuttingStatsReport() {
       }
       const merged = jobRows.map((r) => {
         const lot = String(r["Lot No"] || "").trim();
+        const statusVal = String(r.Status ?? r.status ?? "").trim();
+        const isCancelled = isCancel(statusVal);
+
         const sum =
           lotToSummary.get(lot) ||
           {
@@ -1126,8 +1188,14 @@ export default function CuttingStatsReport() {
           };
         const days = daysAfter(r["PO Date"] || r["Date"], sum.cuttingDate);
 
-        const remarksList = [sum.remarks, sum.remarks2, sum.remarks3].filter(Boolean);
-        const mergedRemarks = remarksList.join(" | ");
+        let mergedRemarks = "";
+        if (isCancelled) {
+          const cancelDate = formatCancellationDate(r["Cancellation Timestamp"]);
+          mergedRemarks = cancelDate ? `Cancel(${cancelDate})` : "Cancel";
+        } else {
+          const remarksList = [sum.remarks, sum.remarks2, sum.remarks3].filter(Boolean);
+          mergedRemarks = remarksList.join(" | ");
+        }
 
         // Format cutting tables for display
         const cuttingTablesDisplay = sum.cuttingTables && sum.cuttingTables.length > 0
@@ -1137,12 +1205,12 @@ export default function CuttingStatsReport() {
         return {
           ...r,
           "Days after PO issue": days ?? "",
-          "Total Qty": sum.totalQty,
+          "Total Qty": isCancelled ? (r["Total Qty"] || r.Quantity || sum.totalQty || 0) : sum.totalQty,
           "Pending Shade": "",
           "Cutting Date": sum.cuttingDate || "",
           "Cutting Table": cuttingTablesDisplay,
           Remarks: mergedRemarks,
-          imageUrl: sum.imageUrl || ""
+          imageUrl: sum.imageUrl || r.imageUrl || ""
         };
       });
 
@@ -1268,8 +1336,14 @@ export default function CuttingStatsReport() {
       if (selected.size > 0) {
         const tokens = splitRemarks(r.Remarks);
         const tokenSet = new Set(tokens);
+        const hasCancel = tokens.some(t => norm(t).startsWith("cancel") || norm(t).includes("cancel"));
+
         let matchesAny = false;
         for (const sel of selected) {
+          if (sel === "Cancel" && hasCancel) {
+            matchesAny = true;
+            break;
+          }
           if (tokenSet.has(sel)) {
             matchesAny = true;
             break;
@@ -1384,6 +1458,7 @@ export default function CuttingStatsReport() {
       return unique.map(part => {
         let cls = "badge-default";
         if (/done|completed|finished/i.test(part)) cls = "badge-done";
+        else if (/cancel/i.test(part)) cls = "badge-cancel";
         else if (/issue|problem|error|fabric/i.test(part)) cls = "badge-issue";
         else if (/pending|waiting|hold/i.test(part)) cls = "badge-pending";
         else if (/cutting/i.test(part)) cls = "badge-cutting";
@@ -1469,6 +1544,7 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
 
 .badge{ display:inline-block; font-size:6pt; font-weight:bold; padding:1px 3px; border-radius:3px; margin:1px; white-space:nowrap; }
 .badge-done   { background:#dcfce7; color:#166534; }
+.badge-cancel { background:#fee2e2; color:#991b1b; font-weight:bold; }
 .badge-issue  { background:#fee2e2; color:#991b1b; }
 .badge-pending{ background:#fef9c3; color:#854d0e; }
 .badge-cutting{ background:#dbeafe; color:#1e40af; }
@@ -2412,6 +2488,13 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
           border: 1px solid #fde68a;
         }
 
+        .cancel-badge {
+          background: #fee2e2;
+          color: #dc2626;
+          border: 1px solid #fca5a5;
+          font-weight: 800;
+        }
+
         .issue-badge {
           background: #fee2e2;
           color: #dc2626;
@@ -3129,14 +3212,17 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
                                 {splitRemarks(remarks).map((remark, idx) => (
                                   <span
                                     key={idx}
-                                    className={`remark-badge ${remark.includes("Done")
-                                        ? "done-badge"
-                                        : remark.includes("Pending")
-                                          ? "pending-badge"
-                                          : remark.includes("Issue")
-                                            ? "issue-badge"
-                                            : "default-badge"
-                                      }`}
+                                    className={`remark-badge ${
+                                      remark.includes("Cancel")
+                                        ? "cancel-badge"
+                                        : remark.includes("Done")
+                                          ? "done-badge"
+                                          : remark.includes("Pending")
+                                            ? "pending-badge"
+                                            : remark.includes("Issue")
+                                              ? "issue-badge"
+                                              : "default-badge"
+                                    }`}
                                   >
                                     {remark}
                                   </span>

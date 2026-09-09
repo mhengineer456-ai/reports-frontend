@@ -274,6 +274,14 @@ export default function ProductionFlowPoster() {
           tags: ["Overlock Output", "Thread Used", "Quality Check"]
         },
         {
+          code: "R-22B",
+          title: "Daily Feed Up Report",
+          path: "/feed-up-report",
+          emoji: "🪡",
+          desc: "Feed up stitching progress, supervisor allocation & completion tracking",
+          tags: ["Feed Up Output", "Supervisor Wise", "Lot Completion"]
+        },
+        {
           code: "R-23",
           title: "Not Updation Report",
           path: "/daily-stitching-report-not-updation",

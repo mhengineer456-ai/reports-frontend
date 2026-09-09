@@ -14,7 +14,14 @@ export const SPREADSHEET_IDS = {
   DORI: process.env.REACT_APP_DORI_SPREADSHEET_ID || '1LjwZqU26F0xwL1tEyps8txsM1qS8LLUuE-sy_4CQK6k',
   RAWPACK: process.env.REACT_APP_RAWPACK_SPREADSHEET_ID || '1xD8Uy1lUgvNTQ2RGRBI4ZjOrozbinUPRq2_UfIplP98',
   BARCODE: process.env.REACT_APP_BARCODE_SPREADSHEET_ID || '1dOCjNFwaAel5qun0_ZJVIGmREqjI76CJBBFIjM3NHv8',
+  HOLD_LOTS: process.env.REACT_APP_HOLD_LOTS_SPREADSHEET_ID || '1uBelbe44z2lUXngctvk3J31WBiW1v07Nlgx5jFlyIOs',
 };
+
+export const HOLD_LOTS_WEBHOOK_URL =
+  process.env.REACT_APP_HOLD_LOTS_WEBHOOK_URL ||
+  'https://script.google.com/macros/s/AKfycbwhfQMI2uYzDc-VBoYbk6McZCArUShh-3xNE_qwV4MFEb4C53dRTxPpifjRp2sHoVd_Yg/exec';
+
+
 
 export const SHEET_NAMES = {
   JOB_ORDER: process.env.REACT_APP_JOB_ORDER_SHEET_NAME || 'JobOrder',
@@ -32,8 +39,9 @@ export const BACKEND_API_BASE_URL = BACKEND_URL;
  * Fetch spreadsheet range via Node.js Express Backend API
  * Automatically falls back to direct Google Sheets API if backend is unavailable.
  */
-export const fetchSheetDataFromBackend = async (spreadsheetId, range) => {
-  const backendUrl = `${BACKEND_URL}/api/sheets/fetch?spreadsheetId=${encodeURIComponent(spreadsheetId)}&range=${encodeURIComponent(range)}`;
+export const fetchSheetDataFromBackend = async (spreadsheetId, range, forceRefresh = false) => {
+  const refreshParam = forceRefresh ? '&refresh=true' : '';
+  const backendUrl = `${BACKEND_URL}/api/sheets/fetch?spreadsheetId=${encodeURIComponent(spreadsheetId)}&range=${encodeURIComponent(range)}${refreshParam}`;
   try {
     const res = await fetch(backendUrl);
     if (res.ok) {
@@ -43,10 +51,24 @@ export const fetchSheetDataFromBackend = async (spreadsheetId, range) => {
       }
     }
   } catch (err) {
-    console.warn(`Backend fetch failed for [${spreadsheetId} - ${range}], using direct Google API fallback:`, err.message);
+    console.warn(`Primary backend fetch failed for [${spreadsheetId} - ${range}]:`, err.message);
   }
 
-  // Fallback to direct Google Sheets API if backend server is unreachable
+  // Try localhost:5000 if primary backend is remote and failed
+  if (BACKEND_URL !== 'http://localhost:5000') {
+    try {
+      const localUrl = `http://localhost:5000/api/sheets/fetch?spreadsheetId=${encodeURIComponent(spreadsheetId)}&range=${encodeURIComponent(range)}${refreshParam}`;
+      const localRes = await fetch(localUrl);
+      if (localRes.ok) {
+        const localData = await localRes.json();
+        if (localData.success && Array.isArray(localData.values)) {
+          return { ok: true, values: localData.values, source: 'localhost_fallback' };
+        }
+      }
+    } catch (localErr) {}
+  }
+
+  // Fallback to direct Google Sheets API if backend servers are unreachable
   try {
     const directUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}?key=${GOOGLE_API_KEY}`;
     const directRes = await fetch(directUrl);

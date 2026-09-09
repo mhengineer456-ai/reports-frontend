@@ -659,5 +659,12 @@ export const store = {
     }
     const localList = JSON.parse(localStorage.getItem('twms_approval_requests') || '[]');
     return localList.find(item => String(item.id) === String(id)) || null;
+  },
+
+  getCancelledLots: async (refresh = false) => {
+    return fetch(`${BASE_URL}/sheets/cancelled-lots?refresh=${refresh}`, {
+      headers: getHeaders(),
+    }).then(handleResponse);
   }
 };
+

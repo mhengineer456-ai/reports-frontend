@@ -527,7 +527,6 @@ const ZipPurchaseDashboard = () => {
         },
         2: {
           cellWidth: 35,
-          halign: 'center',
           halign: 'center'
         },
         3: {

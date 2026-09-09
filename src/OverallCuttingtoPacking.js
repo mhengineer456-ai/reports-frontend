@@ -7,23 +7,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, SHEET_NAMES, fetchSheetDataFromBackend } from './config';
 
-const OverallCuttingToPacking = () => {
-  // Credentials sourced from central .env configuration
-  const SHEET_ID = SPREADSHEET_IDS.MAIN;
-  const API_KEY = GOOGLE_API_KEY;
-  const SHEET_IDD = SPREADSHEET_IDS.JOBORDER;
-  const SHEET_IDDD = SPREADSHEET_IDS.ISSUES;
-  
-  // Sheet configurations
-  const JOB_ORDER_SHEET = SHEET_NAMES.JOB_ORDER;
-  const INDEX_SHEET = SHEET_NAMES.INDEX;
-  const ISSUES_SHEET = SHEET_NAMES.ISSUES;
-  const SHEET_ID_RAWPACK = SPREADSHEET_IDS.RAWPACK || '1xD8Uy1lUgvNTQ2RGRBI4ZjOrozbinUPRq2_UfIplP98';
-  const RAWPACK_SHEET = SHEET_NAMES.RAWPACK || 'RAWPACK';
-  const SHEET_ID_BARCODE = SPREADSHEET_IDS.BARCODE || '1dOCjNFwaAel5qun0_ZJVIGmREqjI76CJBBFIjM3NHv8';
-  const BARCODE_SHEET = SHEET_NAMES.BARCODE || 'LotBarcodeData';
-
-// Reusable Multi-Select Dropdown Filter Component
+// Reusable Multi-Select Dropdown Filter Component (Defined outside parent component to preserve state across renders)
 const MultiSelectFilter = ({ label, options = [], selected = [], onChange, placeholder = "Select..." }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -47,6 +31,11 @@ const MultiSelectFilter = ({ label, options = [], selected = [], onChange, place
     }
   };
 
+  const handleRemoveTag = (item, e) => {
+    if (e) e.stopPropagation();
+    onChange(selected.filter(i => i !== item));
+  };
+
   const handleSelectAll = () => {
     onChange([...options]);
   };
@@ -65,21 +54,28 @@ const MultiSelectFilter = ({ label, options = [], selected = [], onChange, place
       <label>
         {label} {selected.length > 0 && <span className="filter-count">({selected.length})</span>}
       </label>
-      <div 
-        className={`fabric-dropdown ${isOpen ? 'active' : ''}`}
-        onClick={() => setIsOpen(!isOpen)}
-      >
-        <div className="fabric-dropdown-header">
+      <div className={`fabric-dropdown ${isOpen ? 'active' : ''}`}>
+        <div 
+          className="fabric-dropdown-header"
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsOpen(prev => !prev);
+          }}
+        >
           {selected.length === 0 ? (
             <span className="placeholder">{placeholder}</span>
           ) : (
             <span className="selected-count">{selected.length} selected</span>
           )}
-          <span className="dropdown-arrow">▼</span>
+          <span className="dropdown-arrow">{isOpen ? '▲' : '▼'}</span>
         </div>
         
         {isOpen && (
-          <div className="fabric-dropdown-content">
+          <div 
+            className="fabric-dropdown-content" 
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <div className="fabric-search">
               <input
                 type="text"
@@ -88,6 +84,7 @@ const MultiSelectFilter = ({ label, options = [], selected = [], onChange, place
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onClick={(e) => e.stopPropagation()}
                 className="fabric-search-input"
+                autoFocus
               />
             </div>
             
@@ -106,20 +103,40 @@ const MultiSelectFilter = ({ label, options = [], selected = [], onChange, place
               >
                 Clear All
               </button>
+              <button 
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setIsOpen(false); }}
+                className="fabric-action-btn fabric-action-btn-done"
+                title="Done selecting"
+              >
+                Done ✓
+              </button>
             </div>
             
             <div className="fabric-options">
-              {filteredOptions.map(opt => (
-                <label key={opt} className="fabric-option" title={String(opt)}>
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(opt)}
-                    onChange={() => handleSelect(opt)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <span className="fabric-name">{String(opt)}</span>
-                </label>
-              ))}
+              {filteredOptions.map(opt => {
+                const isSelected = selected.includes(opt);
+                return (
+                  <div 
+                    key={opt} 
+                    className={`fabric-option ${isSelected ? 'selected' : ''}`} 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSelect(opt);
+                    }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    title={String(opt)}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      readOnly
+                      className="fabric-option-checkbox"
+                    />
+                    <span className="fabric-name">{String(opt)}</span>
+                  </div>
+                );
+              })}
               
               {filteredOptions.length === 0 && (
                 <div className="no-fabrics-found">No options found</div>
@@ -136,7 +153,7 @@ const MultiSelectFilter = ({ label, options = [], selected = [], onChange, place
               {item}
               <button 
                 type="button"
-                onClick={() => handleSelect(item)}
+                onClick={(e) => handleRemoveTag(item, e)}
                 className="remove-fabric"
               >
                 ×
@@ -148,6 +165,22 @@ const MultiSelectFilter = ({ label, options = [], selected = [], onChange, place
     </div>
   );
 };
+
+const OverallCuttingToPacking = () => {
+  // Credentials sourced from central .env configuration
+  const SHEET_ID = SPREADSHEET_IDS.MAIN;
+  const API_KEY = GOOGLE_API_KEY;
+  const SHEET_IDD = SPREADSHEET_IDS.JOBORDER;
+  const SHEET_IDDD = SPREADSHEET_IDS.ISSUES;
+  
+  // Sheet configurations
+  const JOB_ORDER_SHEET = SHEET_NAMES.JOB_ORDER;
+  const INDEX_SHEET = SHEET_NAMES.INDEX;
+  const ISSUES_SHEET = SHEET_NAMES.ISSUES;
+  const SHEET_ID_RAWPACK = SPREADSHEET_IDS.RAWPACK || '1xD8Uy1lUgvNTQ2RGRBI4ZjOrozbinUPRq2_UfIplP98';
+  const RAWPACK_SHEET = SHEET_NAMES.RAWPACK || 'RAWPACK';
+  const SHEET_ID_BARCODE = SPREADSHEET_IDS.BARCODE || '1dOCjNFwaAel5qun0_ZJVIGmREqjI76CJBBFIjM3NHv8';
+  const BARCODE_SHEET = SHEET_NAMES.BARCODE || 'LotBarcodeData';
   
   // Headers from JobOrder sheet - Updated to include all required fields
 // Headers from JobOrder sheet - Updated to include all required fields
@@ -237,6 +270,91 @@ const DISPLAY_HEADERS = [
   'Emb/Print To Stit',
   'Stit To Check Pack'
 ];
+
+// Comprehensive PDF Column Definitions with metadata and formatting rules
+const ALL_PDF_COLUMNS = [
+  // Basic & Order Information
+  { id: 'Sr.', label: 'Sr.', fullForm: 'Serial Number', dataKey: 'Sr.', type: 'number', isSerial: true, category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.6 },
+  { id: 'Lot No', label: 'Lot', fullForm: 'Lot Number', dataKey: 'Lot No', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.0 },
+  { id: 'Image', label: 'Image', fullForm: 'Garment Image Preview', dataKey: 'Image', type: 'image', category: 'Basic Information', defaultSelected: false, baseWidthRatio: 1.2 },
+  { id: 'Fabric', label: 'Fabric', fullForm: 'Fabric Type', dataKey: 'Fabric', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.5 },
+  { id: 'Size', label: 'Size', fullForm: 'Garment Size / Dimension', dataKey: 'Size', type: 'text', category: 'Basic Information', defaultSelected: false, baseWidthRatio: 0.8 },
+  { id: 'Item', label: 'Item', fullForm: 'Item Description / Garment Type', dataKey: 'Item', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.4 },
+  { id: 'Brand', label: 'Brand', fullForm: 'Brand Name', dataKey: 'Brand', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.0 },
+  { id: 'Party', label: 'Party', fullForm: 'Party / Customer Name', dataKey: 'Party', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.3 },
+  { id: 'Season', label: 'Sea', fullForm: 'Season (SS/AW)', dataKey: 'Season', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.7 },
+  { id: 'Section', label: 'M/W/K', fullForm: 'Men / Women / Kids Section', dataKey: 'Section', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.8 },
+  { id: 'Job Date', label: 'Job Date', fullForm: 'Job Order Date', dataKey: 'Job Date', type: 'date', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.1 },
+  { id: 'PCS', label: 'PCS', fullForm: 'Cutting Quantity (PCS)', dataKey: 'PCS', type: 'number', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.9 },
+
+  // Cutting & Embroidery / Printing
+  { id: 'Cut Date', label: 'Cut Date', fullForm: 'Fabric Cutting Date', dataKey: 'Cut Date', type: 'date', category: 'Cutting & Emb / Print', defaultSelected: true, baseWidthRatio: 1.1 },
+  { id: 'Design Work', label: 'Design', fullForm: 'Design Work (Y=Direct, N=No, Emb=Embroidery, Print=Printing)', dataKey: 'Design Work', type: 'stitching', category: 'Cutting & Emb / Print', defaultSelected: true, baseWidthRatio: 1.0 },
+  { id: 'Emb/Print Issue', label: 'Emb/Print Issue', fullForm: 'Embroidery/Printing Issue Date', dataKey: 'Emb/Print Issue', type: 'date', category: 'Cutting & Emb / Print', defaultSelected: true, baseWidthRatio: 1.2 },
+  { id: 'Emb/print Comp', label: 'Emb/print Comp', fullForm: 'Embroidery/Printing Completion Date', dataKey: 'Emb/print Comp', type: 'date', category: 'Cutting & Emb / Print', defaultSelected: true, baseWidthRatio: 1.2 },
+
+  // Stitching Process
+  { id: 'Stit Date', label: 'Stit Date', fullForm: 'Stitching Start / Issue Date', dataKey: 'Stit Date', type: 'date', category: 'Stitching Process', defaultSelected: true, baseWidthRatio: 1.1 },
+  { id: 'Stit Sup', label: 'Stit Sup', fullForm: 'Stitching Supervisor', dataKey: 'Stit Sup', type: 'text', category: 'Stitching Process', defaultSelected: true, baseWidthRatio: 1.2 },
+  { id: 'WIP Stit', label: 'WIP Stit', fullForm: 'Work In Progress - Stitching', dataKey: 'WIP Stit', type: 'wip-stitch', category: 'Stitching Process', defaultSelected: true, baseWidthRatio: 1.3 },
+  { id: 'Comp Stit', label: 'Comp Stit', fullForm: 'Stitching Completion Date', dataKey: 'Comp Stit', type: 'date', category: 'Stitching Process', defaultSelected: true, baseWidthRatio: 1.1 },
+
+  // Packing Process
+  { id: 'Pkg Sup', label: 'Pkg Sup', fullForm: 'Packing Supervisor', dataKey: 'Pkg Sup', type: 'text', category: 'Packing Process', defaultSelected: true, baseWidthRatio: 1.2 },
+  { id: 'Pkg Date', label: 'Pkg Date', fullForm: 'Packing Start / Issue Date', dataKey: 'Pkg Date', type: 'date', category: 'Packing Process', defaultSelected: true, baseWidthRatio: 1.1 },
+  { id: 'WIP Pkg', label: 'WIP Pkg', fullForm: 'Work In Progress - Packing', dataKey: 'WIP Pkg', type: 'text', category: 'Packing Process', defaultSelected: true, baseWidthRatio: 1.2 },
+  { id: 'Pkg Comp', label: 'Pkg Comp', fullForm: 'Packing Completion Status', dataKey: 'Pkg Comp', type: 'text', category: 'Packing Process', defaultSelected: true, baseWidthRatio: 1.1 },
+
+  // Timeline & Days Analysis
+  { id: 'Cut Days', label: 'Cut Days', fullForm: 'Days from Job Date to Cut Date', dataKey: 'Cut Days', type: 'calculated', category: 'Days & Timeline', defaultSelected: false, baseWidthRatio: 1.0 },
+  { id: 'Emb/Print Days', label: 'Emb/Print Days', fullForm: 'Days for Embroidery/Printing Process', dataKey: 'Emb/Print Days', type: 'calculated', category: 'Days & Timeline', defaultSelected: false, baseWidthRatio: 1.0 },
+  { id: 'Stit Days', label: 'Stit Days', fullForm: 'Days for Stitching Process', dataKey: 'Stit Days', type: 'calculated', category: 'Days & Timeline', defaultSelected: false, baseWidthRatio: 1.0 },
+  { id: 'Pkg Days', label: 'Pkg Days', fullForm: 'Days for Packing Process', dataKey: 'Pkg Days', type: 'calculated', category: 'Days & Timeline', defaultSelected: false, baseWidthRatio: 1.0 },
+  { id: 'Cut To Emb/Print', label: 'Cut To Emb/Print', fullForm: 'Days from Cutting to Emb/Print Issue', dataKey: 'Cut To Emb/Print', type: 'calculated', category: 'Days & Timeline', defaultSelected: false, baseWidthRatio: 1.1 },
+  { id: 'Emb/Print To Stit', label: 'Emb/Print To Stit', fullForm: 'Days from Emb/Print to Stitching', dataKey: 'Emb/Print To Stit', type: 'calculated', category: 'Days & Timeline', defaultSelected: false, baseWidthRatio: 1.1 },
+  { id: 'Stit To Check Pack', label: 'Stit To Check Pack', fullForm: 'Days from Stitching to Packing', dataKey: 'Stit To Check Pack', type: 'calculated', category: 'Days & Timeline', defaultSelected: false, baseWidthRatio: 1.2 }
+];
+
+// Quick Column Presets
+const PDF_PRESETS = [
+  {
+    name: 'Standard (No Days)',
+    icon: '📋',
+    description: 'Clean core production view without days columns (21 columns)',
+    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'Season', 'Section', 'Design Work', 'Job Date', 'PCS', 'Cut Date', 'Emb/Print Issue', 'Emb/print Comp', 'Stit Date', 'Stit Sup', 'WIP Stit', 'Comp Stit', 'Pkg Sup', 'Pkg Date', 'WIP Pkg', 'Pkg Comp']
+  },
+  {
+    name: 'All Headers (With Days)',
+    icon: '📊',
+    description: 'Complete report with all timing & days columns (28 columns)',
+    columns: ALL_PDF_COLUMNS.map(c => c.id)
+  },
+  {
+    name: 'Essential Summary',
+    icon: '🎯',
+    description: 'Compact executive summary of lot progress (12 columns)',
+    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'PCS', 'Cut Date', 'WIP Stit', 'Comp Stit', 'WIP Pkg', 'Pkg Comp']
+  },
+  {
+    name: 'Stitching Dept Focus',
+    icon: '🧵',
+    description: 'Tailored for Stitching supervisor and lines (13 columns)',
+    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'Design Work', 'PCS', 'Cut Date', 'Stit Date', 'Stit Sup', 'WIP Stit', 'Comp Stit', 'Stit Days']
+  },
+  {
+    name: 'Packing Dept Focus',
+    icon: '📦',
+    description: 'Tailored for Packing and Dispatch teams (13 columns)',
+    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'PCS', 'Stit Date', 'Comp Stit', 'Pkg Sup', 'Pkg Date', 'WIP Pkg', 'Pkg Comp', 'Pkg Days']
+  },
+  {
+    name: 'Embroidery / Printing Focus',
+    icon: '🎨',
+    description: 'Tailored for Challan and Job Work tracking (12 columns)',
+    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'Design Work', 'PCS', 'Cut Date', 'Emb/Print Issue', 'Emb/print Comp', 'Emb/Print Days', 'Cut To Emb/Print']
+  }
+];
+
   const [data, setData] = useState([]);
   const [jobOrderData, setJobOrderData] = useState([]);
   const [indexData, setIndexData] = useState([]);
@@ -260,6 +378,20 @@ const DISPLAY_HEADERS = [
   const [viewImageSrc, setViewImageSrc] = useState(null);
   const [exportLoading, setExportLoading] = useState(false);
   const tableRef = useRef(null);
+
+  // Custom PDF/Excel Export Modal States
+  const [isCustomPdfModalOpen, setIsCustomPdfModalOpen] = useState(false);
+  const [selectedPdfColumns, setSelectedPdfColumns] = useState([
+    'Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'Season', 'Section', 
+    'Design Work', 'Job Date', 'PCS', 'Cut Date', 'Emb/Print Issue', 'Emb/print Comp', 
+    'Stit Date', 'Stit Sup', 'WIP Stit', 'Comp Stit', 'Pkg Sup', 'Pkg Date', 'WIP Pkg', 'Pkg Comp'
+  ]);
+  const [customPdfPaperSize, setCustomPdfPaperSize] = useState('auto');
+  const [customPdfDataScope, setCustomPdfDataScope] = useState('filtered');
+  const [customPdfIncludeNotes, setCustomPdfIncludeNotes] = useState(true);
+  const [customPdfIncludeStats, setCustomPdfIncludeStats] = useState(true);
+  const [customExcelGroupBySupervisor, setCustomExcelGroupBySupervisor] = useState(true);
+  const [customPdfSearchTerm, setCustomPdfSearchTerm] = useState('');
 
   // Helper function to extract direct Google Drive image URL
   const getDirectImageUrl = (url) => {
@@ -1542,17 +1674,16 @@ const clearFabricFilters = () => {
   };
 
   // Fetch data from all three Google Sheets
-// Fetch data from all three Google Sheets
-// Fetch data from all three Google Sheets
-const fetchProductionData = async () => {
+// Fetch data from all Google Sheets
+const fetchProductionData = async (forceRefresh = false) => {
   setLoading(true);
   setError(null);
   
   try {
-    console.log('Fetching data from all three sheets...');
+    console.log('Fetching data from all sheets...');
     
-    // ========== 1. FETCH JOBORDER DATA ==========
-    const jobOrderRes = await fetchSheetDataFromBackend(SHEET_IDD, `${JOB_ORDER_SHEET}!A:Z`);
+    // ========== 1. FETCH JOBORDER DATA (Columns A to AZ to include Status column AL & cancellation details) ==========
+    const jobOrderRes = await fetchSheetDataFromBackend(SHEET_IDD, `${JOB_ORDER_SHEET}!A:AZ`, forceRefresh);
     if (!jobOrderRes.ok) {
       throw new Error(`HTTP error fetching JobOrder sheet data`);
     }
@@ -1657,7 +1788,7 @@ const processedJobOrderData = jobOrderRows.slice(1)
           break;
         case 'Status':
           rowObj['Status'] = value;
-          rowObj['_isCancelled'] = value.toLowerCase().trim() === 'cancel';
+          rowObj['_isCancelled'] = value.toLowerCase().trim().includes('cancel');
           break;
         case 'Emb':
           rowObj['Emb'] = value;
@@ -1678,12 +1809,42 @@ const processedJobOrderData = jobOrderRows.slice(1)
           }
       }
     });
+
+    const getColByHeader = (keyword) => {
+      const idx = jobOrderHeaders.findIndex(h => h && h.trim().toLowerCase() === keyword.toLowerCase());
+      return idx !== -1 && row[idx] !== undefined ? String(row[idx]).trim() : '';
+    };
+
+    const statusVal = getColByHeader('Status') || String(rowObj['Status'] || rawObj['Status'] || '').trim();
+    const cancelReasonVal = getColByHeader('Cancellation Reason');
+    const cancelByVal = getColByHeader('Cancelled By');
+    const cancelTimeVal = getColByHeader('Cancellation Timestamp');
+    const rawLotStr = String(rowObj['Lot No'] || rawObj['Lot Number'] || '').trim();
+
+    const isCancelled = Boolean(
+      rowObj['_isCancelled'] ||
+      statusVal.toLowerCase().includes('cancel') ||
+      rawLotStr.toLowerCase().includes('cancel') ||
+      (cancelReasonVal && cancelReasonVal !== '-' && cancelReasonVal !== '') ||
+      (cancelTimeVal && cancelTimeVal !== '-' && cancelTimeVal !== '')
+    );
+    const baseLotNo = rawLotStr.replace(/\s*\(cancel\)/gi, '').trim();
+
+    rowObj['Status'] = statusVal || rowObj['Status'] || (isCancelled ? 'Cancel' : '');
+    rowObj['Lot No'] = isCancelled ? `${baseLotNo}(CANCEL)` : baseLotNo;
+    rowObj['Lot Number'] = rowObj['Lot No'];
+    rowObj['_baseLotNo'] = baseLotNo;
+    rowObj['_isCancelled'] = isCancelled;
+    if (cancelReasonVal) rowObj['Cancellation Reason'] = cancelReasonVal;
+    if (cancelByVal) rowObj['Cancelled By'] = cancelByVal;
+    if (cancelTimeVal) rowObj['Cancellation Timestamp'] = cancelTimeVal;
     
     return {
       ...rowObj,
       _id: `job-order-${index}`,
       _raw: rawObj,
-      _isCancelled: rowObj['_isCancelled'] || false
+      _isCancelled: isCancelled,
+      _baseLotNo: baseLotNo
     };
   });
 
@@ -2337,19 +2498,19 @@ const mergeData = (jobOrderData, indexData, issuesData, rawpackData = [], barcod
   console.log('RAWPACK records:', rawpackData?.length || 0);
   console.log('Barcode records:', barcodeData?.length || 0);
   
-  // Filter out cancelled lots from JobOrder data
-  const validJobOrderData = jobOrderData.filter(item => !item._isCancelled);
-  console.log(`Valid JobOrder records (excluding cancelled): ${validJobOrderData.length}`);
-  console.log(`Cancelled lots filtered out: ${jobOrderData.length - validJobOrderData.length}`);
+  // Keep all lots including cancelled lots
+  const validJobOrderData = jobOrderData;
+  console.log(`Total JobOrder records (including cancelled): ${validJobOrderData.length}`);
   
   if ((!issuesData || issuesData.length === 0) && (!rawpackData || rawpackData.length === 0) && (!barcodeData || barcodeData.length === 0)) {
     console.log('WARNING: Packing data (Issues, RAWPACK & Barcode) is empty or undefined!');
     
     const mergedData = validJobOrderData.map(jobOrderItem => {
-      const lotNumber = jobOrderItem['Lot No'];
+      const lotNumber = jobOrderItem._baseLotNo || jobOrderItem['Lot No'];
+      const normalizedBaseKey = String(lotNumber).replace(/\s*\(cancel\)/gi, '').trim().toUpperCase();
       const indexItem = indexData.find(item => 
         item['Lot Number'] && 
-        String(item['Lot Number']).trim().toUpperCase() === String(lotNumber).trim().toUpperCase()
+        String(item['Lot Number']).trim().toUpperCase() === normalizedBaseKey
       );
       
       const mergedItem = {};
@@ -2381,8 +2542,9 @@ const mergeData = (jobOrderData, indexData, issuesData, rawpackData = [], barcod
       // Add Status from JobOrder
       if (jobOrderItem['Status']) {
         mergedItem['Status'] = jobOrderItem['Status'];
-        mergedItem._isCancelled = jobOrderItem._isCancelled;
       }
+      mergedItem._isCancelled = Boolean(jobOrderItem._isCancelled);
+      mergedItem._baseLotNo = jobOrderItem._baseLotNo;
       
       // Add Emb and Printing from JobOrder
       if (jobOrderItem['Emb']) {
@@ -2601,16 +2763,16 @@ const mergeData = (jobOrderData, indexData, issuesData, rawpackData = [], barcod
     });
   }
   
-  // Merge validJobOrderData (excluding cancelled) with Index, Issues, RAWPACK, and Barcode data
+  // Merge all jobOrderData (including cancelled) with Index, Issues, RAWPACK, and Barcode data
   const mergedData = validJobOrderData.map((jobOrderItem) => {
-    const lotNumber = jobOrderItem['Lot No'];
+    const lotNumber = jobOrderItem._baseLotNo || jobOrderItem['Lot No'];
     let indexItem = null;
     let issuesItem = null;
     let rawpackItem = null;
     let barcodeItem = null;
     
     if (lotNumber && String(lotNumber).trim() !== '') {
-      const normalizedKey = String(lotNumber).trim().toUpperCase();
+      const normalizedKey = String(lotNumber).replace(/\s*\(cancel\)/gi, '').trim().toUpperCase();
       indexItem = indexMap.get(normalizedKey);
       issuesItem = issuesMap.get(normalizedKey);
       rawpackItem = rawpackMap.get(normalizedKey);
@@ -2646,8 +2808,9 @@ const mergeData = (jobOrderData, indexData, issuesData, rawpackData = [], barcod
     // Add Status from JobOrder
     if (jobOrderItem['Status']) {
       mergedItem['Status'] = jobOrderItem['Status'];
-      mergedItem._isCancelled = jobOrderItem._isCancelled;
     }
+    mergedItem._isCancelled = Boolean(jobOrderItem._isCancelled);
+    mergedItem._baseLotNo = jobOrderItem._baseLotNo;
     
     // Add Emb and Printing from JobOrder
     if (jobOrderItem['Emb']) {
@@ -3325,12 +3488,7 @@ const clearAllFilters = () => {
   // Function to prepare data for export
 // Function to prepare data for export
 const prepareExportData = (sourceData) => {
-  // Filter out cancelled lots
-  const filteredData = sourceData.filter(item => !item._isCancelled);
-  
-  console.log(`Export: Filtered out ${sourceData.length - filteredData.length} cancelled lots`);
-  
-  return filteredData.map(item => {
+  return sourceData.map(item => {
     const exportItem = {};
     
     DISPLAY_HEADERS.forEach(header => {
@@ -3361,118 +3519,15 @@ const prepareExportData = (sourceData) => {
     return exportItem;
   });
 };
-  // Export to Excel function with embedded images
-  const exportToExcel = async (dataToExport = filteredData) => {
-    setExportLoading(true);
-    
-    try {
-      const recordsToExport = dataToExport.filter(item => !item._isCancelled);
-      
-      if (recordsToExport.length === 0) {
-        alert('No data available to export.');
-        setExportLoading(false);
-        return;
-      }
-
-      const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet('Production Data');
-
-      // Define columns
-      const columns = DISPLAY_HEADERS.map(header => {
-        if (header === 'Image') return { header: 'Image', key: 'Image', width: 16 };
-        if (header === 'Sr.') return { header: 'Sr.', key: 'Sr.', width: 8 };
-        if (header === 'Lot No') return { header: 'Lot No', key: 'Lot No', width: 14 };
-        return { header: header, key: header, width: 18 };
-      });
-      worksheet.columns = columns;
-
-      // Style header row
-      const headerRow = worksheet.getRow(1);
-      headerRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 11 };
-      headerRow.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: '4F46E5' }
-      };
-      headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-      headerRow.height = 28;
-
-      const imageColIndex = DISPLAY_HEADERS.indexOf('Image');
-
-      // Add rows & process images
-      for (let i = 0; i < recordsToExport.length; i++) {
-        const item = recordsToExport[i];
-        const rowNum = i + 2; // 1-based index + 1 header row
-        const rowData = {};
-
-        DISPLAY_HEADERS.forEach((header) => {
-          let value = item[header] || '';
-
-          if (header === 'Sr.') {
-            value = i + 1;
-          } else if (header === 'Challan Hist.' && item['CHALLAN HISTORY_parsed']) {
-            value = item['CHALLAN HISTORY_parsed'].display;
-          } else if (header === 'Fabric') {
-            value = item['Fabric'] || item['Fabric_From_JobOrder'] || '';
-          } else if (header === 'PCS' && value) {
-            value = parseInt(value) || value;
-          }
-
-          if (header === 'Image') {
-            const rawUrl = getDirectImageUrl(item['Image'] || item['Image URL']);
-            if (rawUrl) {
-              rowData['Image'] = { formula: `IMAGE("${rawUrl}")` };
-            } else {
-              rowData['Image'] = '';
-            }
-          } else {
-            rowData[header] = value;
-          }
-        });
-
-        const row = worksheet.addRow(rowData);
-        row.height = 55; // Row height for thumbnail preview
-        row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-
-        // Embed Base64 image into Excel cell if image URL exists
-        const imgUrl = getDirectImageUrl(item['Image'] || item['Image URL']);
-        if (imgUrl && imageColIndex !== -1) {
-          try {
-            const base64Data = await getBase64ImageFromUrl(imgUrl);
-            if (base64Data && base64Data.startsWith('data:image')) {
-              const mimeMatch = base64Data.match(/^data:image\/(png|jpeg|jpg|webp);base64,/);
-              const extension = mimeMatch ? (mimeMatch[1] === 'jpg' ? 'jpeg' : mimeMatch[1]) : 'jpeg';
-              const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
-
-              const imageId = workbook.addImage({
-                base64: cleanBase64,
-                extension: extension === 'webp' ? 'png' : extension
-              });
-
-              worksheet.addImage(imageId, {
-                tl: { col: imageColIndex + 0.05, row: rowNum - 1 + 0.05 },
-                ext: { width: 50, height: 50 }
-              });
-            }
-          } catch (imgErr) {
-            console.warn(`Image embed failed for row ${i + 1}:`, imgErr);
-          }
-        }
-      }
-
-      // Generate Excel file buffer and save
-      const buffer = await workbook.xlsx.writeBuffer();
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-      const filename = `Production_Tracking_${timestamp}.xlsx`;
-
-      saveAs(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
-      console.log(`Successfully exported ${recordsToExport.length} records with embedded images to Excel`);
-    } catch (error) {
-      console.error('Error exporting to Excel:', error);
-      alert('Error exporting to Excel: ' + error.message);
-    } finally {
-      setExportLoading(false);
-    }
+  // Export to Excel function with supervisor grouping by default
+  const exportToExcel = async (dataToExport = filteredData, options = {}) => {
+    const isAllData = dataToExport === data || (dataToExport && dataToExport.length === data.length);
+    await exportCustomExcel({
+      columns: DISPLAY_HEADERS,
+      scope: isAllData ? 'all' : 'filtered',
+      groupBySupervisor: options.groupBySupervisor !== undefined ? options.groupBySupervisor : true,
+      includeStats: true
+    });
   };
 
   // Export to PDF function (same as your provided exportToPDF function)
@@ -5395,6 +5450,914 @@ const exportToPDF = () => {
   }
 };
 
+  // ==========================================
+  // SHARED EXPORT FORMATTERS & HELPERS
+  // ==========================================
+  const customExportMonthMap = {
+    'jan': 0, 'january': 0, 'feb': 1, 'february': 1, 'mar': 2, 'march': 2,
+    'apr': 3, 'april': 3, 'may': 4, 'jun': 5, 'june': 5, 'jul': 6, 'july': 6,
+    'aug': 7, 'august': 7, 'sep': 8, 'september': 8, 'oct': 9, 'october': 9,
+    'nov': 10, 'november': 10, 'dec': 11, 'december': 11
+  };
+
+  const parseDateForExport = (dateString) => {
+    if (!dateString || dateString === '' || dateString === '-' || 
+        dateString.toString().toLowerCase() === 'null' || dateString.toString().toLowerCase() === 'invalid date') {
+      return null;
+    }
+    if (dateString instanceof Date && !isNaN(dateString)) return dateString;
+    
+    let cleanDate = dateString.toString().trim().replace(/\s+/g, ' ').replace(/\n/g, ' ');
+    try {
+      if (/^\d{1,2}\s+[a-zA-Z]{3,}\s+\d{4}$/.test(cleanDate)) {
+        const parts = cleanDate.split(' ');
+        const day = parseInt(parts[0], 10);
+        const monthName = parts[1].toLowerCase();
+        const year = parseInt(parts[2], 10);
+        if (customExportMonthMap[monthName] !== undefined) {
+          const date = new Date(year, customExportMonthMap[monthName], day);
+          if (date.getDate() === day && date.getMonth() === customExportMonthMap[monthName] && date.getFullYear() === year) {
+            return date;
+          }
+        }
+      }
+      if (cleanDate.includes('/')) {
+        const parts = cleanDate.split('/');
+        if (parts.length === 3) {
+          const day = parseInt(parts[0], 10);
+          const month = parseInt(parts[1], 10) - 1;
+          const year = parseInt(parts[2], 10);
+          const fullYear = year < 100 ? (year <= 50 ? 2000 + year : 1900 + year) : year;
+          const date = new Date(fullYear, month, day);
+          if (date.getDate() === day && date.getMonth() === month && date.getFullYear() === fullYear) {
+            return date;
+          }
+        }
+      }
+      const parsedDate = new Date(cleanDate);
+      if (parsedDate && !isNaN(parsedDate.getTime())) return parsedDate;
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const calculateDaysDiffForExport = (date1Str, date2Str) => {
+    const date1 = parseDateForExport(date1Str);
+    const date2 = parseDateForExport(date2Str);
+    if (!date1 || !date2) return '-';
+    const diffTime = date2.getTime() - date1.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return diffDays.toString();
+    if (diffDays === 0) return '0';
+    return `+${diffDays}`;
+  };
+
+  const formatDateForCustomExport = (dateString) => {
+    if (!dateString || dateString === '' || dateString === '-' || 
+        dateString.toString().toLowerCase() === 'null' || dateString.toString().toLowerCase() === 'invalid date') {
+      return '-';
+    }
+    try {
+      if (typeof dateString === 'string' && !isNaN(dateString) && dateString !== '-') return dateString;
+      const date = parseDateForExport(dateString);
+      if (date) {
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = String(date.getFullYear()).slice(-2);
+        return `${day}/${month}/${year}`;
+      }
+      return dateString.toString().trim();
+    } catch {
+      return dateString;
+    }
+  };
+
+  const formatDirectStitchingValForExport = (value, item = {}) => {
+    if (!value || value === '') return '-';
+    const str = String(value).toUpperCase();
+    if (str.includes('YES') || str === 'Y') return 'Direct';
+    if (str.includes('NO') || str === 'N') {
+      const embFromJobOrder = item['Emb'] || item._raw?.['Emb'] || '';
+      const printingFromJobOrder = item['Printing'] || item._raw?.['Printing'] || '';
+      const embClean = embFromJobOrder ? String(embFromJobOrder).trim() : '';
+      const printingClean = printingFromJobOrder ? String(printingFromJobOrder).trim() : '';
+      const hasEmb = embClean !== '' && embClean.toUpperCase() !== 'NA' && embClean.toUpperCase() !== 'N/A' && embClean !== '-';
+      const hasPrint = printingClean !== '' && printingClean.toUpperCase() !== 'NA' && printingClean.toUpperCase() !== 'N/A' && printingClean !== '-';
+      if (hasEmb || hasPrint) {
+        const embLower = hasEmb ? embClean.toLowerCase() : '';
+        const isComplete = embLower.includes('complete') || embLower.includes('done') || embLower.includes('finished');
+        const isPending = embLower.includes('pending') || embLower.includes('process') || embLower.includes('wip');
+        if (isComplete) return 'Emb/Print';
+        if (isPending) return 'Emb/Prt Pending';
+        if (hasEmb && hasPrint) return 'Emb+Prt';
+        if (hasEmb) return 'Emb';
+        if (hasPrint) return 'Print';
+      }
+      return 'N';
+    }
+    return str.charAt(0);
+  };
+
+  const getCustomDataValueForExport = (item, dataKey, isSerial = false, rowIndex = 0) => {
+    if (isSerial) return (rowIndex + 1).toString();
+
+    if (dataKey === 'Design Work') {
+      let rawValue = item['Design Work'] || item._raw?.['Design Work'] || item._raw?.['DIRECT STITCHING'] || item._raw?.['D.Stitching'] || '';
+      const rawValueStr = rawValue ? String(rawValue).trim() : '';
+      const emb = item['Emb'] || item._raw?.['Emb'] || '';
+      const printing = item['Printing'] || item._raw?.['Printing'] || '';
+      const embClean = emb ? String(emb).trim() : '';
+      const printingClean = printing ? String(printing).trim() : '';
+      const hasEmb = embClean !== '' && embClean.toUpperCase() !== 'NA' && embClean.toUpperCase() !== 'N/A' && embClean !== '-';
+      const hasPrint = printingClean !== '' && printingClean.toUpperCase() !== 'NA' && printingClean.toUpperCase() !== 'N/A' && printingClean !== '-';
+      if (rawValueStr && (rawValueStr.toUpperCase().includes('NO') || rawValueStr.toUpperCase() === 'N')) {
+        if (hasEmb || hasPrint) {
+          if (hasEmb && hasPrint) return 'Emb+Prt';
+          if (hasEmb) return 'Emb';
+          if (hasPrint) return 'Print';
+        }
+        return 'N';
+      }
+      if (rawValueStr && (rawValueStr.toUpperCase().includes('YES') || rawValueStr.toUpperCase() === 'Y')) return 'Y';
+      return rawValueStr || '-';
+    }
+
+    if (dataKey === 'Emb/Print Issue' || dataKey === 'Emb/print Comp') {
+      const designWork = getCustomDataValueForExport(item, 'Design Work', false, rowIndex);
+      if (designWork === 'Y' || designWork === 'Emb/Print' || designWork === 'Emb' || designWork === 'Print' || designWork === 'Emb+Prt') {
+        return 'Direct';
+      }
+    }
+
+    if (dataKey === 'Cut Days') {
+      return calculateDaysDiffForExport(getCustomDataValueForExport(item, 'Job Date'), getCustomDataValueForExport(item, 'Cut Date'));
+    }
+    if (dataKey === 'Emb/Print Days') {
+      return calculateDaysDiffForExport(getCustomDataValueForExport(item, 'Emb/Print Issue'), getCustomDataValueForExport(item, 'Emb/print Comp'));
+    }
+    if (dataKey === 'Stit Days') {
+      return calculateDaysDiffForExport(getCustomDataValueForExport(item, 'Stit Date'), getCustomDataValueForExport(item, 'Comp Stit'));
+    }
+    if (dataKey === 'Pkg Days') {
+      return calculateDaysDiffForExport(getCustomDataValueForExport(item, 'Pkg Date'), getCustomDataValueForExport(item, 'Pkg Comp'));
+    }
+    if (dataKey === 'Cut To Emb/Print') {
+      return calculateDaysDiffForExport(getCustomDataValueForExport(item, 'Cut Date'), getCustomDataValueForExport(item, 'Emb/Print Issue'));
+    }
+    if (dataKey === 'Emb/Print To Stit') {
+      return calculateDaysDiffForExport(getCustomDataValueForExport(item, 'Emb/print Comp'), getCustomDataValueForExport(item, 'Stit Date'));
+    }
+    if (dataKey === 'Stit To Check Pack') {
+      return calculateDaysDiffForExport(getCustomDataValueForExport(item, 'Comp Stit'), getCustomDataValueForExport(item, 'Pkg Date'));
+    }
+
+    const possibleKeys = [
+      dataKey, 
+      dataKey.toLowerCase(), 
+      dataKey.toUpperCase(),
+      dataKey.replace(/[\.\s]/g, ''), 
+      dataKey.replace(/[\.\s]/g, '').toLowerCase()
+    ];
+
+    for (const key of possibleKeys) {
+      if (item[key] !== undefined && item[key] !== null && item[key] !== '') return item[key];
+    }
+    if (item._raw) {
+      for (const key of possibleKeys) {
+        if (item._raw[key] !== undefined && item._raw[key] !== null && item._raw[key] !== '') return item._raw[key];
+      }
+    }
+    return '';
+  };
+
+  // Custom PDF Export Function with user-selected headers
+  const exportCustomPDF = (options = {}) => {
+    const colsToExport = options.columns || selectedPdfColumns;
+    const scope = options.scope || customPdfDataScope;
+    const paperSize = options.paperSize || customPdfPaperSize;
+    const includeNotes = options.includeNotes !== undefined ? options.includeNotes : customPdfIncludeNotes;
+    const includeStats = options.includeStats !== undefined ? options.includeStats : customPdfIncludeStats;
+
+    if (!colsToExport || colsToExport.length === 0) {
+      alert('Please select at least one column header for the PDF report.');
+      return;
+    }
+
+    setExportLoading(true);
+
+    try {
+      const sourceData = scope === 'all' 
+        ? data.filter(item => !item._isCancelled) 
+        : filteredData;
+
+      const exportData = prepareExportData(sourceData);
+
+      if (exportData.length === 0) {
+        alert('No data available to export.');
+        setExportLoading(false);
+        return;
+      }
+
+      // Filter active column metadata in the order specified in ALL_PDF_COLUMNS
+      const activeColumns = ALL_PDF_COLUMNS.filter(col => colsToExport.includes(col.id));
+      
+      if (activeColumns.length === 0) {
+        alert('No valid columns selected.');
+        setExportLoading(false);
+        return;
+      }
+
+      // Calculate totals
+      const totalPCS = exportData.reduce((sum, item) => {
+        const pcsValue = item['PCS'];
+        const numValue = parseInt(pcsValue);
+        return sum + (isNaN(numValue) ? 0 : numValue);
+      }, 0);
+      const totalLots = exportData.length;
+
+      // Determine PDF format and orientation
+      let orientation = 'landscape';
+      let format = 'a4';
+
+      if (paperSize === 'auto') {
+        if (activeColumns.length <= 8) {
+          orientation = 'portrait';
+          format = 'a4';
+        } else if (activeColumns.length <= 16) {
+          orientation = 'landscape';
+          format = 'a4';
+        } else {
+          orientation = 'landscape';
+          format = 'a3';
+        }
+      } else if (paperSize === 'a4-portrait') {
+        orientation = 'portrait';
+        format = 'a4';
+      } else if (paperSize === 'a4-landscape') {
+        orientation = 'landscape';
+        format = 'a4';
+      } else if (paperSize === 'a3-landscape') {
+        orientation = 'landscape';
+        format = 'a3';
+      }
+
+      const doc = new jsPDF({
+        orientation: orientation,
+        unit: 'mm',
+        format: format,
+        compress: true
+      });
+
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 5;
+      const contentWidth = pageWidth - (margin * 2);
+
+      // Add Page Header
+      const addPageHeader = () => {
+        doc.setFontSize(15);
+        doc.setFont('times', 'bold');
+        doc.setTextColor(15, 76, 129);
+        doc.text('GARMENT PRODUCTION TRACKING REPORT', pageWidth / 2, 11, { align: 'center' });
+
+        if (includeStats) {
+          doc.setFontSize(10);
+          doc.setFont('times', 'bold');
+          doc.setTextColor(0, 128, 64);
+          doc.text(`Total Lots: ${totalLots} | Total PCS: ${totalPCS.toLocaleString()} | Headers Selected: ${activeColumns.length}`, pageWidth / 2, 17, { align: 'center' });
+
+          doc.setFontSize(8.5);
+          doc.setFont('times', 'normal');
+          doc.setTextColor(100, 100, 100);
+          const today = new Date();
+          const reportDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
+          doc.text(`Report Date: ${reportDate} | Records: ${exportData.length} (${scope === 'all' ? 'All Data' : 'Filtered View'})`, pageWidth / 2, 22, { align: 'center' });
+        }
+      };
+
+      addPageHeader();
+
+      // Calculate column widths proportionally
+      const totalRatio = activeColumns.reduce((sum, col) => sum + (col.baseWidthRatio || 1.0), 0);
+      const columnWidths = activeColumns.map(col => {
+        const ratio = (col.baseWidthRatio || 1.0) / totalRatio;
+        return Math.max(6, contentWidth * ratio);
+      });
+
+      const PDF_HEADERS = activeColumns.map(c => c.label || c.id);
+
+      const tableBody = exportData.map((item, rowIndex) => {
+        return activeColumns.map((colDef) => {
+          const rawValue = getCustomDataValueForExport(item, colDef.dataKey, colDef.isSerial, rowIndex);
+          let displayValue = '';
+
+          if (colDef.dataKey === 'WIP Stit' || colDef.type === 'wip-stitch') {
+            const compStitRawValue = getCustomDataValueForExport(item, 'Comp Stit');
+            const compStitValue = formatDateForCustomExport(compStitRawValue);
+            if (compStitRawValue && compStitValue !== '-' && compStitValue !== '') {
+              displayValue = 'Done';
+            } else {
+              displayValue = rawValue || '-';
+            }
+          } else if (colDef.dataKey === 'Emb/Print Issue' || colDef.dataKey === 'Emb/print Comp') {
+            const designWorkValue = getCustomDataValueForExport(item, 'Design Work');
+            const formattedDesignWork = formatDirectStitchingValForExport(designWorkValue, item);
+            if (formattedDesignWork === 'Y') {
+              displayValue = 'Direct';
+            } else {
+              displayValue = formatDateForCustomExport(rawValue);
+            }
+          } else if (colDef.type === 'calculated') {
+            displayValue = rawValue || '-';
+          } else {
+            switch(colDef.type) {
+              case 'date':
+                displayValue = formatDateForCustomExport(rawValue);
+                break;
+              case 'stitching':
+                displayValue = formatDirectStitchingValForExport(rawValue, item);
+                break;
+              case 'number':
+                if (colDef.isSerial) displayValue = rawValue;
+                else if (rawValue && !isNaN(rawValue)) displayValue = parseInt(rawValue).toLocaleString();
+                else displayValue = rawValue || '-';
+                break;
+              case 'text':
+              default:
+                displayValue = rawValue || '-';
+                break;
+            }
+          }
+          return displayValue;
+        });
+      });
+
+      const startY = includeStats ? 26 : 16;
+      const fontSize = activeColumns.length > 20 ? 7 : (activeColumns.length > 13 ? 8 : 9);
+      const headFontSize = activeColumns.length > 20 ? 7.5 : (activeColumns.length > 13 ? 8.5 : 9.5);
+
+      autoTable(doc, {
+        head: [PDF_HEADERS],
+        body: tableBody,
+        startY: startY,
+        theme: 'grid',
+        headStyles: {
+          fillColor: [30, 27, 75], // Deep indigo
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          fontSize: headFontSize,
+          cellPadding: { top: 2.5, right: 1.5, bottom: 2.5, left: 1.5 },
+          halign: 'center',
+          valign: 'middle'
+        },
+        bodyStyles: {
+          fontSize: fontSize,
+          cellPadding: { top: 1.8, right: 1.5, bottom: 1.8, left: 1.5 },
+          lineWidth: 0.15,
+          lineColor: [210, 215, 225],
+          textColor: [15, 23, 42],
+          font: 'times',
+          fontStyle: 'normal',
+          valign: 'middle',
+          overflow: 'linebreak'
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252]
+        },
+        columnStyles: activeColumns.reduce((styles, col, index) => {
+          styles[index] = {
+            cellWidth: columnWidths[index],
+            halign: col.type === 'number' || col.type === 'date' || col.type === 'calculated' ? 'center' : 'left',
+            valign: 'middle'
+          };
+          return styles;
+        }, {}),
+        margin: { top: startY, left: margin, right: margin, bottom: includeNotes ? 22 : 10 },
+        tableWidth: 'auto',
+        showHead: 'everyPage',
+        pageBreak: 'auto',
+        rowPageBreak: 'auto',
+        didParseCell: function(cellData) {
+          if (cellData.section === 'body') {
+            const colIndex = cellData.column.index;
+            const colInfo = activeColumns[colIndex];
+            if (colInfo) {
+              if (colInfo.id === 'WIP Stit' && cellData.cell.raw === 'Done') {
+                cellData.cell.styles.textColor = [16, 185, 129];
+                cellData.cell.styles.fontStyle = 'bold';
+              } else if (colInfo.id === 'Lot No') {
+                cellData.cell.styles.textColor = [79, 70, 229];
+                cellData.cell.styles.fontStyle = 'bold';
+              }
+            }
+          }
+        },
+        didDrawPage: function(pageData) {
+          doc.setFontSize(8);
+          doc.setFont('times', 'normal');
+          doc.setTextColor(120, 120, 120);
+          doc.text(
+            `Page ${pageData.pageNumber} of ${doc.internal.getNumberOfPages()}`,
+            pageWidth - margin - 15,
+            pageHeight - 4
+          );
+        }
+      });
+
+      // Add Column Definitions / Legend at the bottom if requested
+      if (includeNotes) {
+        const activeDefinitions = activeColumns.filter(c => c.fullForm);
+        if (activeDefinitions.length > 0) {
+          const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 5 : pageHeight - 18;
+          if (finalY + 12 < pageHeight) {
+            doc.setFontSize(8);
+            doc.setFont('times', 'bold');
+            doc.setTextColor(30, 27, 75);
+            doc.text('Column Legend:', margin + 2, finalY);
+
+            doc.setFontSize(7);
+            doc.setFont('times', 'normal');
+            doc.setTextColor(80, 80, 80);
+
+            const legendText = activeDefinitions.map(d => `${d.label || d.id}: ${d.fullForm}`).join(' | ');
+            const splitLegend = doc.splitTextToSize(legendText, contentWidth - 4);
+            doc.text(splitLegend, margin + 2, finalY + 3.5);
+          }
+        }
+      }
+
+      const today = new Date();
+      const fileName = `Production_Report_Custom_${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}_${today.getHours()}${today.getMinutes()}.pdf`;
+
+      doc.save(fileName);
+      setIsCustomPdfModalOpen(false);
+
+      setTimeout(() => {
+        alert(`✅ Custom PDF Exported Successfully!\n📄 ${fileName}\n📊 ${totalLots} lots | ${totalPCS.toLocaleString()} PCS | ${activeColumns.length} headers`);
+      }, 300);
+
+    } catch (err) {
+      console.error('Custom PDF Export Error:', err);
+      alert(`❌ Failed to export custom PDF: ${err.message}`);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  // Custom Excel Export Function with user-selected headers & supervisor-wise grouping
+  const exportCustomExcel = async (options = {}) => {
+    const colsToExport = options.columns || selectedPdfColumns;
+    const scope = options.scope || customPdfDataScope;
+    const groupBySupervisor = options.groupBySupervisor !== undefined ? options.groupBySupervisor : customExcelGroupBySupervisor;
+    const includeStats = options.includeStats !== undefined ? options.includeStats : customPdfIncludeStats;
+
+    if (!colsToExport || colsToExport.length === 0) {
+      alert('Please select at least one column header for the Excel report.');
+      return;
+    }
+
+    setExportLoading(true);
+
+    try {
+      const sourceData = scope === 'all' 
+        ? data.filter(item => !item._isCancelled) 
+        : filteredData;
+
+      const exportData = prepareExportData(sourceData);
+
+      if (exportData.length === 0) {
+        alert('No data available to export.');
+        setExportLoading(false);
+        return;
+      }
+
+      // Filter active column metadata in the order specified in ALL_PDF_COLUMNS
+      const activeColumns = ALL_PDF_COLUMNS.filter(col => colsToExport.includes(col.id));
+      
+      if (activeColumns.length === 0) {
+        alert('No valid columns selected.');
+        setExportLoading(false);
+        return;
+      }
+
+      const totalPCS = exportData.reduce((sum, item) => {
+        const pcsValue = item['PCS'];
+        const numValue = parseInt(pcsValue);
+        return sum + (isNaN(numValue) ? 0 : numValue);
+      }, 0);
+      const totalLots = exportData.length;
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Garment Production Suite';
+      workbook.created = new Date();
+      const worksheet = workbook.addWorksheet('Production Report', {
+        views: [{ showGridLines: true }]
+      });
+
+      const numCols = activeColumns.length;
+      const imageColIdx = activeColumns.findIndex(c => c.type === 'image' || c.id === 'Image');
+      const hasImageCol = imageColIdx !== -1;
+
+      // Set columns configuration
+      worksheet.columns = activeColumns.map(col => {
+        let width = 16;
+        if (col.id === 'Sr.') width = 8;
+        else if (col.id === 'Lot No') width = 14;
+        else if (col.type === 'image' || col.id === 'Image') width = 16;
+        else if (col.type === 'date') width = 15;
+        else if (col.type === 'calculated') width = 14;
+        else if (col.id === 'Item' || col.id === 'Party' || col.id === 'Fabric') width = 22;
+        else width = Math.max(12, Math.round((col.baseWidthRatio || 1.0) * 16));
+        return { header: col.label || col.id, key: col.id, width };
+      });
+
+      let currentRowNum = 1;
+
+      // Report Title Banner
+      const titleRow = worksheet.getRow(currentRowNum);
+      titleRow.values = ['GARMENT PRODUCTION TRACKING REPORT'];
+      worksheet.mergeCells(currentRowNum, 1, currentRowNum, numCols);
+      titleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 14 };
+      titleRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: '1E1B4B' }
+      };
+      titleRow.alignment = { vertical: 'middle', horizontal: 'center' };
+      titleRow.height = 32;
+      currentRowNum++;
+
+      // Stats Sub-header
+      if (includeStats) {
+        const statsRow = worksheet.getRow(currentRowNum);
+        const today = new Date();
+        const reportDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+        statsRow.values = [`Total Lots: ${totalLots} | Total PCS: ${totalPCS.toLocaleString()} | Headers: ${activeColumns.length} | Scope: ${scope === 'all' ? 'All Data' : 'Filtered View'} | Date: ${reportDate} | Mode: ${groupBySupervisor ? 'Supervisor-Wise' : 'Sequential'}`];
+        worksheet.mergeCells(currentRowNum, 1, currentRowNum, numCols);
+        statsRow.font = { bold: true, color: { argb: '065F46' }, size: 10 };
+        statsRow.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'ECFDF5' }
+        };
+        statsRow.alignment = { vertical: 'middle', horizontal: 'center' };
+        statsRow.height = 22;
+        currentRowNum++;
+      }
+
+      // Spacing row
+      worksheet.addRow([]);
+      currentRowNum++;
+
+      // Table Header Row
+      const tableHeaderRow = worksheet.getRow(currentRowNum);
+      tableHeaderRow.values = activeColumns.map(c => c.label || c.id);
+      tableHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 10.5 };
+      tableHeaderRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: '4338CA' } // Indigo
+      };
+      tableHeaderRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      tableHeaderRow.height = 28;
+      
+      for (let c = 1; c <= numCols; c++) {
+        const cell = tableHeaderRow.getCell(c);
+        cell.border = {
+          top: { style: 'thin', color: { argb: '312E81' } },
+          left: { style: 'thin', color: { argb: '312E81' } },
+          bottom: { style: 'medium', color: { argb: '1E1B4B' } },
+          right: { style: 'thin', color: { argb: '312E81' } }
+        };
+      }
+      currentRowNum++;
+
+      // Row formatter helper
+      const formatRowItem = (item, rowIndex, serialNo) => {
+        const rowVals = [];
+        activeColumns.forEach(colDef => {
+          if (colDef.isSerial || colDef.id === 'Sr.') {
+            rowVals.push(serialNo);
+            return;
+          }
+          if (colDef.type === 'image' || colDef.id === 'Image') {
+            const rawUrl = getDirectImageUrl(item['Image'] || item['Image URL'] || item._raw?.['Image URL'] || item._raw?.['Image']);
+            if (rawUrl) {
+              rowVals.push({ formula: `IMAGE("${rawUrl}")` });
+            } else {
+              rowVals.push('');
+            }
+            return;
+          }
+
+          const rawVal = getCustomDataValueForExport(item, colDef.dataKey, false, rowIndex);
+          let displayVal = '';
+
+          if (colDef.dataKey === 'WIP Stit' || colDef.type === 'wip-stitch') {
+            const compStitRawValue = getCustomDataValueForExport(item, 'Comp Stit');
+            const compStitValue = formatDateForCustomExport(compStitRawValue);
+            if (compStitRawValue && compStitValue !== '-' && compStitValue !== '') {
+              displayVal = 'Done';
+            } else {
+              displayVal = rawVal || '-';
+            }
+          } else if (colDef.dataKey === 'Emb/Print Issue' || colDef.dataKey === 'Emb/print Comp') {
+            const designWorkValue = getCustomDataValueForExport(item, 'Design Work');
+            const formattedDesignWork = formatDirectStitchingValForExport(designWorkValue, item);
+            if (formattedDesignWork === 'Y') {
+              displayVal = 'Direct';
+            } else {
+              displayVal = formatDateForCustomExport(rawVal);
+            }
+          } else if (colDef.type === 'calculated') {
+            displayVal = rawVal || '-';
+          } else {
+            switch (colDef.type) {
+              case 'date':
+                displayVal = formatDateForCustomExport(rawVal);
+                break;
+              case 'stitching':
+                displayVal = formatDirectStitchingValForExport(rawVal, item);
+                break;
+              case 'number':
+                if (rawVal && !isNaN(rawVal)) displayVal = parseInt(rawVal, 10);
+                else displayVal = rawVal || '-';
+                break;
+              case 'text':
+              default:
+                displayVal = rawVal || '-';
+                break;
+            }
+          }
+          rowVals.push(displayVal);
+        });
+        return rowVals;
+      };
+
+      if (groupBySupervisor) {
+        // Group lots by Stitching Supervisor
+        const supGroups = {};
+        exportData.forEach(item => {
+          let supName = (
+            item['Stit Sup'] || 
+            item['Supervisor'] || 
+            item['supervisor'] || 
+            item._raw?.['Supervisor'] || 
+            item._raw?.['supervisor'] || 
+            item._raw?.['Stit Sup'] || 
+            ''
+          ).toString().trim();
+
+          if (!supName || supName === '-' || supName.toLowerCase() === 'null') {
+            supName = 'UNASSIGNED SUPERVISOR';
+          } else {
+            supName = supName.toUpperCase();
+          }
+
+          if (!supGroups[supName]) {
+            supGroups[supName] = [];
+          }
+          supGroups[supName].push(item);
+        });
+
+        const sortedSupNames = Object.keys(supGroups).sort((a, b) => {
+          if (a === 'UNASSIGNED SUPERVISOR') return 1;
+          if (b === 'UNASSIGNED SUPERVISOR') return -1;
+          return a.localeCompare(b);
+        });
+
+        let globalSerial = 1;
+
+        for (const supName of sortedSupNames) {
+          const groupLots = supGroups[supName];
+          const groupPCS = groupLots.reduce((sum, it) => {
+            const p = parseInt(it['PCS'], 10);
+            return sum + (isNaN(p) ? 0 : p);
+          }, 0);
+
+          // Supervisor Group Header Banner
+          const supHeaderRow = worksheet.getRow(currentRowNum);
+          supHeaderRow.values = [`👔 SUPERVISOR: ${supName}   |   ${groupLots.length} Lots   |   ${groupPCS.toLocaleString()} PCS`];
+          worksheet.mergeCells(currentRowNum, 1, currentRowNum, numCols);
+          supHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 11 };
+          supHeaderRow.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: '312E81' } // Deep Navy Indigo
+          };
+          supHeaderRow.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+          supHeaderRow.height = 26;
+
+          for (let c = 1; c <= numCols; c++) {
+            supHeaderRow.getCell(c).border = {
+              top: { style: 'medium', color: { argb: '1E1B4B' } },
+              bottom: { style: 'medium', color: { argb: '1E1B4B' } },
+              left: { style: 'thin', color: { argb: '1E1B4B' } },
+              right: { style: 'thin', color: { argb: '1E1B4B' } }
+            };
+          }
+          currentRowNum++;
+
+          // Lots under this supervisor
+          for (let i = 0; i < groupLots.length; i++) {
+            const item = groupLots[i];
+            const rowVals = formatRowItem(item, i, globalSerial);
+            const dataRow = worksheet.getRow(currentRowNum);
+            dataRow.values = rowVals;
+            dataRow.height = hasImageCol ? 55 : 22;
+            dataRow.font = { size: 9.5, color: { argb: '0F172A' } };
+
+            const isEven = i % 2 === 0;
+            const rowBg = isEven ? 'FFFFFF' : 'F8FAFC';
+
+            for (let c = 1; c <= numCols; c++) {
+              const cell = dataRow.getCell(c);
+              const colDef = activeColumns[c - 1];
+              cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: rowBg }
+              };
+              cell.border = {
+                top: { style: 'thin', color: { argb: 'E2E8F0' } },
+                bottom: { style: 'thin', color: { argb: 'E2E8F0' } },
+                left: { style: 'thin', color: { argb: 'E2E8F0' } },
+                right: { style: 'thin', color: { argb: 'E2E8F0' } }
+              };
+              
+              const isCentered = colDef.type === 'number' || colDef.type === 'date' || colDef.type === 'calculated' || colDef.isSerial || colDef.id === 'Lot No';
+              cell.alignment = {
+                vertical: 'middle',
+                horizontal: isCentered ? 'center' : 'left',
+                wrapText: true
+              };
+
+              if (colDef.id === 'Lot No') {
+                cell.font = { bold: true, color: { argb: '312E81' }, size: 10 };
+              } else if (colDef.id === 'WIP Stit' && cell.value === 'Done') {
+                cell.font = { bold: true, color: { argb: '059669' } };
+              }
+            }
+
+            // Embed image thumbnail if active
+            if (hasImageCol) {
+              const imgUrl = getDirectImageUrl(item['Image'] || item['Image URL'] || item._raw?.['Image URL'] || item._raw?.['Image']);
+              if (imgUrl) {
+                try {
+                  const base64Data = await getBase64ImageFromUrl(imgUrl);
+                  if (base64Data && base64Data.startsWith('data:image')) {
+                    const mimeMatch = base64Data.match(/^data:image\/(png|jpeg|jpg|webp);base64,/);
+                    const extension = mimeMatch ? (mimeMatch[1] === 'jpg' ? 'jpeg' : mimeMatch[1]) : 'jpeg';
+                    const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+
+                    const imageId = workbook.addImage({
+                      base64: cleanBase64,
+                      extension: extension === 'webp' ? 'png' : extension
+                    });
+
+                    worksheet.addImage(imageId, {
+                      tl: { col: imageColIdx + 0.08, row: currentRowNum - 1 + 0.08 },
+                      ext: { width: 48, height: 48 }
+                    });
+                  }
+                } catch (imgErr) {
+                  console.warn('Excel image embed error:', imgErr);
+                }
+              }
+            }
+
+            currentRowNum++;
+            globalSerial++;
+          }
+
+          // Supervisor Subtotal Row
+          const subtotalRow = worksheet.getRow(currentRowNum);
+          subtotalRow.values = [`Subtotal for ${supName}: ${groupLots.length} Lots | ${groupPCS.toLocaleString()} PCS`];
+          worksheet.mergeCells(currentRowNum, 1, currentRowNum, numCols);
+          subtotalRow.font = { bold: true, italic: true, color: { argb: '3730A3' }, size: 9.5 };
+          subtotalRow.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'EEF2FF' }
+          };
+          subtotalRow.alignment = { vertical: 'middle', horizontal: 'right', indent: 1 };
+          subtotalRow.height = 20;
+          for (let c = 1; c <= numCols; c++) {
+            subtotalRow.getCell(c).border = {
+              top: { style: 'thin', color: { argb: 'C7D2FE' } },
+              bottom: { style: 'thin', color: { argb: 'C7D2FE' } }
+            };
+          }
+          currentRowNum++;
+        }
+      } else {
+        // Sequential export without grouping
+        for (let i = 0; i < exportData.length; i++) {
+          const item = exportData[i];
+          const rowVals = formatRowItem(item, i, i + 1);
+          const dataRow = worksheet.getRow(currentRowNum);
+          dataRow.values = rowVals;
+          dataRow.height = hasImageCol ? 55 : 22;
+          dataRow.font = { size: 9.5, color: { argb: '0F172A' } };
+
+          const isEven = i % 2 === 0;
+          const rowBg = isEven ? 'FFFFFF' : 'F8FAFC';
+
+          for (let c = 1; c <= numCols; c++) {
+            const cell = dataRow.getCell(c);
+            const colDef = activeColumns[c - 1];
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: rowBg }
+            };
+            cell.border = {
+              top: { style: 'thin', color: { argb: 'E2E8F0' } },
+              bottom: { style: 'thin', color: { argb: 'E2E8F0' } },
+              left: { style: 'thin', color: { argb: 'E2E8F0' } },
+              right: { style: 'thin', color: { argb: 'E2E8F0' } }
+            };
+            const isCentered = colDef.type === 'number' || colDef.type === 'date' || colDef.type === 'calculated' || colDef.isSerial || colDef.id === 'Lot No';
+            cell.alignment = {
+              vertical: 'middle',
+              horizontal: isCentered ? 'center' : 'left',
+              wrapText: true
+            };
+
+            if (colDef.id === 'Lot No') {
+              cell.font = { bold: true, color: { argb: '312E81' }, size: 10 };
+            }
+          }
+
+          if (hasImageCol) {
+            const imgUrl = getDirectImageUrl(item['Image'] || item['Image URL'] || item._raw?.['Image URL'] || item._raw?.['Image']);
+            if (imgUrl) {
+              try {
+                const base64Data = await getBase64ImageFromUrl(imgUrl);
+                if (base64Data && base64Data.startsWith('data:image')) {
+                  const mimeMatch = base64Data.match(/^data:image\/(png|jpeg|jpg|webp);base64,/);
+                  const extension = mimeMatch ? (mimeMatch[1] === 'jpg' ? 'jpeg' : mimeMatch[1]) : 'jpeg';
+                  const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+
+                  const imageId = workbook.addImage({
+                    base64: cleanBase64,
+                    extension: extension === 'webp' ? 'png' : extension
+                  });
+
+                  worksheet.addImage(imageId, {
+                    tl: { col: imageColIdx + 0.08, row: currentRowNum - 1 + 0.08 },
+                    ext: { width: 48, height: 48 }
+                  });
+                }
+              } catch (imgErr) {
+                console.warn('Excel image embed error:', imgErr);
+              }
+            }
+          }
+          currentRowNum++;
+        }
+      }
+
+      // Grand Total Row
+      const grandTotalRow = worksheet.getRow(currentRowNum);
+      grandTotalRow.values = [`GRAND TOTAL: ${totalLots} Lots   |   ${totalPCS.toLocaleString()} PCS`];
+      worksheet.mergeCells(currentRowNum, 1, currentRowNum, numCols);
+      grandTotalRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 11 };
+      grandTotalRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: '0F172A' } // Slate 900
+      };
+      grandTotalRow.alignment = { vertical: 'middle', horizontal: 'center' };
+      grandTotalRow.height = 26;
+      for (let c = 1; c <= numCols; c++) {
+        grandTotalRow.getCell(c).border = {
+          top: { style: 'medium', color: { argb: '000000' } },
+          bottom: { style: 'medium', color: { argb: '000000' } }
+        };
+      }
+
+      // Write and download
+      const buffer = await workbook.xlsx.writeBuffer();
+      const today = new Date();
+      const fileName = `Production_Report_Custom_${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}_${today.getHours()}${today.getMinutes()}.xlsx`;
+
+      saveAs(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fileName);
+      setIsCustomPdfModalOpen(false);
+
+      setTimeout(() => {
+        alert(`✅ Custom Excel Exported Successfully!\n📊 ${fileName}\n👔 Supervisor-Wise: ${groupBySupervisor ? 'Yes' : 'No'}\n📦 ${totalLots} lots | ${totalPCS.toLocaleString()} PCS | ${activeColumns.length} headers`);
+      }, 300);
+
+    } catch (err) {
+      console.error('Custom Excel Export Error:', err);
+      alert(`❌ Failed to export custom Excel: ${err.message}`);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
 const exportCurrentView = (format) => {
   if (filteredData.length === 0) {
     alert('No data to export!');
@@ -5402,13 +6365,19 @@ const exportCurrentView = (format) => {
   }
   
   if (format === 'excel') {
-    exportToExcel();
+    exportToExcel(filteredData, { groupBySupervisor: true });
+  } else if (format === 'custom-excel') {
+    setCustomPdfDataScope('filtered');
+    setIsCustomPdfModalOpen(true);
   } else if (format === 'pdf') {
     exportToPDF();
   } else if (format === 'pdf-no-days') {
     exportToPDFWithoutDays();
   } else if (format === 'pdf-images') {
     exportToPDFWithImages();
+  } else if (format === 'custom-pdf') {
+    setCustomPdfDataScope('filtered');
+    setIsCustomPdfModalOpen(true);
   }
 };
 
@@ -5421,7 +6390,13 @@ const exportCurrentView = (format) => {
     
     if (format === 'excel') {
       const allValidData = data.filter(item => !item._isCancelled);
-      exportToExcel(allValidData);
+      exportToExcel(allValidData, { groupBySupervisor: true });
+    } else if (format === 'custom-excel') {
+      setCustomPdfDataScope('all');
+      setIsCustomPdfModalOpen(true);
+    } else if (format === 'custom-pdf') {
+      setCustomPdfDataScope('all');
+      setIsCustomPdfModalOpen(true);
     } else if (format === 'pdf') {
        const allValidData = data.filter(item => !item._isCancelled);
        const allData = prepareExportData(allValidData);
@@ -5586,6 +6561,19 @@ const exportCurrentView = (format) => {
           )}
 
           {!loading && !error && data.length > 0 && (
+            <button 
+              onClick={() => {
+                setCustomPdfDataScope('filtered');
+                setIsCustomPdfModalOpen(true);
+              }}
+              className="op-btn op-btn-custom-pdf"
+              title="Select custom headers to export in your PDF or Excel report"
+            >
+              ✨ Custom Column Export (PDF / Excel)
+            </button>
+          )}
+
+          {!loading && !error && data.length > 0 && (
             <div className="export-buttons">
               <div className="dropdown">
                 <button 
@@ -5599,11 +6587,25 @@ const exportCurrentView = (format) => {
                     <strong>Export Current View</strong>
                     <p className="dropdown-info">({filteredData.length} filtered records)</p>
                     <button 
+                      onClick={() => exportCurrentView('custom-excel')}
+                      className="dropdown-item dropdown-item-highlight"
+                      disabled={exportLoading || filteredData.length === 0}
+                    >
+                      <span className="export-icon">✨</span> Custom Column Excel (Choose Headers)
+                    </button>
+                    <button 
+                      onClick={() => exportCurrentView('custom-pdf')}
+                      className="dropdown-item dropdown-item-highlight"
+                      disabled={exportLoading || filteredData.length === 0}
+                    >
+                      <span className="export-icon">✨</span> Custom Column PDF (Choose Headers)
+                    </button>
+                    <button 
                       onClick={() => exportCurrentView('excel')}
                       className="dropdown-item"
                       disabled={exportLoading || filteredData.length === 0}
                     >
-                      <span className="export-icon">📊</span> Excel (Current View)
+                      <span className="export-icon">📊</span> Excel - Supervisor-Wise (Current View)
                     </button>
                     <button 
                       onClick={() => exportCurrentView('pdf')}
@@ -5631,11 +6633,25 @@ const exportCurrentView = (format) => {
                     <strong>Export All Data</strong>
                     <p className="dropdown-info">({data.length} total records)</p>
                     <button 
+                      onClick={() => exportAllData('custom-excel')}
+                      className="dropdown-item dropdown-item-highlight"
+                      disabled={exportLoading}
+                    >
+                      <span className="export-icon">✨</span> Custom Column Excel (All Data)
+                    </button>
+                    <button 
+                      onClick={() => exportAllData('custom-pdf')}
+                      className="dropdown-item dropdown-item-highlight"
+                      disabled={exportLoading}
+                    >
+                      <span className="export-icon">✨</span> Custom Column PDF (All Data)
+                    </button>
+                    <button 
                       onClick={() => exportAllData('excel')}
                       className="dropdown-item"
                       disabled={exportLoading}
                     >
-                      <span className="export-icon">📊</span> Excel (All Data)
+                      <span className="export-icon">📊</span> Excel - Supervisor-Wise (All Data)
                     </button>
                     <button 
                       onClick={() => exportAllData('pdf')}
@@ -5651,7 +6667,7 @@ const exportCurrentView = (format) => {
           )}
 
           <button 
-            onClick={fetchProductionData} 
+            onClick={() => fetchProductionData(true)} 
             className="op-btn op-btn-refresh"
             disabled={loading}
           >
@@ -5979,35 +6995,38 @@ const exportCurrentView = (format) => {
         <table className="op-data-table">
           <thead>
             <tr>
-              {headers.map((header, index) => (
-                <th key={index} className={`header-${header.replace(/\s+/g, '-').toLowerCase()}`}>
-                  {header}
-                  {header === 'WIP Stit' && (
-                    <div className="column-help">
-                      (Latest Status/Remarks)
-                    </div>
-                  )}
-                  {header === 'Comp Stit' && (
-                    <div className="column-help">
-                      (Completion Date)
-                    </div>
-                  )}
-                  {(header === 'Pkg Sup' || header === 'Pkg Date' || 
-                    header === 'WIP Pkg' || header === 'Pkg Comp') && (
-                    <div className="column-help">
-                      (From Issues Sheet)
-                    </div>
-                  )}
-                  {(header === 'Cut Days' || header === 'Emb/Print Days' || 
-                    header === 'Stit Days' || header === 'Pkg Days' ||
-                    header === 'Cut To Emb/Print' || header === 'Emb/Print To Stit' || 
-                    header === 'Stit To Check Pack') && (
-                    <div className="column-help">
-                      (Days Calculation)
-                    </div>
-                  )}
-                </th>
-              ))}
+              {headers.map((header, index) => {
+                const colKey = header.replace(/[\/\.\s]+/g, '-').replace(/-+$/, '').toLowerCase();
+                return (
+                  <th key={index} className={`col-${colKey} header-${colKey}`}>
+                    {header}
+                    {header === 'WIP Stit' && (
+                      <div className="column-help">
+                        (Latest Status/Remarks)
+                      </div>
+                    )}
+                    {header === 'Comp Stit' && (
+                      <div className="column-help">
+                        (Completion Date)
+                      </div>
+                    )}
+                    {(header === 'Pkg Sup' || header === 'Pkg Date' || 
+                      header === 'WIP Pkg' || header === 'Pkg Comp') && (
+                      <div className="column-help">
+                        (From Issues Sheet)
+                      </div>
+                    )}
+                    {(header === 'Cut Days' || header === 'Emb/Print Days' || 
+                      header === 'Stit Days' || header === 'Pkg Days' ||
+                      header === 'Cut To Emb/Print' || header === 'Emb/Print To Stit' || 
+                      header === 'Stit To Check Pack') && (
+                      <div className="column-help">
+                        (Days Calculation)
+                      </div>
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -6024,14 +7043,14 @@ const exportCurrentView = (format) => {
               );
               
               return (
-                <tr key={row._id} className="op-data-row">
+                <tr key={row._id} className={`op-data-row ${row._isCancelled ? 'row-cancelled' : ''}`}>
                   {headers.map((header, colIndex) => {
                     // Handle serial number column separately
                     if (header === 'Sr.') {
                       return (
                         <td 
                           key={`${rowIndex}-${colIndex}`} 
-                          className="serial-number-cell"
+                          className="col-sr serial-number-cell"
                           title={`Serial Number: ${serialNumber}`}
                         >
                           {serialNumber}
@@ -6281,7 +7300,7 @@ const exportCurrentView = (format) => {
                       cellClass = 'packing-supervisor-cell';
                       displayValue = value ? ` ${value}` : value;
                     } else if (header === 'Lot No') {
-                      cellClass = 'lot-no-cell';
+                      cellClass = 'lot-no-cell' + (row._isCancelled ? ' lot-cancelled-cell' : '');
                     } else if (header === 'Stit Sup') {
                       cellClass = 'supervisor-cell';
                     }
@@ -6370,10 +7389,11 @@ const exportCurrentView = (format) => {
                       cellClass += ' missing-issues-data';
                     }
                     
+                    const colKey = header.replace(/[\/\.\s]+/g, '-').replace(/-+$/, '').toLowerCase();
                     return (
                       <td 
                         key={`${rowIndex}-${colIndex}`} 
-                        className={cellClass}
+                        className={`col-${colKey} ${cellClass}`}
                         title={titleText}
                         onClick={
                           header === 'Emb/Print Issue' && challanInfo 
@@ -6474,6 +7494,10 @@ const exportCurrentView = (format) => {
                           <div className="completed-display">
                             {displayValue}
                           </div>
+                        ) : header === 'Lot No' ? (
+                          <span className="op-lot-badge" title={`Lot Number: ${displayValue}`}>
+                            {displayValue}
+                          </span>
                         ) : (
                           <>
                             {displayValue}
@@ -6743,6 +7767,267 @@ const exportCurrentView = (format) => {
               ✕
             </button>
             <img src={viewImageSrc} alt="Full Preview" className="op-image-modal-img" referrerPolicy="no-referrer" />
+          </div>
+        </div>
+      )}
+
+      {/* Custom PDF/Excel Export Column Selection Modal */}
+      {isCustomPdfModalOpen && (
+        <div className="challan-modal-overlay custom-pdf-overlay" onClick={() => setIsCustomPdfModalOpen(false)}>
+          <div className="custom-pdf-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="custom-pdf-modal-header">
+              <div className="custom-pdf-header-title">
+                <span className="custom-pdf-icon">📊</span>
+                <div>
+                  <h3>Customize Export Headers & Columns (PDF & Excel)</h3>
+                  <p>Choose whatever headers and columns you want in your custom Excel or PDF production reports</p>
+                </div>
+              </div>
+              <button 
+                className="challan-modal-close"
+                onClick={() => setIsCustomPdfModalOpen(false)}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="custom-pdf-modal-body">
+              {/* Presets Quick Selector */}
+              <div className="custom-pdf-section">
+                <label className="custom-pdf-section-title">⚡ Quick Column Presets</label>
+                <div className="custom-pdf-presets-grid">
+                  {PDF_PRESETS.map((preset, idx) => {
+                    const isMatch = preset.columns.length === selectedPdfColumns.length &&
+                      preset.columns.every(c => selectedPdfColumns.includes(c));
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setSelectedPdfColumns([...preset.columns])}
+                        className={`custom-pdf-preset-btn ${isMatch ? 'active' : ''}`}
+                        title={preset.description}
+                      >
+                        <span className="preset-icon">{preset.icon}</span>
+                        <span className="preset-name">{preset.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Global Toolbar & Search */}
+              <div className="custom-pdf-toolbar">
+                <div className="custom-pdf-search">
+                  <span className="search-icon">🔍</span>
+                  <input
+                    type="text"
+                    placeholder="Filter available headers..."
+                    value={customPdfSearchTerm}
+                    onChange={(e) => setCustomPdfSearchTerm(e.target.value)}
+                    className="custom-pdf-search-input"
+                  />
+                  {customPdfSearchTerm && (
+                    <button 
+                      type="button" 
+                      onClick={() => setCustomPdfSearchTerm('')} 
+                      className="custom-pdf-search-clear"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                <div className="custom-pdf-selection-actions">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPdfColumns(ALL_PDF_COLUMNS.map(c => c.id))}
+                    className="custom-pdf-mini-btn"
+                  >
+                    Select All ({ALL_PDF_COLUMNS.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPdfColumns([])}
+                    className="custom-pdf-mini-btn"
+                  >
+                    Clear All
+                  </button>
+                  <span className="custom-pdf-counter-badge">
+                    {selectedPdfColumns.length} / {ALL_PDF_COLUMNS.length} Headers Selected
+                  </span>
+                </div>
+              </div>
+
+              {/* Categories of Checkboxes */}
+              <div className="custom-pdf-categories-container">
+                {Array.from(new Set(ALL_PDF_COLUMNS.map(c => c.category))).map(category => {
+                  const categoryColumns = ALL_PDF_COLUMNS.filter(c => c.category === category);
+                  const filteredCatCols = categoryColumns.filter(c => 
+                    c.id.toLowerCase().includes(customPdfSearchTerm.toLowerCase()) ||
+                    c.label.toLowerCase().includes(customPdfSearchTerm.toLowerCase()) ||
+                    c.fullForm.toLowerCase().includes(customPdfSearchTerm.toLowerCase())
+                  );
+
+                  if (filteredCatCols.length === 0) return null;
+
+                  const allSelected = categoryColumns.every(c => selectedPdfColumns.includes(c.id));
+
+                  return (
+                    <div key={category} className="custom-pdf-category-card">
+                      <div className="custom-pdf-category-header">
+                        <div className="category-title-wrap">
+                          <span className="category-indicator" />
+                          <h4>{category}</h4>
+                          <span className="category-count">
+                            ({categoryColumns.filter(c => selectedPdfColumns.includes(c.id)).length}/{categoryColumns.length})
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="category-toggle-btn"
+                          onClick={() => {
+                            if (allSelected) {
+                              setSelectedPdfColumns(prev => prev.filter(id => !categoryColumns.some(c => c.id === id)));
+                            } else {
+                              const newCols = new Set([...selectedPdfColumns, ...categoryColumns.map(c => c.id)]);
+                              setSelectedPdfColumns(Array.from(newCols));
+                            }
+                          }}
+                        >
+                          {allSelected ? 'Deselect Section' : 'Select All in Section'}
+                        </button>
+                      </div>
+
+                      <div className="custom-pdf-columns-grid">
+                        {filteredCatCols.map(col => {
+                          const isChecked = selectedPdfColumns.includes(col.id);
+                          return (
+                            <label 
+                              key={col.id} 
+                              className={`custom-pdf-col-checkbox ${isChecked ? 'checked' : ''}`}
+                              title={col.fullForm}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => {
+                                  if (isChecked) {
+                                    setSelectedPdfColumns(prev => prev.filter(id => id !== col.id));
+                                  } else {
+                                    setSelectedPdfColumns(prev => [...prev, col.id]);
+                                  }
+                                }}
+                              />
+                              <div className="col-info">
+                                <span className="col-label">{col.label || col.id}</span>
+                                <span className="col-fullform">{col.fullForm}</span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Export Configuration Options */}
+              <div className="custom-pdf-options-bar">
+                <div className="custom-pdf-option-group">
+                  <label className="option-label">Records to Include:</label>
+                  <div className="custom-pdf-radio-group">
+                    <label className={`radio-label ${customPdfDataScope === 'filtered' ? 'active' : ''}`}>
+                      <input
+                        type="radio"
+                        name="pdfDataScope"
+                        value="filtered"
+                        checked={customPdfDataScope === 'filtered'}
+                        onChange={() => setCustomPdfDataScope('filtered')}
+                      />
+                      <span>Current Filtered View ({filteredData.length} records)</span>
+                    </label>
+                    <label className={`radio-label ${customPdfDataScope === 'all' ? 'active' : ''}`}>
+                      <input
+                        type="radio"
+                        name="pdfDataScope"
+                        value="all"
+                        checked={customPdfDataScope === 'all'}
+                        onChange={() => setCustomPdfDataScope('all')}
+                      />
+                      <span>All Records ({data.length} records)</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="custom-pdf-option-group">
+                  <label className="option-label">PDF Paper Size & Orientation:</label>
+                  <select
+                    value={customPdfPaperSize}
+                    onChange={(e) => setCustomPdfPaperSize(e.target.value)}
+                    className="custom-pdf-select"
+                  >
+                    <option value="auto">Auto Smart Fit (Recommended)</option>
+                    <option value="a4-landscape">A4 Landscape</option>
+                    <option value="a4-portrait">A4 Portrait</option>
+                    <option value="a3-landscape">A3 Landscape (Best for &gt;16 Columns)</option>
+                  </select>
+                </div>
+
+                <div className="custom-pdf-option-group checkboxes-inline">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={customPdfIncludeStats}
+                      onChange={(e) => setCustomPdfIncludeStats(e.target.checked)}
+                    />
+                    <span>Include Report Stats (Totals, PCS, Date)</span>
+                  </label>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={customPdfIncludeNotes}
+                      onChange={(e) => setCustomPdfIncludeNotes(e.target.checked)}
+                    />
+                    <span>Include PDF Header Definitions / Legend</span>
+                  </label>
+                  <label className="checkbox-label" style={{ fontWeight: 600, color: '#312e81' }}>
+                    <input
+                      type="checkbox"
+                      checked={customExcelGroupBySupervisor}
+                      onChange={(e) => setCustomExcelGroupBySupervisor(e.target.checked)}
+                    />
+                    <span>👔 Group Lots by Supervisor in Excel Export</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="custom-pdf-modal-footer">
+              <button
+                type="button"
+                onClick={() => setIsCustomPdfModalOpen(false)}
+                className="op-btn op-btn-toggle"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => exportCustomExcel()}
+                disabled={selectedPdfColumns.length === 0 || exportLoading}
+                className="op-btn op-btn-export-excel"
+              >
+                {exportLoading ? '🔄 Generating Excel...' : `📊 Download Custom Excel (${selectedPdfColumns.length} Headers)`}
+              </button>
+              <button
+                type="button"
+                onClick={() => exportCustomPDF()}
+                disabled={selectedPdfColumns.length === 0 || exportLoading}
+                className="op-btn op-btn-export-primary"
+              >
+                {exportLoading ? '🔄 Generating PDF...' : `📄 Download Custom PDF (${selectedPdfColumns.length} Headers)`}
+              </button>
+            </div>
           </div>
         </div>
       )}
