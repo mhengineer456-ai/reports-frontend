@@ -242,7 +242,7 @@ export default function Dashboard() {
     {
       id: "crit-10",
       step: 10,
-      title: "Cut to Pack Report",
+      title: "Cutting to Packing Report",
       emoji: "📊🏆",
       path: "/overall-cutting-to-packing-report",
       section: "critical",
