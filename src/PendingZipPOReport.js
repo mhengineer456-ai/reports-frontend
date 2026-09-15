@@ -3,6 +3,7 @@ import { useHistory } from "react-router-dom";
 import Navbar from "./Navbar";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { fetchSheetDataFromBackend } from "./config";
 
 // Multi-Select Dropdown Component with Checkboxes & Search
 const MultiSelectDropdown = ({ title, options, selected, onChange, icon }) => {
@@ -170,6 +171,9 @@ const JOB_ORDERS_RANGE = "JobOrder!A1:BZ2000";
 const ZIP_PO_SPREADSHEET_ID = "16mifNw0WMIlnZ1XRHsuH_8kVUm_6Y1O3uVsoM-Hjppo";
 const ZIP_PO_RANGE = "ZipPurchaseOrders!A:V";
 
+const SHADE_PO_SPREADSHEET_ID = "1JgJF9Er7lYDW0rINQzUUafqonx0yxkVaAauPgX5QNfk";
+const SHADE_PO_RANGE = "POs!A:M";
+
 const INDEX_SPREADSHEET_ID = "1Hj3JeJEKB43aYYWv8gk2UhdU6BWuEQfCg5pBlTdBMNA";
 const INDEX_RANGE = "Index!A1:AF3000";
 
@@ -321,6 +325,46 @@ const PendingZipPOReport = () => {
       }
       setExistingPOLots(poLots);
 
+      // 1b. Fetch PO As Per Shade sheet and identify lots where Supplier Name contains 'ZIP'
+      let shadeZipPOLots = new Set();
+      try {
+        let shadePoValues = [];
+        const backendRes = await fetchSheetDataFromBackend(SHADE_PO_SPREADSHEET_ID, SHADE_PO_RANGE);
+        if (backendRes && backendRes.ok && Array.isArray(backendRes.values) && backendRes.values.length > 0) {
+          shadePoValues = backendRes.values;
+        } else {
+          const shadePoUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SHADE_PO_SPREADSHEET_ID}/values/${encodeURIComponent(SHADE_PO_RANGE)}?key=${API_KEY}`;
+          const shadePoRes = await fetchWithRetry(shadePoUrl);
+          if (shadePoRes.ok) {
+            const shadePoData = await shadePoRes.json();
+            shadePoValues = shadePoData.values || [];
+          }
+        }
+
+        if (shadePoValues.length > 1) {
+          const shadeHeaders = shadePoValues[0].map((h) => normalize(h));
+          let lotColIdx = shadeHeaders.findIndex((h) => h === "lot number" || h === "lot no" || h.includes("lot"));
+          let supplierColIdx = shadeHeaders.findIndex((h) => h === "supplier name" || h === "supplier" || h.includes("supplier"));
+
+          if (lotColIdx === -1) lotColIdx = 1;
+          if (supplierColIdx === -1) supplierColIdx = 4;
+
+          shadePoValues.slice(1).forEach((r) => {
+            const supplier = normalize(r[supplierColIdx]);
+            const rawLot = (r[lotColIdx] || "").toString().trim();
+            if (supplier.includes("zip") && rawLot) {
+              shadeZipPOLots.add(normalize(rawLot));
+              rawLot.split(/[,;\s]+/).forEach((part) => {
+                const normPart = normalize(part);
+                if (normPart) shadeZipPOLots.add(normPart);
+              });
+            }
+          });
+        }
+      } catch (shadeErr) {
+        console.warn("Could not fetch Shade PO sheet:", shadeErr);
+      }
+
       // 2. Fetch Index Sheet Cut Lots, Cutting Qty, Completed Lots, Supervisors & Parties
       const indexUrl = `https://sheets.googleapis.com/v4/spreadsheets/${INDEX_SPREADSHEET_ID}/values/${encodeURIComponent(INDEX_RANGE)}?key=${API_KEY}`;
       const indexRes = await fetchWithRetry(indexUrl);
@@ -422,6 +466,7 @@ const PendingZipPOReport = () => {
             remarks: getVal("Remarks"),
             submittedBy: getVal("Submitted By"),
             lotNumber: lotNo,
+            directStitching: getVal("Direct Stitching") || getVal("Direct_Stitching") || "—",
             priority: getVal("Priority") || "NORMAL",
             zipDetails: zipVal,
             orderNo: getVal("Order No."),
@@ -437,7 +482,7 @@ const PendingZipPOReport = () => {
           };
         });
 
-      // Include ONLY lots where LOT IS CUT (present in Index), ZIP IS REQUIRED, PENDING PO QTY > 0, NOT COMPLETED, AND NOT DUSHYANT / JAINHOSIERY
+      // Include ONLY lots where LOT IS CUT (present in Index), ZIP IS REQUIRED, PENDING PO QTY > 0, NOT COMPLETED, NOT DUSHYANT / JAINHOSIERY, AND NOT PRESENT IN SHADE PO SHEET WITH ZIP SUPPLIER
       const pendingZipRows = parsedRows.filter(
         (r) =>
           r.isCutInIndex &&
@@ -445,7 +490,8 @@ const PendingZipPOReport = () => {
           !r.hasFullPO &&
           r.pendingPOQty > 0 &&
           !r.isCompletedInIndex &&
-          !isExcludedSupervisorOrParty(r)
+          !isExcludedSupervisorOrParty(r) &&
+          !shadeZipPOLots.has(normalize(r.lotNumber))
       );
       setJobOrders(pendingZipRows);
     } catch (err) {
@@ -535,15 +581,19 @@ const PendingZipPOReport = () => {
   // Export CSV
   const exportCSV = () => {
     const headers = [
+      "Lot No",
+      "Garment Type",
+      "Style",
+      "Fabric",
+      "Brand",
+      "Pcs",
+      "Section",
+      "Season",
+      "Party Name",
+      "Direct Stitching",
       "Job Order No",
       "Date",
-      "Lot Number",
-      "Party Name",
-      "Brand",
-      "Garment Type",
-      "Fabric",
       "Shade",
-      "Cutting Qty (PCS)",
       "PO Created Qty (PCS)",
       "Pending PO Qty (PCS Left)",
       "Zip Details",
@@ -554,15 +604,19 @@ const PendingZipPOReport = () => {
     ];
 
     const rows = filteredOrders.map((r) => [
+      r.lotNumber,
+      r.garmentType,
+      r.style,
+      r.fabric,
+      r.brand,
+      r.cuttingQty,
+      r.section,
+      r.season,
+      r.partyName,
+      r.directStitching,
       r.jobOrderNo,
       r.date,
-      r.lotNumber,
-      r.partyName,
-      r.brand,
-      r.garmentType,
-      r.fabric,
       r.shade,
-      r.cuttingQty,
       r.createdPOQty,
       r.pendingPOQty,
       r.zipDetails,
@@ -584,7 +638,7 @@ const PendingZipPOReport = () => {
 
   // Export Monochrome Black & White PDF
   const exportPDF = () => {
-    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a3" });
     
     // Clean Header (White Background with Black Text)
     doc.setFont("helvetica", "bold");
@@ -601,25 +655,30 @@ const PendingZipPOReport = () => {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8.5);
     doc.setTextColor(0, 0, 0);
-    doc.text(`DATE: ${new Date().toLocaleDateString("en-IN")}`, 285, 11, { align: "right" });
+    doc.text(`DATE: ${new Date().toLocaleDateString("en-IN")}`, 400, 11, { align: "right" });
     doc.setFont("helvetica", "normal");
-    doc.text(`TOTAL PENDING LOTS: ${filteredOrders.length}`, 285, 16, { align: "right" });
-    doc.text(`TOTAL PENDING PCS: ${stats.totalPendingPOQty.toLocaleString("en-IN")} PCS`, 285, 21, { align: "right" });
+    doc.text(`TOTAL PENDING LOTS: ${filteredOrders.length}`, 400, 16, { align: "right" });
+    doc.text(`TOTAL PENDING PCS: ${stats.totalPendingPOQty.toLocaleString("en-IN")} PCS`, 400, 21, { align: "right" });
 
     // Solid Black Header Line
     doc.setDrawColor(0, 0, 0);
     doc.setLineWidth(0.5);
-    doc.line(12, 24, 285, 24);
+    doc.line(12, 24, 400, 24);
 
     const tableData = filteredOrders.map((r, i) => [
       i + 1,
+      r.lotNumber || "-",
+      r.garmentType || "-",
+      r.style || "-",
+      r.fabric || "-",
+      r.brand || "-",
+      `${r.cuttingQty?.toLocaleString("en-IN")} PCS`,
+      r.section || "-",
+      r.season || "-",
+      r.partyName || "-",
+      r.directStitching || "-",
       r.jobOrderNo || "-",
       r.date || "-",
-      r.lotNumber || "-",
-      r.partyName || "-",
-      r.garmentType || "-",
-      r.fabric || "-",
-      `${r.cuttingQty?.toLocaleString("en-IN")} PCS`,
       `${r.createdPOQty > 0 ? r.createdPOQty.toLocaleString("en-IN") : "0"} PCS`,
       `${r.pendingPOQty?.toLocaleString("en-IN")} PCS Left`,
       r.zipDetails || "-",
@@ -628,7 +687,7 @@ const PendingZipPOReport = () => {
     ]);
 
     autoTable(doc, {
-      head: [["#", "JO No", "Date", "Lot No", "Party Name", "Garment", "Fabric", "Cut Qty", "PO Created", "Pending Qty", "Zip Requirement", "Priority", "PO Status"]],
+      head: [["#", "Lot No", "Garment Type", "Style", "Fabric", "Brand", "Pcs", "Section", "Season", "Party Name", "Direct Stitching", "JO No", "Date", "PO Created", "Pending Qty", "Zip Requirement", "Priority", "PO Status"]],
       body: tableData,
       startY: 27,
       margin: { top: 27, bottom: 15, left: 12, right: 12 },
@@ -645,22 +704,8 @@ const PendingZipPOReport = () => {
         textColor: [255, 255, 255],
         fontStyle: "bold",
         lineColor: [0, 0, 0],
-        lineWidth: 0.2
-      },
-      columnStyles: {
-        0: { halign: "center", cellWidth: 7 },
-        1: { fontStyle: "bold", cellWidth: 18 },
-        2: { cellWidth: 20 },
-        3: { fontStyle: "bold", cellWidth: 16 },
-        4: { cellWidth: 30 },
-        5: { cellWidth: 24 },
-        6: { cellWidth: 28 },
-        7: { halign: "right", cellWidth: 20 },
-        8: { halign: "right", cellWidth: 20 },
-        9: { halign: "right", fontStyle: "bold", cellWidth: 24 },
-        10: { cellWidth: 33 },
-        11: { halign: "center", cellWidth: 16 },
-        12: { halign: "center", cellWidth: 23 }
+        lineWidth: 0.2,
+        halign: "center"
       },
       alternateRowStyles: { fillColor: [248, 248, 248] },
       didDrawPage: (data) => {
@@ -672,20 +717,20 @@ const PendingZipPOReport = () => {
           doc.text("MH FACTORY SUITE PRO — PENDING ZIP PO REPORT (CONTINUED)", 12, 10);
           doc.setDrawColor(0, 0, 0);
           doc.setLineWidth(0.4);
-          doc.line(12, 12, 285, 12);
+          doc.line(12, 12, 400, 12);
         }
 
         // Footer rule and text
         const totalPages = doc.internal.getNumberOfPages();
         doc.setDrawColor(0, 0, 0);
         doc.setLineWidth(0.3);
-        doc.line(12, 201, 285, 201);
+        doc.line(12, 280, 400, 280);
 
         doc.setFont("helvetica", "normal");
         doc.setFontSize(7.5);
         doc.setTextColor(0, 0, 0);
-        doc.text("MH Factory Suite Pro — Internal Production Report", 12, 205);
-        doc.text(`Page ${data.pageNumber} of ${totalPages}`, 285, 205, { align: "right" });
+        doc.text("MH Factory Suite Pro — Internal Production Report", 12, 285);
+        doc.text(`Page ${data.pageNumber} of ${totalPages}`, 400, 285, { align: "right" });
       }
     });
 
@@ -1010,14 +1055,18 @@ const PendingZipPOReport = () => {
               <thead>
                 <tr>
                   <th className="zpr-th" style={{ width: "40px" }}></th>
+                  <th className="zpr-th">Lot No</th>
+                  <th className="zpr-th">Garment Type</th>
+                  <th className="zpr-th">Style</th>
+                  <th className="zpr-th">Fabric</th>
+                  <th className="zpr-th">Brand</th>
+                  <th className="zpr-th">Pcs</th>
+                  <th className="zpr-th">Section</th>
+                  <th className="zpr-th">Season</th>
+                  <th className="zpr-th">Party Name</th>
+                  <th className="zpr-th">Direct Stitching</th>
                   <th className="zpr-th">JO No</th>
                   <th className="zpr-th">Date</th>
-                  <th className="zpr-th">Lot Number</th>
-                  <th className="zpr-th">Party Name</th>
-                  <th className="zpr-th">Brand</th>
-                  <th className="zpr-th">Garment Type</th>
-                  <th className="zpr-th">Fabric</th>
-                  <th className="zpr-th">Cutting Qty</th>
                   <th className="zpr-th">PO Created Qty</th>
                   <th className="zpr-th">Pending PO (Left)</th>
                   <th className="zpr-th">Zip Requirement</th>
@@ -1034,16 +1083,20 @@ const PendingZipPOReport = () => {
                         <td className="zpr-td" style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleRow(r.id)}>
                           {isExp ? "▼" : "▶"}
                         </td>
-                        <td className="zpr-td" style={{ fontWeight: 800, color: "#4338ca" }}>{r.jobOrderNo || "-"}</td>
-                        <td className="zpr-td">{r.date || "-"}</td>
                         <td className="zpr-td" style={{ fontWeight: 700 }}>{r.lotNumber || "-"}</td>
-                        <td className="zpr-td">{r.partyName || "-"}</td>
-                        <td className="zpr-td">{r.brand || "-"}</td>
                         <td className="zpr-td">{r.garmentType || "-"}</td>
+                        <td className="zpr-td">{r.style || "-"}</td>
                         <td className="zpr-td">{r.fabric || "-"}</td>
+                        <td className="zpr-td">{r.brand || "-"}</td>
                         <td className="zpr-td" style={{ fontWeight: 800, color: "#1e1b4b" }}>
                           {r.cuttingQty?.toLocaleString("en-IN")} PCS
                         </td>
+                        <td className="zpr-td">{r.section || "-"}</td>
+                        <td className="zpr-td">{r.season || "-"}</td>
+                        <td className="zpr-td">{r.partyName || "-"}</td>
+                        <td className="zpr-td">{r.directStitching || "-"}</td>
+                        <td className="zpr-td" style={{ fontWeight: 800, color: "#4338ca" }}>{r.jobOrderNo || "-"}</td>
+                        <td className="zpr-td">{r.date || "-"}</td>
                         <td className="zpr-td" style={{ fontWeight: 700, color: "#15803d" }}>
                           {r.createdPOQty > 0 ? `${r.createdPOQty.toLocaleString("en-IN")} PCS` : "0 PCS"}
                         </td>
@@ -1071,12 +1124,10 @@ const PendingZipPOReport = () => {
                       {isExp && (
                         <tr style={{ background: "#f8fafc" }}>
                           <td></td>
-                          <td colSpan={13} style={{ padding: "1rem", borderBottom: "1px solid #e2e8f0" }}>
+                          <td colSpan={17} style={{ padding: "1rem", borderBottom: "1px solid #e2e8f0" }}>
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "0.75rem" }}>
-                              <div><strong>Style:</strong> {r.style || "—"}</div>
                               <div><strong>Pattern:</strong> {r.pattern || "—"}</div>
                               <div><strong>Shade:</strong> {r.shade || "—"}</div>
-                              <div><strong>Section:</strong> {r.section || "—"}</div>
                               <div><strong>Submitted By:</strong> {r.submittedBy || "—"}</div>
                               <div><strong>Order No:</strong> {r.orderNo || "—"}</div>
                               <div><strong>Supervisor:</strong> {r.supervisor || "—"}</div>

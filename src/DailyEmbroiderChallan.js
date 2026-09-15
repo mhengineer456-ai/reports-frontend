@@ -8,16 +8,23 @@ const RANGE = "A1:ZZZ";
 
 const API_URL = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${TAB_NAME}!${RANGE}?key=${API_KEY}`;
 
-// 👇 same shape as your Printing version
 const DAILY_HEADERS = [
   "Lot Number",
+  "Garment Type",
+  "Style",
+  "Fabric",
+  "Brand",
+  "Challan Qty (date-wise)",
+  "Section",
+  "Season",
+  "Party Name",
+  "Direct Stitching",
+  "Emb",
   "Challan No",
   "Issue Date",
   "Receive Date",             // from embUpdatedAt
   "Material Receive Date",    // from receivedDate
-  "Emb",                      // embroidery party/name
   "Shades (in challan)",      // CSV of all shades in this entry
-  "Challan Qty (date-wise)",  // total qty for this entry
 ];
 
 function formatDisplayDate(d) {
@@ -220,13 +227,21 @@ export default function DailyEmbroideryChallan() {
 
         out.push({
           "Lot Number": lotNo,
+          "Garment Type": r["Garment Type"] || r["Garment"] || "",
+          "Style": r["Style"] || "",
+          "Fabric": r["Fabric"] || "",
+          "Brand": r["Brand"] || "",
+          "Challan Qty (date-wise)": totalQty,
+          "Section": r["Section"] || "",
+          "Season": r["Season"] || "",
+          "Party Name": r["Party Name"] || r["Party"] || "",
+          "Direct Stitching": r["Direct Stitching"] || "",
+          "Emb": emb,
           "Challan No": challanNo,
           "Issue Date": formatDisplayDate(issueDate),
           "Receive Date": formatDisplayDate(receiveDate),
           "Material Receive Date": formatDisplayDate(materialReceiveDate),
-          Emb: emb,
           "Shades (in challan)": shadesCSV,
-          "Challan Qty (date-wise)": totalQty,
 
           // raw for sort
           rawIssueDate: issueDate,

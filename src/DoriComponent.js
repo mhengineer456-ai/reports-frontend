@@ -40,6 +40,22 @@ const safeJSONParse = (str, defaultValue = {}) => {
   }
 };
 
+const parsePlacements = (val) => {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed;
+      if (typeof parsed === 'string' && parsed.trim()) return [parsed.trim()];
+      if (typeof parsed === 'object' && parsed !== null) return Object.values(parsed).filter(Boolean);
+    } catch {
+      return val.split(',').map(s => s.trim().replace(/^["'\[\]]+|["'\[\]]+$/g, '')).filter(Boolean);
+    }
+  }
+  return [];
+};
+
 const parseColorBreakdown = (breakdown) => {
   if (!breakdown) return [];
   try {
@@ -55,10 +71,10 @@ const parseColorBreakdown = (breakdown) => {
 // New helper function to calculate aging
 const calculateAging = (timestamp, materialEntryDate) => {
   if (!timestamp) return 0;
-  
+
   const timestampDate = new Date(timestamp);
   let endDate;
-  
+
   if (materialEntryDate) {
     // If Material Entry Date is present, use it as end date
     endDate = new Date(materialEntryDate);
@@ -66,11 +82,11 @@ const calculateAging = (timestamp, materialEntryDate) => {
     // If Material Entry Date is not present, use today's date
     endDate = new Date();
   }
-  
+
   // Calculate difference in days
   const timeDiff = endDate.getTime() - timestampDate.getTime();
   const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-  
+
   return Math.max(0, daysDiff); // Return 0 if negative
 };
 
@@ -95,44 +111,44 @@ const DoriPurchaseDashboard = () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${PURCHASE_ORDERS_RANGE}?key=${API_KEY}`;
       const response = await fetch(url);
-      
+
       if (!response.ok) {
         throw new Error(`Failed to fetch data: ${response.status}`);
       }
-      
+
       const result = await response.json();
       const values = result.values;
-      
+
       if (!values || values.length === 0) {
         throw new Error('No data found in the spreadsheet');
       }
-      
+
       // Process the data
       const headers = values[0];
       const rows = values.slice(1);
-      
+
       const processedData = rows.map((row, index) => {
         const obj = { id: index + 1 };
         headers.forEach((header, colIndex) => {
           obj[header] = row[colIndex] || '';
         });
-        
+
         // Add derived fields for easier filtering
         obj.hasGateEntry = !!(obj['Gate Entry Person'] && obj['Gate Entry Date']);
         obj.hasMaterialReceived = !!(obj['Material Received By'] && obj['Material Received Date']);
         obj.hasSupplierEntry = !!(obj['Supplier Name'] && obj['Material Entry Date']);
-        
+
         // Calculate aging
         obj.aging = calculateAging(obj['Timestamp'], obj['Material Entry Date']);
-        
+
         return obj;
       });
-      
+
       setData(processedData);
-      
+
     } catch (err) {
       console.error('Error fetching data:', err);
       setError(err.message);
@@ -158,15 +174,15 @@ const DoriPurchaseDashboard = () => {
   const filterOptions = useMemo(() => {
     const garmentTypes = [...new Set(data.map(row => row['Garment Type']).filter(Boolean))];
     const supervisors = [...new Set(data.map(row => row['Supervisor']).filter(Boolean))];
-    
+
     // Extract all unique zip placements
     const allPlacements = data.flatMap(row => {
-      const placements = safeJSONParse(row['Selected Placements'], []);
+      const placements = parsePlacements(row['Selected Placements']);
       return placements;
     }).filter(Boolean);
-    
+
     const zipPlacements = [...new Set(allPlacements)];
-    
+
     return { garmentTypes, supervisors, zipPlacements };
   }, [data]);
 
@@ -179,7 +195,7 @@ const DoriPurchaseDashboard = () => {
       const searchLower = searchTerm.toLowerCase();
       result = result.filter(row =>
         Object.entries(row).some(([key, value]) =>
-          key !== 'id' && 
+          key !== 'id' &&
           String(value).toLowerCase().includes(searchLower)
         )
       );
@@ -187,13 +203,13 @@ const DoriPurchaseDashboard = () => {
 
     // Apply filters
     if (filters.garmentType) {
-      result = result.filter(row => 
+      result = result.filter(row =>
         row['Garment Type']?.toLowerCase().includes(filters.garmentType.toLowerCase())
       );
     }
 
     if (filters.supervisor) {
-      result = result.filter(row => 
+      result = result.filter(row =>
         row['Supervisor']?.toLowerCase().includes(filters.supervisor.toLowerCase())
       );
     }
@@ -240,9 +256,9 @@ const DoriPurchaseDashboard = () => {
     // Add zip placement filter
     if (filters.zipPlacement) {
       result = result.filter(row => {
-        const placements = safeJSONParse(row['Selected Placements'], []);
-        return placements.some(placement => 
-          placement.toLowerCase().includes(filters.zipPlacement.toLowerCase())
+        const placements = parsePlacements(row['Selected Placements']);
+        return placements.some(placement =>
+          String(placement).toLowerCase().includes(filters.zipPlacement.toLowerCase())
         );
       });
     }
@@ -267,13 +283,13 @@ const DoriPurchaseDashboard = () => {
     const total = filteredData.length;
     const totalPieces = filteredData.reduce((sum, row) => sum + (parseInt(row['Total Pieces']) || 0), 0);
     const totalCost = filteredData.reduce((sum, row) => sum + (parseInt(row['Total Cost (₹)']) || 0), 0);
-    
+
     const withGateEntry = filteredData.filter(row => row.hasGateEntry).length;
     const withMaterialReceived = filteredData.filter(row => row.hasMaterialReceived).length;
     const withSupplierEntry = filteredData.filter(row => row.hasSupplierEntry).length;
 
     // Aging statistics
-    const averageAging = filteredData.length > 0 
+    const averageAging = filteredData.length > 0
       ? Math.round(filteredData.reduce((sum, row) => sum + (row.aging || 0), 0) / filteredData.length)
       : 0;
 
@@ -311,14 +327,19 @@ const DoriPurchaseDashboard = () => {
   const downloadExcel = () => {
     const headers = [
       'Sr. No.',
-      'Lot Number',
+      'Lot No',
       'Garment Type',
       'Style',
       'Fabric',
-      'Total Pieces',
+      'Brand',
+      'Pcs',
+      'Section',
+      'Season',
+      'Party Name',
+      'Direct Stitching',
+      'Total Cost (₹)',
       'Issue Date',
       'Supervisor',
-      'Total Cost (₹)',
       'Gate Entry Person',
       'Gate Entry Date',
       'Material Received By',
@@ -330,14 +351,19 @@ const DoriPurchaseDashboard = () => {
 
     const csvData = filteredData.map((row, index) => [
       index + 1,
-      row['Lot Number'] || '',
+      row['Lot Number'] || row['Lot No'] || '',
       row['Garment Type'] || '',
       row['Style'] || '',
       row['Fabric'] || '',
-      row['Total Pieces'] || '',
+      row['Brand'] || '-',
+      row['Total Pieces'] || row['Pcs'] || '',
+      row['Section'] || '-',
+      row['Season'] || '-',
+      row['Party Name'] || '-',
+      row['Direct Stitching'] || '-',
+      row['Total Cost (₹)'] || '',
       formatDate(row['Issue Date']),
       row['Supervisor'] || '',
-      row['Total Cost (₹)'] || '',
       row['Gate Entry Person'] || '',
       formatDate(row['Gate Entry Date']),
       row['Material Received By'] || '',
@@ -349,7 +375,7 @@ const DoriPurchaseDashboard = () => {
 
     const csvContent = [
       headers.join(','),
-      ...csvData.map(row => 
+      ...csvData.map(row =>
         row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(',')
       )
     ].join('\n');
@@ -358,7 +384,7 @@ const DoriPurchaseDashboard = () => {
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `zip-purchase-orders-${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', `dori-purchase-orders-${new Date().toISOString().split('T')[0]}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -366,224 +392,123 @@ const DoriPurchaseDashboard = () => {
   };
 
   // Download PDF
-const downloadPDF = () => {
-  const doc = new jsPDF({
-    orientation: 'portrait',
-    unit: 'mm',
-    format: 'a3'
-  });
+  const downloadPDF = () => {
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a3'
+    });
 
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 8;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 8;
 
-  // Page border - light gray for B&W printing
-  doc.setDrawColor(100, 100, 100);
-  doc.setLineWidth(0.3);
-  doc.rect(margin, margin, pageWidth - (2 * margin), pageHeight - (2 * margin));
+    // Page border - light gray for B&W printing
+    doc.setDrawColor(100, 100, 100);
+    doc.setLineWidth(0.3);
+    doc.rect(margin, margin, pageWidth - (2 * margin), pageHeight - (2 * margin));
 
-  // Header - White background (changed from dark gray)
-  doc.setFillColor(255, 255, 255); // White background
-  doc.rect(margin, margin, pageWidth - (2 * margin), 18, 'F');
-  
-  // Title - Navy blue text
-  doc.setFontSize(18);
-  doc.setTextColor(0, 0, 128); // Navy blue color
-  doc.setFont('helvetica', 'bold');
-  doc.text('Dori Purchase OrderS REPORT', pageWidth / 2, margin + 10, { align: 'center' });
+    // Header - White background (changed from dark gray)
+    doc.setFillColor(255, 255, 255); // White background
+    doc.rect(margin, margin, pageWidth - (2 * margin), 18, 'F');
 
-  // Subtitle - Dark gray text
-  doc.setFontSize(9);
-  doc.setTextColor(80, 80, 80); // Dark gray for subtitle
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Generated on: ${new Date().toLocaleDateString('en-IN')}`, pageWidth / 2, margin + 16, { align: 'center' });
+    // Title - Navy blue text
+    doc.setFontSize(18);
+    doc.setTextColor(0, 0, 128); // Navy blue color
+    doc.setFont('helvetica', 'bold');
+    doc.text('Dori Purchase Orders REPORT', pageWidth / 2, margin + 10, { align: 'center' });
 
-  // Prepare table data with zip status
-  const tableData = filteredData.map((row, index) => {
-    const hasPendingZip = !row.hasSupplierEntry || !row.hasMaterialReceived;
-    const zipStatus = hasPendingZip ? 'PENDING' : 'DONE';
-    
-    return [
-      (index + 1).toString(),
-      row['Lot Number'] || '-',
-      row['Garment Type'] || '-',
-      row['Style'] || '-',
-      row['Fabric'] || '-',
-      formatNumber(row['Total Pieces']),
-      formatCurrency(row['Total Cost (₹)']).replace('₹', ''),
-      formatDate(row['Issue Date']),
-      row['Supervisor'] || '-',
-      row.aging?.toString() || '0',
-      zipStatus
-    ];
-  });
-
-  // Create table with optimized column widths for A3
-  autoTable(doc, {
-    head: [[
-      'Sr.No.', 
-      'Lot No.', 
-      'Garment Type', 
-      'Style', 
-      'Fabric',
-      'Pieces', 
-      'Cost', 
-      'Issue Date', 
-      'Supervisor', 
-      'Aging (Days)',
-      'Status'
-    ]],
-    body: tableData,
-    startY: margin + 25,
-    margin: { left: margin, right: margin },
-    styles: {
-      fontSize: 8,
-      cellPadding: 3,
-      lineColor: [80, 80, 80],
-      lineWidth: 0.25,
-      textColor: [0, 0, 0],
-      font: 'helvetica',
-      fontStyle: 'normal'
-    },
-  headStyles: {
-  fillColor: [0, 0, 128], // Navy blue background
-  textColor: [255, 255, 255], // White text
-  fontStyle: 'bold',
-  fontSize: 8,
-  lineWidth: 0.25,
-  lineColor: [80, 80, 80],
-  halign: 'center' // Add this line to center all header text
-},
-    bodyStyles: {
-      fontSize: 9,
-      lineWidth: 0.25,
-      lineColor: [150, 150, 150],
-      textColor: [0, 0, 0]
-    },
-    alternateRowStyles: {
-      fillColor: [245, 245, 245]
-    },
-    // Correct way to highlight rows based on zip status
-    didParseCell: function(data) {
-      // Check if this is a body cell
-      if (data.section === 'body') {
-        const rowData = tableData[data.row.index];
-        const zipStatus = rowData[10]; // Status is now at index 10
-        
-        if (zipStatus === 'PENDING') {
-          // Highlight entire row for pending zips
-          data.cell.styles.fillColor = [255, 240, 240]; // Light red background
-          data.cell.styles.fontStyle = 'bold';
-          
-          // Make the Status column more prominent
-          if (data.column.index === 10) {
-            data.cell.styles.fillColor = [255, 200, 200]; // Darker red
-            data.cell.styles.textColor = [200, 0, 0]; // Red text
-          }
-        } else {
-          // Style for completed zips
-          if (data.column.index === 10) {
-            data.cell.styles.fillColor = [230, 255, 230]; // Light green
-            data.cell.styles.textColor = [0, 100, 0]; // Green text
-            data.cell.styles.fontStyle = 'bold';
-          }
-        }
-        
-        // Style aging column based on days
-        if (data.column.index === 9) { // Aging column
-          const agingDays = parseInt(rowData[9]) || 0;
-          if (agingDays > 14) {
-            data.cell.styles.fillColor = [255, 220, 220]; // Light red for high aging
-            data.cell.styles.fontStyle = 'bold';
-            data.cell.styles.textColor = [150, 0, 0]; // Dark red text
-          } else if (agingDays > 7) {
-            data.cell.styles.fillColor = [255, 245, 220]; // Light yellow for medium aging
-            data.cell.styles.textColor = [120, 80, 0]; // Dark yellow text
-          }
-        }
-
-        // Style cost column for better readability
-        if (data.column.index === 6) { // Cost column
-          data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.textColor = [0, 80, 0]; // Dark green for cost
-        }
-
-        // Style pieces column
-        if (data.column.index === 5) { // Pieces column
-          data.cell.styles.fontStyle = 'bold';
-        }
-      }
-    },
-    columnStyles: {
-      0: { 
-        cellWidth: 15, 
-        halign: 'center',
-        fontStyle: 'bold'
-      },
-      1: { 
-        cellWidth: 20, 
-        fontStyle: 'bold',
-        halign: 'center'
-      },
-      2: { 
-        cellWidth: 35,
-        halign: 'center',
-        halign: 'center'
-      },
-      3: { 
-        cellWidth: 35,
-        halign: 'center'
-      },
-      4: { 
-        cellWidth: 32,
-        halign: 'center'
-      },
-      5: { 
-        cellWidth: 25, 
-        halign: 'center'
-      },
-      6: { 
-        cellWidth: 25, 
-        halign: 'center'
-      },
-      7: { 
-        cellWidth: 25, 
-        halign: 'center'
-      },
-      8: { 
-        cellWidth: 25,
-        halign: 'center'
-      },
-      9: { 
-        cellWidth: 18, 
-        halign: 'center',
-        fontStyle: 'bold'
-      },
-      10: { 
-        cellWidth: 24, 
-        halign: 'center',
-        fontStyle: 'bold'
-      }
-    },
-    tableWidth: 'wrap',
-    showHead: 'firstPage',
-    useCss: false
-  });
-
-  // Add legend for pending zips
-  const finalY = doc.lastAutoTable.finalY || margin + 25;
-  if (finalY < pageHeight - 15) {
-    doc.setFontSize(8);
-    doc.setTextColor(100, 100, 100);
+    // Subtitle - Dark gray text
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80); // Dark gray for subtitle
     doc.setFont('helvetica', 'normal');
-    // doc.text('* Rows highlighted in light red indicate pending zip orders', margin + 5, finalY + 8);
-    // doc.text('* High aging days (>14) are highlighted in light red', margin + 5, finalY + 12);
-  }
+    doc.text(`Generated on: ${new Date().toLocaleDateString('en-IN')}`, pageWidth / 2, margin + 16, { align: 'center' });
 
-  // Save with descriptive filename
-  const timestamp = new Date().toISOString().split('T')[0];
-  doc.save(`zip-orders-report-${timestamp}.pdf`);
-};
+    // Prepare table data with zip status
+    const tableData = filteredData.map((row, index) => {
+      const hasPendingZip = !row.hasSupplierEntry || !row.hasMaterialReceived;
+      const zipStatus = hasPendingZip ? 'PENDING' : 'DONE';
+
+      return [
+        (index + 1).toString(),
+        row['Lot Number'] || row['Lot No'] || '-',
+        row['Garment Type'] || '-',
+        row['Style'] || '-',
+        row['Fabric'] || '-',
+        row['Brand'] || '-',
+        formatNumber(row['Total Pieces'] || row['Pcs']),
+        row['Section'] || '-',
+        row['Season'] || '-',
+        row['Party Name'] || '-',
+        row['Direct Stitching'] || '-',
+        formatCurrency(row['Total Cost (₹)']).replace('₹', ''),
+        formatDate(row['Issue Date']),
+        row['Supervisor'] || '-',
+        row.aging?.toString() || '0',
+        zipStatus
+      ];
+    });
+
+    // Create table with optimized column widths for A3
+    autoTable(doc, {
+      head: [[
+        'Sr.No.',
+        'Lot No',
+        'Garment Type',
+        'Style',
+        'Fabric',
+        'Brand',
+        'Pcs',
+        'Section',
+        'Season',
+        'Party Name',
+        'Direct Stitching',
+        'Cost',
+        'Issue Date',
+        'Supervisor',
+        'Aging (Days)',
+        'Status'
+      ]],
+      body: tableData,
+      startY: margin + 25,
+      margin: { left: margin, right: margin },
+      styles: {
+        fontSize: 8,
+        cellPadding: 3,
+        lineColor: [80, 80, 80],
+        lineWidth: 0.25,
+        textColor: [0, 0, 0],
+        font: 'helvetica',
+        fontStyle: 'normal'
+      },
+      headStyles: {
+        fillColor: [0, 0, 128], // Navy blue background
+        textColor: [255, 255, 255], // White text
+        fontStyle: 'bold',
+        fontSize: 8,
+        lineWidth: 0.25,
+        lineColor: [80, 80, 80],
+        halign: 'center'
+      },
+      bodyStyles: {
+        fontSize: 8,
+        lineWidth: 0.25,
+        lineColor: [150, 150, 150],
+        textColor: [0, 0, 0],
+        halign: 'center'
+      },
+      alternateRowStyles: {
+        fillColor: [245, 245, 245]
+      },
+      tableWidth: 'wrap',
+      showHead: 'firstPage',
+      useCss: false
+    });
+
+    // Save with descriptive filename
+    const timestamp = new Date().toISOString().split('T')[0];
+    doc.save(`dori-orders-report-${timestamp}.pdf`);
+  };
   // Get aging color based on days
   const getAgingColor = (days) => {
     if (days <= 7) return '#059669'; // Green for 0-7 days
@@ -618,7 +543,7 @@ const downloadPDF = () => {
       {/* Header */}
       <div style={styles.header}>
         <div style={styles.headerLeft}>
-          <button 
+          <button
             onClick={handleBackButton}
             style={styles.backButton}
             title="Go back"
@@ -654,23 +579,23 @@ const downloadPDF = () => {
             <p style={styles.statLabel}>Total Orders</p>
           </div>
         </div>
-        
-        <div style={styles.statCard}>
+
+        {/* <div style={styles.statCard}>
           <div style={styles.statIcon}>👕</div>
           <div style={styles.statContent}>
             <h3 style={styles.statNumber}>{formatNumber(stats.totalPieces)}</h3>
             <p style={styles.statLabel}>Total Pieces</p>
           </div>
-        </div>
-        
-        <div style={styles.statCard}>
+        </div> */}
+
+        {/* <div style={styles.statCard}>
           <div style={styles.statIcon}>💰</div>
           <div style={styles.statContent}>
             <h3 style={styles.statNumber}>{formatCurrency(stats.totalCost)}</h3>
             <p style={styles.statLabel}>Total Cost</p>
           </div>
-        </div>
-        
+        </div> */}
+
         {/* <div style={styles.statCard}>
           <div style={styles.statIcon}>⏱️</div>
           <div style={styles.statContent}>
@@ -678,7 +603,7 @@ const downloadPDF = () => {
             <p style={styles.statLabel}>Avg. Aging (Days)</p>
           </div>
         </div> */}
-        
+
         <div style={styles.statCard}>
           <div style={styles.statIcon}>✅</div>
           <div style={styles.statContent}>
@@ -686,7 +611,7 @@ const downloadPDF = () => {
             <p style={styles.statLabel}>Gate Entry Done</p>
           </div>
         </div>
-        
+
         <div style={styles.statCard}>
           <div style={styles.statIcon}>📦</div>
           <div style={styles.statContent}>
@@ -694,7 +619,7 @@ const downloadPDF = () => {
             <p style={styles.statLabel}>Material Received</p>
           </div>
         </div>
-        
+
         <div style={styles.statCard}>
           <div style={styles.statIcon}>🏢</div>
           <div style={styles.statContent}>
@@ -717,7 +642,7 @@ const downloadPDF = () => {
             onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
           />
         </div>
-        
+
         <div style={styles.filtersGrid}>
           <div style={styles.filterGroup}>
             <label style={styles.filterLabel}>Garment Type</label>
@@ -816,7 +741,7 @@ const downloadPDF = () => {
           <button
             onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
             disabled={currentPage === 1}
-            style={{...styles.paginationButton, ...(currentPage === 1 ? styles.disabledButton : {})}}
+            style={{ ...styles.paginationButton, ...(currentPage === 1 ? styles.disabledButton : {}) }}
           >
             Previous
           </button>
@@ -826,7 +751,7 @@ const downloadPDF = () => {
           <button
             onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
             disabled={currentPage === totalPages}
-            style={{...styles.paginationButton, ...(currentPage === totalPages ? styles.disabledButton : {})}}
+            style={{ ...styles.paginationButton, ...(currentPage === totalPages ? styles.disabledButton : {}) }}
           >
             Next
           </button>
@@ -862,10 +787,16 @@ const downloadPDF = () => {
               <thead>
                 <tr>
                   <th style={styles.tableHeader}>Sr. No.</th>
-                  <th style={styles.tableHeader}>Lot No.</th>
+                  <th style={styles.tableHeader}>Lot No</th>
                   <th style={styles.tableHeader}>Garment Type</th>
                   <th style={styles.tableHeader}>Style</th>
-                  <th style={styles.tableHeader}>Pieces</th>
+                  <th style={styles.tableHeader}>Fabric</th>
+                  <th style={styles.tableHeader}>Brand</th>
+                  <th style={styles.tableHeader}>Pcs</th>
+                  <th style={styles.tableHeader}>Section</th>
+                  <th style={styles.tableHeader}>Season</th>
+                  <th style={styles.tableHeader}>Party Name</th>
+                  <th style={styles.tableHeader}>Direct Stitching</th>
                   <th style={styles.tableHeader}>Cost</th>
                   <th style={styles.tableHeader}>Issue Date</th>
                   <th style={styles.tableHeader}>Supervisor</th>
@@ -879,11 +810,11 @@ const downloadPDF = () => {
               <tbody>
                 {paginatedData.map((row, index) => {
                   const globalIndex = (currentPage - 1) * itemsPerPage + index;
-                  const selectedPlacements = safeJSONParse(row['Selected Placements'], []);
-                  
+                  const selectedPlacements = parsePlacements(row['Selected Placements']);
+
                   return (
-                    <tr 
-                      key={row.id} 
+                    <tr
+                      key={row.id}
                       style={styles.tableRow}
                       onMouseEnter={(e) => e.target.parentNode.style.backgroundColor = '#f8fafc'}
                       onMouseLeave={(e) => e.target.parentNode.style.backgroundColor = '#ffffff'}
@@ -892,20 +823,19 @@ const downloadPDF = () => {
                         <strong>{globalIndex + 1}</strong>
                       </td>
                       <td style={styles.tableCell}>
-                        <strong style={styles.lotNumber}>{row['Lot Number']}</strong>
+                        <strong style={styles.lotNumber}>{row['Lot Number'] || row['Lot No'] || '-'}</strong>
                       </td>
+                      <td style={styles.tableCell}>{row['Garment Type'] || '-'}</td>
+                      <td style={styles.tableCell}>{row['Style'] || '-'}</td>
+                      <td style={styles.tableCell}>{row['Fabric'] || '-'}</td>
+                      <td style={styles.tableCell}>{row['Brand'] || '-'}</td>
                       <td style={styles.tableCell}>
-                        <div style={styles.garmentInfo}>
-                          <div style={styles.garmentType}>{row['Garment Type']}</div>
-                          {row['Fabric'] && (
-                            <div style={styles.fabric}>{row['Fabric']}</div>
-                          )}
-                        </div>
+                        <strong>{formatNumber(row['Total Pieces'] || row['Pcs'])}</strong>
                       </td>
-                      <td style={styles.tableCell}>{row['Style']}</td>
-                      <td style={styles.tableCell}>
-                        <strong>{formatNumber(row['Total Pieces'])}</strong>
-                      </td>
+                      <td style={styles.tableCell}>{row['Section'] || '-'}</td>
+                      <td style={styles.tableCell}>{row['Season'] || '-'}</td>
+                      <td style={styles.tableCell}>{row['Party Name'] || '-'}</td>
+                      <td style={styles.tableCell}>{row['Direct Stitching'] || '-'}</td>
                       <td style={styles.tableCell}>
                         <strong style={styles.cost}>{formatCurrency(row['Total Cost (₹)'])}</strong>
                       </td>
@@ -960,7 +890,7 @@ const downloadPDF = () => {
                         </div>
                       </td>
                       <td style={styles.tableCell}>
-                        <div 
+                        <div
                           style={{
                             ...styles.agingBadge,
                             backgroundColor: getAgingColor(row.aging),
@@ -993,7 +923,7 @@ const downloadPDF = () => {
             <button
               onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
               disabled={currentPage === 1}
-              style={{...styles.paginationButton, ...(currentPage === 1 ? styles.disabledButton : {})}}
+              style={{ ...styles.paginationButton, ...(currentPage === 1 ? styles.disabledButton : {}) }}
             >
               Previous
             </button>
@@ -1003,7 +933,7 @@ const downloadPDF = () => {
             <button
               onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
               disabled={currentPage === totalPages}
-              style={{...styles.paginationButton, ...(currentPage === totalPages ? styles.disabledButton : {})}}
+              style={{ ...styles.paginationButton, ...(currentPage === totalPages ? styles.disabledButton : {}) }}
             >
               Next
             </button>

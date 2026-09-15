@@ -40,6 +40,22 @@ const safeJSONParse = (str, defaultValue = {}) => {
   }
 };
 
+const parsePlacements = (val) => {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed;
+      if (typeof parsed === 'string' && parsed.trim()) return [parsed.trim()];
+      if (typeof parsed === 'object' && parsed !== null) return Object.values(parsed).filter(Boolean);
+    } catch {
+      return val.split(',').map(s => s.trim().replace(/^["'\[\]]+|["'\[\]]+$/g, '')).filter(Boolean);
+    }
+  }
+  return [];
+};
+
 const parseColorBreakdown = (breakdown) => {
   if (!breakdown) return [];
   try {
@@ -161,7 +177,7 @@ const ZipPurchaseDashboard = () => {
 
     // Extract all unique zip placements
     const allPlacements = data.flatMap(row => {
-      const placements = safeJSONParse(row['Selected Placements'], []);
+      const placements = parsePlacements(row['Selected Placements']);
       return placements;
     }).filter(Boolean);
 
@@ -240,9 +256,9 @@ const ZipPurchaseDashboard = () => {
     // Add zip placement filter
     if (filters.zipPlacement) {
       result = result.filter(row => {
-        const placements = safeJSONParse(row['Selected Placements'], []);
+        const placements = parsePlacements(row['Selected Placements']);
         return placements.some(placement =>
-          placement.toLowerCase().includes(filters.zipPlacement.toLowerCase())
+          String(placement).toLowerCase().includes(filters.zipPlacement.toLowerCase())
         );
       });
     }
@@ -864,7 +880,13 @@ const ZipPurchaseDashboard = () => {
                   <th style={styles.tableHeader}>Lot No.</th>
                   <th style={styles.tableHeader}>Garment Type</th>
                   <th style={styles.tableHeader}>Style</th>
+                  <th style={styles.tableHeader}>Fabric</th>
+                  <th style={styles.tableHeader}>Brand</th>
                   <th style={styles.tableHeader}>Pieces</th>
+                  <th style={styles.tableHeader}>Section</th>
+                  <th style={styles.tableHeader}>Season</th>
+                  <th style={styles.tableHeader}>Party Name</th>
+                  <th style={styles.tableHeader}>Direct Stitching</th>
                   <th style={styles.tableHeader}>Cost</th>
                   <th style={styles.tableHeader}>Issue Date</th>
                   <th style={styles.tableHeader}>Supervisor</th>
@@ -878,7 +900,7 @@ const ZipPurchaseDashboard = () => {
               <tbody>
                 {paginatedData.map((row, index) => {
                   const globalIndex = (currentPage - 1) * itemsPerPage + index;
-                  const selectedPlacements = safeJSONParse(row['Selected Placements'], []);
+                  const selectedPlacements = parsePlacements(row['Selected Placements']);
 
                   return (
                     <tr
@@ -894,17 +916,18 @@ const ZipPurchaseDashboard = () => {
                         <strong style={styles.lotNumber}>{row['Lot Number']}</strong>
                       </td>
                       <td style={styles.tableCell}>
-                        <div style={styles.garmentInfo}>
-                          <div style={styles.garmentType}>{row['Garment Type']}</div>
-                          {row['Fabric'] && (
-                            <div style={styles.fabric}>{row['Fabric']}</div>
-                          )}
-                        </div>
+                        <div style={styles.garmentType}>{row['Garment Type'] || '—'}</div>
                       </td>
-                      <td style={styles.tableCell}>{row['Style']}</td>
+                      <td style={styles.tableCell}>{row['Style'] || '—'}</td>
+                      <td style={styles.tableCell}>{row['Fabric'] || '—'}</td>
+                      <td style={styles.tableCell}>{row['Brand'] || '—'}</td>
                       <td style={styles.tableCell}>
                         <strong>{formatNumber(row['Total Pieces'])}</strong>
                       </td>
+                      <td style={styles.tableCell}>{row['Section'] || '—'}</td>
+                      <td style={styles.tableCell}>{row['Season'] || '—'}</td>
+                      <td style={styles.tableCell}>{row['Party Name'] || '—'}</td>
+                      <td style={styles.tableCell}>{row['Direct Stitching'] || '—'}</td>
                       <td style={styles.tableCell}>
                         <strong style={styles.cost}>{formatCurrency(row['Total Cost (₹)'])}</strong>
                       </td>

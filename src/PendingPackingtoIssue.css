@@ -402,6 +402,7 @@
   border-collapse: collapse;
   font-size: 0.88rem;
   min-width: 1800px;
+  border: 1.5px solid #cbd5e1;
 }
 
 .packing-table thead {
@@ -414,19 +415,22 @@
   background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
   color: #ffffff;
   font-weight: 800;
-  padding: 16px 14px;
-  text-align: left;
+  padding: 14px 10px;
+  text-align: center;
+  vertical-align: middle;
   white-space: nowrap;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 2px solid #312e81;
+  letter-spacing: 0.04em;
+  border: 1px solid #4338ca;
 }
 
 .packing-table td {
-  padding: 14px;
-  border-bottom: 1px solid #f1f5f9;
+  padding: 10px 8px;
+  border: 1px solid #cbd5e1;
   color: #1e293b;
+  text-align: center;
+  vertical-align: middle;
   white-space: nowrap;
 }
 
@@ -444,7 +448,82 @@
   background: #e0e7ff;
   padding: 4px 12px;
   border-radius: 8px;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.status-badge.status-yes {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #86efac;
+}
+
+.status-badge.status-no {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #cbd5e1;
+}
+
+.status-badge.status-pending {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde047;
+}
+
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.priority-badge.priority-normal {
+  background: #e0e7ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+.priority-badge.priority-high {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+  font-weight: 800;
+}
+
+.priority-badge.priority-urgent {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #ef4444;
+  font-weight: 800;
+}
+
+.packing-supervisor-badge {
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Badge Styles */
@@ -510,4 +589,449 @@
 .pagination-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ==========================================================================
+   Remarks Column & Action Buttons
+   ========================================================================== */
+.remarks-cell-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 200px;
+  max-width: 280px;
+}
+
+.remark-bubble {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-left: 3.5px solid #6366f1;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  color: #1e293b;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.remark-bubble:hover {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+  border-left-color: #4f46e5;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+}
+
+.remark-text-preview {
+  font-weight: 600;
+  line-height: 1.35;
+  word-break: break-word;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.remark-meta-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.remarks-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.btn-add-remark-inline {
+  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+  color: #4338ca;
+  border: 1px dashed #818cf8;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+}
+
+.btn-add-remark-inline:hover {
+  background: #4338ca;
+  color: #ffffff;
+  border-style: solid;
+  border-color: #4338ca;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(67, 56, 202, 0.2);
+}
+
+.btn-remark-history-badge {
+  background: #ffffff;
+  color: #6366f1;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: all 0.15s ease;
+}
+
+.btn-remark-history-badge:hover {
+  background: #6366f1;
+  color: #ffffff;
+}
+
+.no-remarks-placeholder {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+/* ==========================================================================
+   Remarks Modal Dialog (Glassmorphism & Professional Layout)
+   ========================================================================== */
+.remarks-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  padding: 16px;
+  animation: modalFadeIn 0.2s ease;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.remarks-modal-box {
+  background: #ffffff;
+  border-radius: 24px;
+  max-width: 580px;
+  width: 100%;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 60px -15px rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  overflow: hidden;
+  animation: modalSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.remarks-modal-header {
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 100%);
+  color: #ffffff;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.remarks-modal-header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.remarks-modal-header-title h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: -0.01em;
+}
+
+.remarks-modal-lot-tag {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffd700;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.remarks-modal-close-btn {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  font-size: 1.1rem;
+  border-radius: 12px;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.remarks-modal-close-btn:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+  transform: rotate(90deg);
+}
+
+.remarks-modal-body {
+  padding: 22px 24px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Lot Info Card inside modal */
+.remarks-lot-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.remarks-lot-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.remarks-lot-field-label {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+
+.remarks-lot-field-value {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #1e293b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* History Timeline inside modal */
+.remarks-history-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.remarks-history-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.remarks-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.remarks-history-item {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #6366f1;
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.remarks-history-item.latest {
+  background: #f5f7ff;
+  border-color: #c7d2fe;
+  border-left-color: #4338ca;
+}
+
+.remarks-history-text {
+  font-size: 0.88rem;
+  color: #0f172a;
+  font-weight: 600;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.remarks-history-time {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* New Remark Input Section */
+.remarks-input-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.remarks-input-label {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #1e1b4b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.remarks-quick-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.remark-preset-tag {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  padding: 4px 10px;
+  border-radius: 16px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.remark-preset-tag:hover {
+  background: #e0e7ff;
+  color: #4338ca;
+  border-color: #a5b4fc;
+  transform: translateY(-1px);
+}
+
+.remarks-textarea {
+  width: 100%;
+  min-height: 85px;
+  padding: 12px 14px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 14px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #0f172a;
+  box-sizing: border-box;
+  resize: vertical;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.remarks-textarea:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  background: #ffffff;
+}
+
+.remarks-textarea::placeholder {
+  color: #94a3b8;
+}
+
+.remarks-modal-footer {
+  padding: 16px 24px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.btn-cancel-remark {
+  padding: 10px 20px;
+  background: #ffffff;
+  color: #475569;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 14px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-cancel-remark:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.btn-save-remark {
+  padding: 10px 24px;
+  background: linear-gradient(135deg, #4338ca 0%, #3730a3 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 14px;
+  font-size: 0.88rem;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+  box-shadow: 0 4px 14px rgba(67, 56, 202, 0.3);
+}
+
+.btn-save-remark:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(67, 56, 202, 0.4);
+}
+
+.btn-save-remark:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }

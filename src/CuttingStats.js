@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend } from "./config";
+import { store } from "./store.js";
 
 /** ====== CONFIG ====== */
 const JOB_SHEET_ID = SPREADSHEET_IDS.JOBORDER;
@@ -20,18 +21,18 @@ const CUTTING_BIG_RANGE = `${CUTTING_SHEET_NAME}!A1:ZZ200000`;
 
 // Canonical output columns (order)
 const OUTPUT_COLS = [
-  "Job Order No",
+  "Lot No",
+  "Garment Type",
+  "Style",
   "Fabric",
   "Brand",
-  "Style",
-  "Party Name",
-  "Garment Type",
+  "Total Qty",
   "Section",
   "Season",
+  "Party Name",
   "Direct Stitching",
-  "Lot No",
+  "Job Order No",
   "Days after PO issue",
-  "Total Qty",
   "Pending Shade",
   "Cutting Date",
   "Remarks",
@@ -80,7 +81,7 @@ function formatSavedAtToYMD(savedAt) {
   return `${y}-${m}-${day}`;
 }
 
-function daysAfter(poDateStr, cuttingDateVal) {
+function daysAfter(poDateStr, cuttingDateVal, isCuttingDone = false) {
   if (!poDateStr) return "";
 
   const parseDate = (val) => {
@@ -88,12 +89,45 @@ function daysAfter(poDateStr, cuttingDateVal) {
     if (val instanceof Date && !isNaN(val.getTime())) {
       return new Date(val.getFullYear(), val.getMonth(), val.getDate());
     }
+    if (typeof val === "number" && !isNaN(val)) {
+      if (val > 30000 && val < 70000) {
+        const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+        if (!isNaN(d.getTime())) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      }
+      const d = new Date(val);
+      if (!isNaN(d.getTime())) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
     const str = String(val).trim();
     if (!str) return null;
 
-    const ymdParts = str.split("-");
-    if (ymdParts.length === 3) {
-      const [y, m, d] = ymdParts.map((p) => parseInt(p, 10));
+    // DD MMM YYYY (e.g., "27 Aug 2025" or "27-Aug-2025")
+    const mmmMatch = str.match(/^(\d{1,2})[\s\-]+([A-Za-z]{3,9})[\s\-]+(\d{4})/);
+    if (mmmMatch) {
+      const day = parseInt(mmmMatch[1], 10);
+      const monthStr = mmmMatch[2].toLowerCase().slice(0, 3);
+      const year = parseInt(mmmMatch[3], 10);
+      const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+      const monthIdx = months.indexOf(monthStr);
+      if (monthIdx !== -1 && !isNaN(day) && !isNaN(year)) {
+        return new Date(year, monthIdx, day);
+      }
+    }
+
+    // YYYY-MM-DD or YYYY/MM/DD
+    const ymdMatch = str.match(/^(\d{4})[-\/\s](\d{1,2})[-\/\s](\d{1,2})/);
+    if (ymdMatch) {
+      const y = parseInt(ymdMatch[1], 10);
+      const m = parseInt(ymdMatch[2], 10);
+      const d = parseInt(ymdMatch[3], 10);
+      if (y && m && d) return new Date(y, m - 1, d);
+    }
+
+    // DD-MM-YYYY or DD/MM/YYYY
+    const dmyMatch = str.match(/^(\d{1,2})[-\/\s](\d{1,2})[-\/\s](\d{4})/);
+    if (dmyMatch) {
+      const d = parseInt(dmyMatch[1], 10);
+      const m = parseInt(dmyMatch[2], 10);
+      const y = parseInt(dmyMatch[3], 10);
       if (y && m && d) return new Date(y, m - 1, d);
     }
 
@@ -108,11 +142,12 @@ function daysAfter(poDateStr, cuttingDateVal) {
   if (!start) return "";
 
   let end = null;
-  if (cuttingDateVal) {
+  // If cutting is DONE for the lot and Cutting Date is available, calculate days from Cut Date - Job Date
+  if (isCuttingDone && cuttingDateVal) {
     end = parseDate(cuttingDateVal);
   }
 
-  // If cutting is NOT done for the lot, use Today's date
+  // If cutting is NOT done (or cutting date is missing), dynamically calculate days up to Today
   if (!end) {
     const now = new Date();
     end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -433,7 +468,15 @@ export default function CuttingStatsReport() {
 
   const distinctRemarks = useMemo(() => {
     const set = new Set();
-    rows.forEach((r) => splitRemarks(r.Remarks).forEach((t) => set.add(t)));
+    rows.forEach((r) => {
+      splitRemarks(r.Remarks).forEach((t) => {
+        if (norm(t).includes("fabricissued") || norm(t) === "fabricissued") {
+          set.add("Fabric Issued");
+        } else {
+          set.add(t);
+        }
+      });
+    });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
@@ -483,10 +526,31 @@ export default function CuttingStatsReport() {
     abortRef.current = ctrl;
 
     try {
-      // Job Orders
-      const job = await fetchSheet(
-        { sheetId: JOB_SHEET_ID, range: JOB_RANGE, apiKey: API_KEY, signal: ctrl.signal }
-      );
+      const [job, idxRes, cuttingRes, fabricRes] = await Promise.all([
+        fetchSheet({
+          sheetId: JOB_SHEET_ID,
+          range: JOB_RANGE,
+          apiKey: API_KEY,
+          signal: ctrl.signal,
+        }),
+        fetchSheet({
+          sheetId: BUDGET_SHEET_ID,
+          range: INDEX_RANGE,
+          apiKey: API_KEY,
+          signal: ctrl.signal,
+        }),
+        fetchSheet({
+          sheetId: BUDGET_SHEET_ID,
+          range: CUTTING_BIG_RANGE,
+          apiKey: API_KEY,
+          signal: ctrl.signal,
+        }),
+        store.getDailyFabricIssuanceReport("", "").catch((err) => {
+          console.warn("Fabric issuance fetch error:", err);
+          return null;
+        }),
+      ]);
+
       let jobRows = convertValuesToObjects(job.values);
 
       // Exclude lots whose status starts with "cancel" (Cancelled, Canceled, etc.)
@@ -496,10 +560,6 @@ export default function CuttingStatsReport() {
         return !sn.startsWith("cancel");
       });
 
-      // Index sheet (for sizes/shades/savedAt)
-      const idxRes = await fetchSheet(
-        { sheetId: BUDGET_SHEET_ID, range: INDEX_RANGE, apiKey: API_KEY, signal: ctrl.signal }
-      );
       const idxValues = idxRes.values || [];
       const idxHeader = idxValues[0] || [];
       const indexMap = new Map();
@@ -508,11 +568,37 @@ export default function CuttingStatsReport() {
         if (entry) indexMap.set(entry.lot, entry);
       }
 
-      // Cutting big read
-      const cuttingRes = await fetchSheet(
-        { sheetId: BUDGET_SHEET_ID, range: CUTTING_BIG_RANGE, apiKey: API_KEY, signal: ctrl.signal }
-      );
       const bigCuttingValues = cuttingRes.values || [];
+
+      // Parse fabric issuance records
+      let fabricIssuances = [];
+      if (Array.isArray(fabricRes)) {
+        fabricIssuances = fabricRes;
+      } else if (fabricRes && Array.isArray(fabricRes.data)) {
+        fabricIssuances = fabricRes.data;
+      } else if (fabricRes && fabricRes.success && Array.isArray(fabricRes.data)) {
+        fabricIssuances = fabricRes.data;
+      }
+
+      const fabricIssuedMap = new Map();
+      fabricIssuances.forEach((item) => {
+        const rawLot = String(item.lotNumber || item.lotNo || item.lot || "").trim();
+        if (!rawLot) return;
+        const keyNorm = norm(rawLot);
+        const keyLower = rawLot.toLowerCase();
+        const rawDate = item.date || item.issueDate || item.createdAt || item.timestamp || "";
+        let formattedDate = "";
+        if (rawDate) {
+          formattedDate = formatSavedAtToYMD(rawDate) || String(rawDate);
+        }
+        const dataObj = {
+          lotNumber: rawLot,
+          issueDate: formattedDate,
+          rawDate: rawDate,
+        };
+        if (!fabricIssuedMap.has(keyNorm)) fabricIssuedMap.set(keyNorm, dataObj);
+        if (!fabricIssuedMap.has(keyLower)) fabricIssuedMap.set(keyLower, dataObj);
+      });
 
       // Per-lot summaries
       const lots = Array.from(new Set(jobRows.map((r) => String(r["Lot No"] || "").trim()).filter(Boolean)));
@@ -522,11 +608,16 @@ export default function CuttingStatsReport() {
       for (const lot of lots) {
         const ix = indexMap.get(lot);
         if (!ix) {
+          const fabricInfo = fabricIssuedMap.get(norm(lot)) || fabricIssuedMap.get(lot.toLowerCase().trim());
+          const isFabricIssued = !!fabricInfo;
+          const issueDate = fabricInfo?.issueDate || "";
+
           lotToSummary.set(lot, {
             totalQty: 0,
             remarks: "",
             remarks2: "",
-            remarks3: "Fabric Issue Pending",
+            remarks3: lot ? (isFabricIssued ? "Fabric Issued" : "Fabric Issue Pending") : "",
+            fabricIssueDate: isFabricIssued ? issueDate : "",
             cuttingDate: "",
           });
           pendingListTmp[lot] = [];
@@ -544,13 +635,15 @@ export default function CuttingStatsReport() {
         let remarks2 = "";
         let remarks3 = "";
 
+        const isCuttingDone = pendingShadeKeys.size === 0 && totalQty > 0;
+
         if (pendingShadeKeys.size > 0) {
           remarks2 = "Cutting Pending";
         } else {
           remarks = "Cutting Done";
         }
 
-        lotToSummary.set(lot, { totalQty, remarks, remarks2, remarks3, cuttingDate });
+        lotToSummary.set(lot, { totalQty, remarks, remarks2, remarks3, isCuttingDone, fabricIssueDate: "", cuttingDate });
         pendingListTmp[lot] = pendingList;
       }
 
@@ -563,9 +656,12 @@ export default function CuttingStatsReport() {
             remarks: "",
             remarks2: "",
             remarks3: lot ? "Fabric Issue Pending" : "",
+            isCuttingDone: false,
+            fabricIssueDate: "",
             cuttingDate: "",
           };
-        const days = daysAfter(r["PO Date"] || r["Date"], sum.cuttingDate);
+        const isDone = sum.isCuttingDone || sum.remarks === "Cutting Done";
+        const days = daysAfter(r["PO Date"] || r["Date"], sum.cuttingDate, isDone);
 
         const remarksList = [sum.remarks, sum.remarks2, sum.remarks3].filter(Boolean);
         const mergedRemarks = remarksList.join(" | ");
@@ -577,6 +673,7 @@ export default function CuttingStatsReport() {
           "Pending Shade": "",
           "Cutting Date": sum.cuttingDate || "",
           Remarks: mergedRemarks,
+          fabricIssueDate: sum.fabricIssueDate || "",
         };
       });
 
@@ -684,18 +781,18 @@ const handleExportPDF = () => {
 
   // Define the new header order
   const HEADER_ORDER = [
-    "Job Order No",
     "Lot No",
-    "Fabric",
-    "Brand", 
-    "Style",
     "Garment Type",
-    "Party Name",
+    "Style",
+    "Fabric",
+    "Brand",
+    "Total Qty",
     "Section",
     "Season",
+    "Party Name",
     "Direct Stitching",
+    "Job Order No",
     "Days after PO issue",
-    "Total Qty",
     "Pending Shade",
     "Cutting Date",
     "Remarks"
@@ -753,18 +850,18 @@ const handleExportPDF = () => {
 
   // Calculate total width to ensure it fits
   const columnWidths = {
-    "Job Order No": 60,
     "Lot No": 50,
+    "Garment Type": 85,
+    "Style": 80,
     "Fabric": 90,
     "Brand": 75,
-    "Style": 80,
-    "Garment Type": 85,
-    "Party Name": 55,
+    "Total Qty": 45,
     "Section": 45,
     "Season": 45,
+    "Party Name": 55,
     "Direct Stitching": 50,
+    "Job Order No": 60,
     "Days after PO issue": 50,
-    "Total Qty": 45,
     "Pending Shade": 120,
     "Cutting Date": 65,
     "Remarks": 80
@@ -1510,6 +1607,13 @@ const handleExportPDF = () => {
           border: 1px solid #fed7aa;
         }
 
+        .fabric-issued-badge {
+          background: #ecfdf5;
+          color: #047857;
+          border: 1px solid #a7f3d0;
+          font-weight: 700;
+        }
+
         .issue-badge {
           background: #fef2f2;
           color: #991b1b;
@@ -2073,25 +2177,57 @@ const handleExportPDF = () => {
 
                         if (h === "Remarks") {
                           const remarks = String(row[h] || "");
+                          const fabricIssueDate = row.fabricIssueDate || "";
                           return (
                             <td key={h} className="table-cell">
                               <div className="remarks-badges">
-                                {splitRemarks(remarks).map((remark, idx) => (
-                                  <span
-                                    key={idx}
-                                    className={`remark-badge ${
-                                      remark.includes("Done")
-                                        ? "done-badge"
-                                        : remark.includes("Pending")
-                                        ? "pending-badge"
-                                        : remark.includes("Issue")
-                                        ? "issue-badge"
-                                        : "default-badge"
-                                    }`}
-                                  >
-                                    {remark}
-                                  </span>
-                                ))}
+                                {splitRemarks(remarks).map((remark, idx) => {
+                                  const isFabricIssued = remark.toLowerCase().includes("fabric issued") || remark.toLowerCase() === "fabric issued";
+                                  return (
+                                    <div
+                                      key={idx}
+                                      style={{
+                                        display: 'inline-flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        gap: '2px'
+                                      }}
+                                    >
+                                      <span
+                                        className={`remark-badge ${
+                                          isFabricIssued
+                                            ? "fabric-issued-badge"
+                                            : remark.includes("Done")
+                                              ? "done-badge"
+                                              : remark.includes("Pending")
+                                                ? "pending-badge"
+                                                : remark.includes("Issue")
+                                                  ? "issue-badge"
+                                                  : "default-badge"
+                                        }`}
+                                      >
+                                        {remark}
+                                      </span>
+                                      {isFabricIssued && fabricIssueDate && (
+                                        <span
+                                          style={{
+                                            fontSize: '10px',
+                                            fontWeight: '700',
+                                            color: '#065f46',
+                                            backgroundColor: '#d1fae5',
+                                            border: '1px solid #6ee7b7',
+                                            padding: '1px 5px',
+                                            borderRadius: '4px',
+                                            whiteSpace: 'nowrap',
+                                            marginTop: '1px'
+                                          }}
+                                        >
+                                          📅 {fabricIssueDate}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </td>
                           );

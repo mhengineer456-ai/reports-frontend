@@ -256,10 +256,11 @@ const StitchingCompleteLot = () => {
   const [departmentLoading, setDepartmentLoading] = useState(false);
   const departmentCache = useRef(new Map());
 
-  // PDF Export Modal and Column Selection States
+  // PDF Export Modal, Column Selection and Report Mode States
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [selectedPdfColumns, setSelectedPdfColumns] = useState([]);
   const [pdfGenerating, setPdfGenerating] = useState(false);
+  const [pdfReportMode, setPdfReportMode] = useState('combined'); // 'combined' | 'supervisorWise'
 
   const DEPARTMENT_OPTIONS = useMemo(() => [
     { id: 'KajButton', label: 'KajButton', color: '#6366f1' },
@@ -273,14 +274,15 @@ const StitchingCompleteLot = () => {
   ], []);
 
   const fetchDepartmentData = useCallback(async (dept) => {
-    if (!dept) return;
+    if (!dept) return {};
 
     if (departmentCache.current.has(dept)) {
+      const cached = departmentCache.current.get(dept);
       setDepartmentDataMap(prev => ({
         ...prev,
-        [dept]: departmentCache.current.get(dept)
+        [dept]: cached
       }));
-      return;
+      return cached;
     }
 
     try {
@@ -291,12 +293,20 @@ const StitchingCompleteLot = () => {
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.lots) {
-          departmentCache.current.set(dept, json.lots);
+          // Store both original lot key and clean lot key for robust lookup
+          const indexedMap = {};
+          Object.entries(json.lots).forEach(([lotKey, info]) => {
+            indexedMap[lotKey] = info;
+            const cleanKey = String(lotKey).toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (cleanKey) indexedMap[cleanKey] = info;
+          });
+
+          departmentCache.current.set(dept, indexedMap);
           setDepartmentDataMap(prev => ({
             ...prev,
-            [dept]: json.lots
+            [dept]: indexedMap
           }));
-          return;
+          return indexedMap;
         }
       }
 
@@ -321,11 +331,11 @@ const StitchingCompleteLot = () => {
         const normK = (s) => String(s || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
         const findCol = (kws) => headers.findIndex(h => kws.some(k => normK(h).includes(normK(k))));
 
-        const lotIdx = findCol(['lot number', 'lot no', 'lot']);
+        const lotIdx = findCol(['lot number', 'lot no', 'lot', 'lot #']);
         const issueIdx = findCol(['date', 'issue date', 'kajbutton date', 'overlock date', 'feed up date', 'feedupdate', 'folding date', 'embroidery date', 'printing date', 'washing date', 'elastic date']);
-        const compIdx = findCol(['complete', 'completed', 'completion date', 'feed up complete', 'feed up completed']);
-        const wipIdx = findCol(['wip', 'remarks', 'status', 'wip feed up', 'feed up wip']);
-        const supIdx = findCol(['supervisor', 'feed up supervisor']);
+        const compIdx = findCol(['complete', 'completed', 'completion date', 'feed up complete', 'feed up completed', 'overlock complete', 'folding complete', 'kajbutton complete', 'washing complete', 'elastic complete', 'embroidery complete', 'printing complete']);
+        const wipIdx = findCol(['wip', 'remarks', 'status', 'wip feed up', 'feed up wip', 'wip overlock', 'wip folding', 'wip kajbutton', 'wip washing', 'wip elastic', 'wip embroidery', 'wip printing']);
+        const supIdx = findCol(['supervisor', 'feed up supervisor', 'overlock supervisor', 'folding supervisor', 'kajbutton supervisor', 'washing supervisor', 'elastic supervisor']);
 
         const map = {};
         for (let i = 1; i < rows.length; i++) {
@@ -339,7 +349,7 @@ const StitchingCompleteLot = () => {
           const isComp = !!rawComp && rawComp !== '[]' && rawComp !== '-' && !rawComp.toLowerCase().includes('pending');
           const hasIssue = !isComp && (rawWip.toLowerCase().includes('hold') || rawWip.toLowerCase().includes('issue') || rawWip.toLowerCase().includes('kaaj pending') || rawWip.toLowerCase().includes('pending'));
 
-          map[lot] = {
+          const lotObj = {
             lotNumber: lot,
             issueDate,
             completionDate: isComp ? rawComp : '',
@@ -348,15 +358,22 @@ const StitchingCompleteLot = () => {
             issueRemark: rawWip,
             supervisor
           };
+
+          map[lot] = lotObj;
+          const cleanLot = lot.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (cleanLot) map[cleanLot] = lotObj;
         }
         departmentCache.current.set(dept, map);
         setDepartmentDataMap(prev => ({
           ...prev,
           [dept]: map
         }));
+        return map;
       }
+      return {};
     } catch (err) {
       console.error('Error fetching department data:', err);
+      return {};
     } finally {
       setDepartmentLoading(false);
     }
@@ -373,6 +390,22 @@ const StitchingCompleteLot = () => {
       }
     }
     setSelectedDepartments(nextSelected);
+
+    // Sync selected PDF columns with the toggled department
+    setSelectedPdfColumns(prev => {
+      const filtered = (prev || []).filter(id => {
+        if (!id.startsWith('dept_')) return true;
+        const matched = DEPARTMENT_OPTIONS.find(d => id === `dept_${d.id}_issue` || id === `dept_${d.id}_comp`);
+        return matched && nextSelected.includes(matched.id);
+      });
+      nextSelected.forEach(dId => {
+        const issueCol = `dept_${dId}_issue`;
+        const compCol = `dept_${dId}_comp`;
+        if (!filtered.includes(issueCol)) filtered.push(issueCol);
+        if (!filtered.includes(compCol)) filtered.push(compCol);
+      });
+      return filtered;
+    });
   };
 
   // Helper to generate full list of available PDF columns (including all selected departments)
@@ -380,18 +413,19 @@ const StitchingCompleteLot = () => {
     const baseCols = [
       { id: 'sr', label: 'Sr', group: 'Basic Details', baseWidth: 8, defaultChecked: true },
       { id: 'lotNo', label: 'Lot No', group: 'Basic Details', baseWidth: 17, defaultChecked: true },
-      { id: 'fabric', label: 'Fabric', group: 'Basic Details', baseWidth: 26, defaultChecked: true },
       { id: 'garment', label: 'Garment', group: 'Basic Details', baseWidth: 26, defaultChecked: true },
       { id: 'style', label: 'Style', group: 'Basic Details', baseWidth: 26, defaultChecked: true },
+      { id: 'fabric', label: 'Fabric', group: 'Basic Details', baseWidth: 26, defaultChecked: true },
       { id: 'brand', label: 'Brand', group: 'Basic Details', baseWidth: 26, defaultChecked: true },
-      { id: 'party', label: 'Party', group: 'Basic Details', baseWidth: 14, defaultChecked: true },
-      { id: 'supervisor', label: 'Supervisor', group: 'Basic Details', baseWidth: 22, defaultChecked: true },
+      { id: 'totalPcs', label: 'Total PCS', group: 'Basic Details', baseWidth: 20, defaultChecked: true },
+      { id: 'section', label: 'Section', group: 'Basic Details', baseWidth: 14, defaultChecked: true },
       { id: 'season', label: 'Season', group: 'Basic Details', baseWidth: 9, defaultChecked: true },
-      { id: 'mwk', label: 'M/W/K', group: 'Basic Details', baseWidth: 10, defaultChecked: true },
+      { id: 'party', label: 'Party', group: 'Basic Details', baseWidth: 14, defaultChecked: true },
       { id: 'direct', label: 'Direct', group: 'Basic Details', baseWidth: 10, defaultChecked: true },
+      { id: 'supervisor', label: 'Supervisor', group: 'Basic Details', baseWidth: 22, defaultChecked: true },
+      { id: 'mwk', label: 'M/W/K', group: 'Basic Details', baseWidth: 10, defaultChecked: true },
       { id: 'issueDate', label: 'Issue Date', group: 'Basic Details', baseWidth: 17, defaultChecked: true },
-      { id: 'days', label: 'Days', group: 'Basic Details', baseWidth: 12, defaultChecked: true },
-      { id: 'totalPcs', label: 'Total PCS', group: 'Basic Details', baseWidth: 20, defaultChecked: true }
+      { id: 'days', label: 'Days', group: 'Basic Details', baseWidth: 12, defaultChecked: true }
     ];
 
     const deptCols = [];
@@ -411,7 +445,7 @@ const StitchingCompleteLot = () => {
       });
       deptCols.push({
         id: `dept_${dept.id}_comp`,
-        label: `${dept.label} Done`,
+        label: `${dept.label} Comp Date`,
         group: 'Department Data',
         deptId: dept.id,
         deptLabel: dept.label,
@@ -437,15 +471,11 @@ const StitchingCompleteLot = () => {
 
   const handleOpenPdfModal = useCallback(() => {
     const allCols = getAvailablePdfColumns();
-    setSelectedPdfColumns(prev => {
-      if (!prev || prev.length === 0) {
-        return allCols.filter(c => c.defaultChecked || c.isSelectedInPage).map(c => c.id);
-      }
-      // Ensure all currently selected departments on the page are included
-      const activeDeptCols = allCols.filter(c => c.isSelectedInPage).map(c => c.id);
-      const union = new Set([...prev, ...activeDeptCols]);
-      return Array.from(union);
-    });
+    const pageBaseCols = ['sr', 'lotNo', 'garment', 'style', 'fabric', 'brand', 'totalPcs', 'section', 'season', 'party', 'direct', 'supervisor', 'mwk', 'issueDate', 'days'];
+    const activeDeptCols = allCols.filter(c => c.isSelectedInPage).map(c => c.id);
+    const trackingCols = ['embPrint', 'wipStatus', 'pintu', 'ea', 'completionDate', 'lotStatus'];
+
+    setSelectedPdfColumns([...pageBaseCols, ...activeDeptCols, ...trackingCols]);
     setPdfModalOpen(true);
   }, [getAvailablePdfColumns]);
 
@@ -1748,6 +1778,11 @@ const StitchingCompleteLot = () => {
               return value.some(v => normalizeText(v) === itemSupervisor);
             }
 
+            if (key === 'garmentType') {
+              const itemGarment = item.garmentType ? normalizeText(item.garmentType) : '';
+              return value.some(v => normalizeText(v) === itemGarment);
+            }
+
             if (key === 'wipStatus') {
               const isCompleted = isLotCompleted(item.completedStatus);
               const latestRemarks = getLatestWipRemarks(item[key], isCompleted);
@@ -1758,7 +1793,7 @@ const StitchingCompleteLot = () => {
             const itemVal = item[key] ? normalizeText(item[key]) : '';
             return value.some(v => {
               const normV = normalizeText(v);
-              return itemVal === normV || itemVal.includes(normV);
+              return itemVal === normV;
             });
           }
 
@@ -1772,6 +1807,12 @@ const StitchingCompleteLot = () => {
               return isLotCompleted(item.completedStatus);
             }
             return true;
+          }
+
+          // Handle garmentType filter (single string fallback)
+          if (key === 'garmentType') {
+            const itemValue = item[key] ? normalizeText(item[key]) : '';
+            return itemValue === filterValue;
           }
 
           // Handle lotNumber filter
@@ -1797,6 +1838,12 @@ const StitchingCompleteLot = () => {
             const isCompleted = isLotCompleted(item.completedStatus);
             const latestRemarks = getLatestWipRemarks(item[key], isCompleted);
             return normalizeText(latestRemarks).includes(filterValue);
+          }
+
+          // Exact match for specific categoricals (fabric, style, brand, partyName, season, mwk, directStitching, section, supervisor)
+          if (['fabric', 'style', 'brand', 'partyName', 'season', 'mwk', 'directStitching', 'section', 'supervisor'].includes(key)) {
+            const itemValue = item[key] ? normalizeText(item[key]) : '';
+            return itemValue === filterValue;
           }
 
           const itemValue = item[key] ? normalizeText(item[key]) : '';
@@ -2044,209 +2091,946 @@ const StitchingCompleteLot = () => {
     }
   }, [fetchDataForSupervisor, getCacheKey, isCacheValid, normalizeAndCapitalize]);
 
-  // Enhanced download functions that load all data if needed
+  // ==================== SHARED EXPORT HELPERS (EXCEL & PDF) ====================
+  const normalizeSupervisorName = useCallback((name) => {
+    if (!name || name.trim() === '') return 'Unassigned';
+    const trimmedName = name.trim();
+    return trimmedName.charAt(0).toUpperCase() + trimmedName.slice(1).toLowerCase();
+  }, []);
+
+  const abbreviatePartyName = useCallback((partyName) => {
+    if (!partyName || partyName.trim() === '') return 'N/A';
+    const name = partyName.trim();
+    if (name.toLowerCase().includes('mohit hosiery')) return 'MH';
+    if (name.toLowerCase().includes('hosiery')) return name.split(' ')[0];
+    const words = name.split(' ');
+    if (words.length === 1) {
+      return words[0].substring(0, 3).toUpperCase();
+    } else if (words.length >= 2) {
+      return (words[0].charAt(0) + words[1].charAt(0)).toUpperCase();
+    }
+    return name.substring(0, 4).toUpperCase();
+  }, []);
+
+  const abbreviateMWKForPDF = useCallback((mwkValue) => {
+    if (!mwkValue || typeof mwkValue !== 'string') return 'N/A';
+    const value = mwkValue.trim().toLowerCase();
+    if (value.includes('gents') || value === 'm' || value === 'mens') return 'M';
+    if (value.includes('kids') || value === 'k') return 'K';
+    if (value.includes('girls') || value === 'g' || value.includes('girlish')) return 'G';
+    if (value.includes('women') || value.includes('womens') || value === 'w') return 'W';
+    return value.charAt(0).toUpperCase();
+  }, []);
+
+  const formatDateToDDMMYYForPDF = useCallback((dateString) => {
+    if (!dateString || (typeof dateString !== 'string' && typeof dateString !== 'number')) {
+      return 'N/A';
+    }
+    try {
+      const clean = String(dateString).trim().replace(/^['"\s]+|['"\s]+$/g, '');
+      if (!clean || clean === '-' || clean === 'N/A') return 'N/A';
+
+      const isoMatch = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+      if (isoMatch) {
+        const y = isoMatch[1].slice(-2);
+        const m = isoMatch[2].padStart(2, '0');
+        const d = isoMatch[3].padStart(2, '0');
+        return `${d}/${m}/${y}`;
+      }
+
+      const parts = clean.split(/[/\-.]/);
+      if (parts.length === 3) {
+        let day = parseInt(parts[0], 10);
+        let month = parseInt(parts[1], 10);
+        let year = parseInt(parts[2], 10);
+        if (day > 1000) {
+          const tmp = day; day = year; year = tmp;
+        }
+        if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+          const fullYear = year < 100 ? 2000 + year : year;
+          return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${String(fullYear).slice(-2)}`;
+        }
+      }
+
+      const date = new Date(clean);
+      if (!isNaN(date.getTime())) {
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = String(date.getFullYear()).slice(-2);
+        return `${day}/${month}/${year}`;
+      }
+      return clean;
+    } catch {
+      return String(dateString);
+    }
+  }, []);
+
+  const abbreviateSeason = useCallback((season) => {
+    if (!season || season.trim() === '') return 'N/A';
+    const seasonLower = season.trim().toLowerCase();
+    if (seasonLower.includes('summer')) return 'S';
+    if (seasonLower.includes('winter')) return 'W';
+    if (seasonLower.includes('autumn')) return 'A';
+    if (seasonLower.includes('spring')) return 'SP';
+    return season.charAt(0).toUpperCase();
+  }, []);
+
+  const formatDateOfIssue = useCallback((dateString) => {
+    if (!dateString || dateString.trim() === '') return 'N/A';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) {
+        const parts = dateString.split(/[/\-.]/);
+        if (parts.length === 3) {
+          const day = parseInt(parts[0], 10);
+          const month = parseInt(parts[1], 10);
+          const year = parseInt(parts[2], 10);
+          const fullYear = year < 100 ? 2000 + year : year;
+          const testDate = new Date(fullYear, month - 1, day);
+          if (!isNaN(testDate.getTime())) {
+            return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${String(fullYear).slice(-2)}`;
+          }
+        }
+        return dateString;
+      }
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = String(date.getFullYear()).slice(-2);
+      return `${day}/${month}/${year}`;
+    } catch {
+      return dateString;
+    }
+  }, []);
+
+  const extractStageFromStatus = useCallback((wipRemarks) => {
+    if (!wipRemarks || wipRemarks === 'N/A' || wipRemarks.trim() === '') return 'Other';
+    const remarks = wipRemarks.toLowerCase();
+    if (remarks.includes('stitching done') && remarks.includes('overlock') && remarks.includes('folding')) {
+      return 'Stitching Done Overlock and Folding Working';
+    } else if (remarks.includes('stitching done') && remarks.includes('overlock')) {
+      return 'Stitching Done Overlock Working';
+    } else if (remarks.includes('stitching done') && remarks.includes('folding')) {
+      return 'Stitching Done Folding Working';
+    } else if (remarks.includes('stitching done')) {
+      return 'Stitching Done';
+    } else if (remarks.includes('overlock')) {
+      return 'Overlock Working';
+    } else if (remarks.includes('folding')) {
+      return 'Folding Working';
+    } else if (remarks.includes('cutting')) {
+      return 'Cutting';
+    } else if (remarks.includes('tailor working')) {
+      return 'Tailor Working';
+    } else if (remarks.includes('emb pending')) {
+      return 'Emb Pending';
+    } else {
+      return 'On Stitching';
+    }
+  }, []);
+
+  const isStatusUpdatedToday = useCallback((wipStatus, completedStatus) => {
+    if (isLotCompleted(completedStatus)) {
+      return true;
+    }
+    if (!wipStatus || wipStatus.trim() === '') {
+      return false;
+    }
+    try {
+      if (typeof wipStatus === 'string' && !wipStatus.startsWith('[')) {
+        return false;
+      }
+      const statusArray = JSON.parse(wipStatus);
+      if (!Array.isArray(statusArray) || statusArray.length === 0) {
+        return false;
+      }
+      const sortedStatuses = [...statusArray].sort((a, b) => {
+        const dateA = new Date(a.timestamp).getTime();
+        const dateB = new Date(b.timestamp).getTime();
+        return dateB - dateA;
+      });
+      const latestStatus = sortedStatuses[0];
+      if (!latestStatus || !latestStatus.timestamp) {
+        return false;
+      }
+      const today = new Date();
+      const statusDate = new Date(latestStatus.timestamp);
+      return statusDate.toDateString() === today.toDateString();
+    } catch (error) {
+      return false;
+    }
+  }, [isLotCompleted]);
+
+  // Enhanced download functions with professional ExcelJS multi-sheet styling
   const downloadExcel = useCallback(async () => {
     try {
       setLoading(true);
 
-      // Use filteredData directly
       const exportData = filteredData;
-
       if (exportData.length === 0) {
         alert('No data available to export.');
         return;
       }
 
-      // Create worksheet data with dynamic headers based on lotStatus
-      const excelHeaders = HEADERS().filter(h => h !== 'Image');
-      const worksheetData = [
-        excelHeaders,
-        ...exportData.map((item, index) => {
-          const rowData = [
-            index + 1,
-            item.lotNumber || '',
-            item.garmentType || '',
-            item.style || '',
-            item.fabric || '',
-            item.brand || '',
-            item.totalPCS || 0,
-            (item.section && item.section !== 'N/A' && item.section !== '—') ? item.section : (abbreviateMWK(item.mwk) === 'K' ? 'KIDS' : abbreviateMWK(item.mwk) === 'M' ? 'GENTS' : abbreviateMWK(item.mwk) === 'W' ? 'WOMEN' : ''),
-            item.season || '',
-            item.partyName || '',
-            item.directStitching || '',
-            item.supervisor || '',
-            item.mwk || '',
-            formatDateToDDMMYY(item.dateOfIssue), // Date of Issue
-            calculateStitchingDays(item.dateOfIssue),
-          ];
+      // Ensure all selected department data is loaded
+      const activeDepts = Array.isArray(selectedDepartments) ? selectedDepartments : [];
+      const liveDeptMaps = {};
+      for (const d of activeDepts) {
+        let fetched = departmentDataMap[d] || (departmentCache.current && departmentCache.current.get(d));
+        if (!fetched || Object.keys(fetched).length === 0) {
+          fetched = await fetchDepartmentData(d);
+        }
+        liveDeptMaps[d] = fetched || {};
+      }
 
-          if (Array.isArray(selectedDepartments) && selectedDepartments.length > 0) {
-            selectedDepartments.forEach(deptId => {
-              const deptLotsMap = departmentDataMap[deptId] || {};
-              const deptInfo = deptLotsMap[item.lotNumber?.trim()] || null;
-              rowData.push(deptInfo?.issueDate ? formatDateToDDMMYY(deptInfo.issueDate) : '');
-              if (deptInfo?.status === 'Completed' || (deptInfo?.completionDate && deptInfo.completionDate !== '-')) {
-                rowData.push(deptInfo.completionDate ? formatDateToDDMMYY(deptInfo.completionDate) : 'Completed');
-              } else if (deptInfo?.hasIssue) {
-                rowData.push(`Issue: ${deptInfo.issueRemark || 'Hold'}`);
-              } else if (deptInfo?.issueDate) {
-                rowData.push('WIP');
-              } else {
-                rowData.push('');
-              }
-            });
+      const findDeptLotInfo = (deptId, rawLot) => {
+        if (!deptId || !rawLot) return null;
+        const dMap = liveDeptMaps[deptId] || departmentDataMap[deptId] || (departmentCache.current && departmentCache.current.get(deptId)) || {};
+        const str = String(rawLot).trim();
+        if (dMap[str]) return dMap[str];
+        const clean = str.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (dMap[clean]) return dMap[clean];
+        for (const k in dMap) {
+          if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === clean) {
+            return dMap[k];
           }
+        }
+        return null;
+      };
 
-          rowData.push(getEmbPrintDate(item.challanHistory));
+      const now = new Date();
+      const reportDateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-          // WIP Status - Check if completed to show "Done"
-          const isCompleted = isLotCompleted(item.completedStatus);
-          const wipValue = isCompleted ? 'Done' : getLatestWipRemarks(item.wipStatus, false);
-          rowData.push(wipValue);
+      const totalLots = exportData.length;
+      const totalPCS = exportData.reduce((sum, item) => sum + (item.totalPCS || 0), 0);
+      const totalCompleted = exportData.filter(item => isLotCompleted(item.completedStatus)).length;
+      const totalPending = totalLots - totalCompleted;
 
-          // Pintu & EA Remarks
-          const pintuValue = getPintuStatusForPDF(item.lotNumber);
-          const eaValue = getEAStatusForPDF(item.lotNumber);
-          rowData.push(pintuValue !== 'N/A' ? pintuValue : '');
-          rowData.push(eaValue !== 'N/A' ? eaValue : '');
+      let greenLots = 0, greenPCS = 0;
+      let yellowLots = 0, yellowPCS = 0;
+      let redLots = 0, redPCS = 0;
 
-          // Add remaining columns
-          rowData.push(
-            getCompletionDateFormatted(item.completedStatus) || '',
-            isLotCompleted(item.completedStatus) ? 'Completed' : 'Pending'
-          );
+      exportData.forEach(item => {
+        const days = calculateStitchingDays(item.dateOfIssue);
+        const pcs = item.totalPCS || 0;
+        if (days <= 6) { greenLots++; greenPCS += pcs; }
+        else if (days <= 15) { yellowLots++; yellowPCS += pcs; }
+        else { redLots++; redPCS += pcs; }
+      });
 
-          return rowData;
-        })
+      // Active Department Labels
+      const deptLabels = activeDepts.map(id => {
+        const opt = DEPARTMENT_OPTIONS.find(d => d.id === id);
+        return opt ? opt.label : id;
+      });
+
+      // Initialize ExcelJS Workbook
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Factory Suite Pro';
+      workbook.created = now;
+
+      // Styling Helpers
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'CBD5E1' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'CBD5E1' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      const headerBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: '0F172A' } },
+        bottom: { style: 'medium', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: '0F172A' } }
+      };
+
+      const totalBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'double', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      // ==========================================
+      // SHEET 1: STITCHING PRODUCTION LOTS
+      // ==========================================
+      const ws1 = workbook.addWorksheet('Production Lots', {
+        views: [{ showGridLines: true, state: 'frozen', xSplit: 0, ySplit: 6 }]
+      });
+
+      // Define Base Columns
+      const baseCols = [
+        { header: 'Sr.No', key: 'sr', width: 8 },
+        { header: 'Lot Number', key: 'lotNumber', width: 16 },
+        { header: 'Garment Type', key: 'garmentType', width: 18 },
+        { header: 'Style', key: 'style', width: 16 },
+        { header: 'Fabric', key: 'fabric', width: 22 },
+        { header: 'Brand', key: 'brand', width: 16 },
+        { header: 'Total PCS', key: 'totalPCS', width: 14 },
+        { header: 'Section', key: 'section', width: 14 },
+        { header: 'Season', key: 'season', width: 12 },
+        { header: 'Party Name', key: 'partyName', width: 20 },
+        { header: 'Direct Stitching', key: 'directStitching', width: 16 },
+        { header: 'Supervisor', key: 'supervisor', width: 18 },
+        { header: 'M/W/K', key: 'mwk', width: 12 },
+        { header: 'Date of Issue', key: 'dateOfIssue', width: 15 },
+        { header: 'Stitching Days', key: 'stitchingDays', width: 15 }
       ];
 
-      const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Stitching Issue Report');
+      const deptCols = [];
+      activeDepts.forEach(deptId => {
+        const opt = DEPARTMENT_OPTIONS.find(d => d.id === deptId);
+        const label = opt ? opt.label : deptId;
+        deptCols.push({ header: `${label} Issue Date`, key: `dept_${deptId}_issue`, width: 18 });
+        deptCols.push({ header: `${label} Completion Date`, key: `dept_${deptId}_comp`, width: 20 });
+      });
 
-      // Add active filters to sheet name
+      const trackingCols = [
+        { header: 'Emb/Print Date', key: 'embPrintDate', width: 16 },
+        { header: 'WIP Status', key: 'wipStatus', width: 22 },
+        { header: 'Pintu', key: 'pintu', width: 14 },
+        { header: 'EA', key: 'ea', width: 14 },
+        { header: 'Completion Date', key: 'completionDate', width: 16 },
+        { header: 'Lot Status', key: 'lotStatus', width: 16 }
+      ];
+
+      const allCols1 = [...baseCols, ...deptCols, ...trackingCols];
+      const numCols1 = allCols1.length;
+      ws1.columns = allCols1;
+
+      // Row 1: Title Banner
+      const titleRow1 = ws1.getRow(1);
+      titleRow1.values = ['FACTORY SUITE PRO - OVERALL STITCHING & DEPARTMENT PRODUCTION REPORT'];
+      ws1.mergeCells(1, 1, 1, numCols1);
+      titleRow1.font = { name: 'Segoe UI', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+      titleRow1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F4C81' } };
+      titleRow1.alignment = { vertical: 'middle', horizontal: 'center' };
+      titleRow1.height = 34;
+
+      // Row 2: Metadata Banner
+      const metaRow1 = ws1.getRow(2);
+      metaRow1.values = [`Exported on: ${reportDateStr}  |  Total Lots: ${totalLots}  |  Total PCS: ${totalPCS.toLocaleString()}  |  Completed: ${totalCompleted}  |  Pending: ${totalPending}  |  Status: ${filters.lotStatus || 'All'}  |  Active Departments: ${deptLabels.length > 0 ? deptLabels.join(', ') : 'None'}`];
+      ws1.mergeCells(2, 1, 2, numCols1);
+      metaRow1.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF1E293B' } };
+      metaRow1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+      metaRow1.alignment = { vertical: 'middle', horizontal: 'center' };
+      metaRow1.height = 22;
+
+      // Row 3: Blank Row
+      const blankRow3 = ws1.getRow(3);
+      blankRow3.values = [];
+      blankRow3.height = 6;
+
+      // Row 4: KPI Summary Row
+      const kpiRow1 = ws1.getRow(4);
+      kpiRow1.values = [`KPI SUMMARY  |  TOTAL LOTS: ${totalLots}  |  TOTAL PCS: ${totalPCS.toLocaleString()}  |  COMPLETED: ${totalCompleted}  |  PENDING: ${totalPending}  |  GREEN (1-6d): ${greenLots} (${totalLots > 0 ? Math.round((greenLots / totalLots) * 100) : 0}%)  |  YELLOW (7-15d): ${yellowLots} (${totalLots > 0 ? Math.round((yellowLots / totalLots) * 100) : 0}%)  |  RED (15+d): ${redLots} (${totalLots > 0 ? Math.round((redLots / totalLots) * 100) : 0}%)`];
+      ws1.mergeCells(4, 1, 4, numCols1);
+      kpiRow1.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0369A1' } };
+      kpiRow1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0F2FE' } };
+      kpiRow1.alignment = { vertical: 'middle', horizontal: 'center' };
+      kpiRow1.height = 24;
+
+      // Row 5: Blank Row
+      const blankRow5 = ws1.getRow(5);
+      blankRow5.values = [];
+      blankRow5.height = 6;
+
+      // Row 6: Column Headers Row
+      const headerRow1 = ws1.getRow(6);
+      headerRow1.values = allCols1.map(c => c.header);
+      headerRow1.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F4C81' } };
+      headerRow1.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      headerRow1.height = 30;
+
+      for (let c = 1; c <= numCols1; c++) {
+        headerRow1.getCell(c).border = headerBorder;
+      }
+
+      // Add Data Rows
+      let rowIdx1 = 7;
+      exportData.forEach((item, index) => {
+        const isCompleted = isLotCompleted(item.completedStatus);
+        const days = calculateStitchingDays(item.dateOfIssue);
+        const embPrintDate = getEmbPrintDate(item.challanHistory);
+        const completionDate = getCompletionDateFormatted(item.completedStatus);
+        const wipValue = isCompleted ? 'Done' : getLatestWipRemarks(item.wipStatus, false);
+        const pintuValue = getPintuStatusForPDF ? getPintuStatusForPDF(item.lotNumber) : '';
+        const eaValue = getEAStatusForPDF ? getEAStatusForPDF(item.lotNumber) : '';
+
+        const sectionVal = (item.section && item.section !== 'N/A' && item.section !== '—')
+          ? item.section
+          : (abbreviateMWK(item.mwk) === 'K' ? 'KIDS' : abbreviateMWK(item.mwk) === 'M' ? 'GENTS' : abbreviateMWK(item.mwk) === 'W' ? 'WOMEN' : '—');
+
+        const rowValues = [
+          index + 1,
+          item.lotNumber || '—',
+          item.garmentType || '—',
+          item.style || '—',
+          item.fabric || '—',
+          item.brand || '—',
+          item.totalPCS || 0,
+          sectionVal,
+          item.season || '—',
+          item.partyName || '—',
+          item.directStitching ? (item.directStitching.toLowerCase() === 'yes' ? 'Yes' : 'No') : 'No',
+          normalizeSupervisorName(item.supervisor),
+          abbreviateMWK(item.mwk),
+          formatDateToDDMMYY(item.dateOfIssue),
+          days
+        ];
+
+        // Add Active Department Data
+        activeDepts.forEach(deptId => {
+          const deptInfo = findDeptLotInfo(deptId, item.lotNumber);
+          const deptIssue = deptInfo?.issueDate ? formatDateToDDMMYY(deptInfo.issueDate) : '—';
+          const deptComp = deptInfo?.completionDate && deptInfo.completionDate !== '-' && deptInfo.completionDate !== 'N/A' ? formatDateToDDMMYY(deptInfo.completionDate) : '—';
+          rowValues.push(deptIssue);
+          rowValues.push(deptComp);
+        });
+
+        // Add Tracking Columns
+        rowValues.push(
+          embPrintDate !== '-' && embPrintDate !== '—' ? formatDateToDDMMYY(embPrintDate) : '—',
+          wipValue,
+          pintuValue && pintuValue !== 'N/A' && pintuValue !== '—' ? pintuValue : '—',
+          eaValue && eaValue !== 'N/A' && eaValue !== '—' ? eaValue : '—',
+          completionDate ? formatDateToDDMMYY(completionDate) : '—',
+          isCompleted ? 'Completed' : 'Pending'
+        );
+
+        const dataRow = ws1.getRow(rowIdx1);
+        dataRow.values = rowValues;
+        dataRow.height = 24;
+
+        const isEven = index % 2 === 0;
+        const defaultBg = isEven ? 'FFFFFFFF' : 'FFF8FAFC';
+
+        for (let c = 1; c <= numCols1; c++) {
+          const cell = dataRow.getCell(c);
+          cell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF0F172A' } };
+          cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+          cell.border = thinBorder;
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: defaultBg } };
+
+          // Lot Number Column Styling (Bold)
+          if (c === 2) {
+            cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF0F172A' } };
+          }
+          // Total PCS Column Styling
+          if (c === 7) {
+            cell.numFmt = '#,##0';
+            cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF0F172A' } };
+          }
+          // Stitching Days Column Styling (Color-coded)
+          if (c === 15) {
+            cell.font = { name: 'Segoe UI', size: 10, bold: true };
+            if (days <= 6) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+              cell.font.color = { argb: 'FF166534' };
+            } else if (days <= 15) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+              cell.font.color = { argb: 'FF92400E' };
+            } else {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+              cell.font.color = { argb: 'FF991B1B' };
+            }
+          }
+          // Lot Status Column Styling (Color-coded)
+          if (c === numCols1) {
+            cell.font = { name: 'Segoe UI', size: 9.5, bold: true };
+            if (isCompleted) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+              cell.font.color = { argb: 'FF166534' };
+            } else {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+              cell.font.color = { argb: 'FF92400E' };
+            }
+          }
+          // WIP Status Column Styling
+          if (c === numCols1 - 4) {
+            if (wipValue === 'Not updated') {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+              cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF991B1B' } };
+            }
+          }
+        }
+
+        rowIdx1++;
+      });
+
+      // Total Row for Sheet 1
+      const totalRow1 = ws1.getRow(rowIdx1);
+      const totalValues1 = new Array(numCols1).fill('');
+      totalValues1[0] = 'TOTAL';
+      totalValues1[6] = totalPCS;
+      totalValues1[numCols1 - 1] = `${totalLots} Lots`;
+      totalRow1.values = totalValues1;
+      totalRow1.height = 26;
+
+      for (let c = 1; c <= numCols1; c++) {
+        const cell = totalRow1.getCell(c);
+        cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = totalBorder;
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        if (c === 7) cell.numFmt = '#,##0';
+      }
+
+      // ==========================================
+      // SHEET 2: EXECUTIVE & STAGE SUMMARY
+      // ==========================================
+      const ws2 = workbook.addWorksheet('Executive & Stage Summary', {
+        views: [{ showGridLines: true }]
+      });
+
+      ws2.columns = [
+        { width: 38 },
+        { width: 24 },
+        { width: 16 },
+        { width: 18 },
+        { width: 22 },
+        { width: 16 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 }
+      ];
+
+      // Sheet 2 Title Banner
+      const titleRow2 = ws2.getRow(1);
+      titleRow2.values = ['FACTORY SUITE PRO - EXECUTIVE STAGE & SUPERVISOR SUMMARY'];
+      ws2.mergeCells(1, 1, 1, 9);
+      titleRow2.font = { name: 'Segoe UI', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+      titleRow2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      titleRow2.alignment = { vertical: 'middle', horizontal: 'center' };
+      titleRow2.height = 32;
+
+      // Sheet 2 Subtitle Banner
+      const subRow2 = ws2.getRow(2);
+      subRow2.values = [`Report Date: ${reportDateStr}  |  Total Lots: ${totalLots}  |  Total PCS: ${totalPCS.toLocaleString()}`];
+      ws2.mergeCells(2, 1, 2, 9);
+      subRow2.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF1E293B' } };
+      subRow2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+      subRow2.alignment = { vertical: 'middle', horizontal: 'center' };
+      subRow2.height = 20;
+
+      let r2 = 4;
+
+      // --- SECTION 1: STAGE-WISE PRODUCTION ANALYSIS ---
+      const sec1Title = ws2.getRow(r2);
+      sec1Title.values = ['1. STAGE-WISE PRODUCTION ANALYSIS (INCLUDES DEPARTMENT WORKING STATUS)'];
+      ws2.mergeCells(r2, 1, r2, 5);
+      sec1Title.font = { name: 'Segoe UI', size: 10.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      sec1Title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
+      sec1Title.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+      sec1Title.height = 24;
+      r2++;
+
+      const sec1Headers = ws2.getRow(r2);
+      sec1Headers.values = ['Work Stage', 'Total Lots', 'Percentage (%)', 'Total PCS', 'Not Updated Lots'];
+      sec1Headers.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      sec1Headers.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3B82F6' } };
+      sec1Headers.alignment = { vertical: 'middle', horizontal: 'center' };
+      sec1Headers.height = 24;
+      for (let c = 1; c <= 5; c++) sec1Headers.getCell(c).border = headerBorder;
+      r2++;
+
+      const stageAnalysis = {};
+      const garmentAnalysis = {};
+
+      exportData.forEach(item => {
+        const lotNum = (item.lotNumber || '').trim();
+        const pcs = item.totalPCS || 0;
+        const isCompleted = isLotCompleted(item.completedStatus);
+
+        let stage = 'Other';
+        if (isCompleted) {
+          stage = 'Stitching Completed';
+        } else {
+          let deptStageFound = false;
+          if (activeDepts.length > 0) {
+            for (const deptId of activeDepts) {
+              const deptInfo = findDeptLotInfo(deptId, lotNum);
+              if (deptInfo) {
+                const hasIssue = deptInfo.issueDate && deptInfo.issueDate !== '-' && deptInfo.issueDate !== 'N/A' && deptInfo.issueDate.trim() !== '';
+                const isComp = deptInfo.completionDate && deptInfo.completionDate !== '-' && deptInfo.completionDate !== 'N/A' && !deptInfo.completionDate.toLowerCase().includes('pending') && deptInfo.completionDate.trim() !== '';
+                if (hasIssue && !isComp) {
+                  const opt = DEPARTMENT_OPTIONS.find(d => d.id === deptId);
+                  const deptLabel = opt ? opt.label : deptId;
+                  stage = `${deptLabel} Working`;
+                  deptStageFound = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!deptStageFound) {
+            const wipRemarks = getLatestWipRemarks(item.wipStatus, false);
+            stage = extractStageFromStatus(wipRemarks);
+          }
+        }
+
+        if (!stageAnalysis[stage]) {
+          stageAnalysis[stage] = { lots: 0, pcs: 0, notUpdated: 0 };
+        }
+        stageAnalysis[stage].lots += 1;
+        stageAnalysis[stage].pcs += pcs;
+        if (!isStatusUpdatedToday(item.wipStatus, item.completedStatus)) {
+          stageAnalysis[stage].notUpdated += 1;
+        }
+
+        const garment = (item.garmentType || 'Unassigned').trim() || 'Unassigned';
+        if (!garmentAnalysis[garment]) {
+          garmentAnalysis[garment] = { lots: 0, pcs: 0 };
+        }
+        garmentAnalysis[garment].lots += 1;
+        garmentAnalysis[garment].pcs += pcs;
+      });
+
+      const stageArr = Object.entries(stageAnalysis).map(([stg, d]) => ({
+        stage: stg,
+        lots: d.lots,
+        pct: totalLots > 0 ? Math.round((d.lots / totalLots) * 100) : 0,
+        pcs: d.pcs,
+        notUpdated: d.notUpdated
+      })).sort((a, b) => b.lots - a.lots);
+
+      stageArr.forEach((s, idx) => {
+        const row = ws2.getRow(r2);
+        row.values = [s.stage, s.lots, `${s.pct}%`, s.pcs, s.notUpdated > 0 ? s.notUpdated : '—'];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? 'FFFFFFFF' : 'FFF8FAFC';
+        for (let c = 1; c <= 5; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF0F172A' } };
+          cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'left' : 'center', indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = '#,##0';
+          if (c === 5 && s.notUpdated > 0) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+            cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF991B1B' } };
+          }
+        }
+        r2++;
+      });
+
+      const totalStageNotUpdated = stageArr.reduce((sum, s) => sum + s.notUpdated, 0);
+      const totalStageRow = ws2.getRow(r2);
+      totalStageRow.values = ['TOTAL', totalLots, '100%', totalPCS, totalStageNotUpdated > 0 ? totalStageNotUpdated : '—'];
+      totalStageRow.height = 24;
+      for (let c = 1; c <= 5; c++) {
+        const cell = totalStageRow.getCell(c);
+        cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF1E3A8A' } };
+        cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'left' : 'center', indent: c === 1 ? 1 : 0 };
+        cell.border = totalBorder;
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } };
+        if (c === 4) cell.numFmt = '#,##0';
+      }
+      r2 += 2;
+
+      // --- SECTION 2: GARMENT TYPE BREAKDOWN ---
+      const sec2Title = ws2.getRow(r2);
+      sec2Title.values = ['2. GARMENT TYPE BREAKDOWN'];
+      ws2.mergeCells(r2, 1, r2, 4);
+      sec2Title.font = { name: 'Segoe UI', size: 10.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      sec2Title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } };
+      sec2Title.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+      sec2Title.height = 24;
+      r2++;
+
+      const sec2Headers = ws2.getRow(r2);
+      sec2Headers.values = ['Garment Type', 'Total Lots', 'Percentage (%)', 'Total PCS'];
+      sec2Headers.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      sec2Headers.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF14B8A6' } };
+      sec2Headers.alignment = { vertical: 'middle', horizontal: 'center' };
+      sec2Headers.height = 24;
+      for (let c = 1; c <= 4; c++) sec2Headers.getCell(c).border = headerBorder;
+      r2++;
+
+      const garmentArr = Object.entries(garmentAnalysis).map(([g, d]) => ({
+        garment: g,
+        lots: d.lots,
+        pct: totalLots > 0 ? Math.round((d.lots / totalLots) * 100) : 0,
+        pcs: d.pcs
+      })).sort((a, b) => b.lots - a.lots);
+
+      garmentArr.forEach((g, idx) => {
+        const row = ws2.getRow(r2);
+        row.values = [g.garment, g.lots, `${g.pct}%`, g.pcs];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? 'FFFFFFFF' : 'FFF8FAFC';
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF0F172A' } };
+          cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'left' : 'center', indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = '#,##0';
+        }
+        r2++;
+      });
+
+      const totalGarmentRow = ws2.getRow(r2);
+      totalGarmentRow.values = ['TOTAL', totalLots, '100%', totalPCS];
+      totalGarmentRow.height = 24;
+      for (let c = 1; c <= 4; c++) {
+        const cell = totalGarmentRow.getCell(c);
+        cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF115E59' } };
+        cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'left' : 'center', indent: c === 1 ? 1 : 0 };
+        cell.border = totalBorder;
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCFBF1' } };
+        if (c === 4) cell.numFmt = '#,##0';
+      }
+      r2 += 2;
+
+      // --- SECTION 3: DAYS-WISE AGING BREAKDOWN ---
+      const sec3Title = ws2.getRow(r2);
+      sec3Title.values = ['3. DAYS-WISE AGING BREAKDOWN'];
+      ws2.mergeCells(r2, 1, r2, 5);
+      sec3Title.font = { name: 'Segoe UI', size: 10.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      sec3Title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB45309' } };
+      sec3Title.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+      sec3Title.height = 24;
+      r2++;
+
+      const sec3Headers = ws2.getRow(r2);
+      sec3Headers.values = ['Aging Category', 'Days Range', 'Total Lots', 'Percentage (%)', 'Total PCS'];
+      sec3Headers.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      sec3Headers.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF59E0B' } };
+      sec3Headers.alignment = { vertical: 'middle', horizontal: 'center' };
+      sec3Headers.height = 24;
+      for (let c = 1; c <= 5; c++) sec3Headers.getCell(c).border = headerBorder;
+      r2++;
+
+      const agingRows = [
+        { cat: 'Green (Good)', range: '1 - 6 Days', lots: greenLots, pct: totalLots > 0 ? Math.round((greenLots / totalLots) * 100) : 0, pcs: greenPCS, bg: 'FFDCFCE7', fg: 'FF166534' },
+        { cat: 'Yellow (Average)', range: '7 - 15 Days', lots: yellowLots, pct: totalLots > 0 ? Math.round((yellowLots / totalLots) * 100) : 0, pcs: yellowPCS, bg: 'FFFEF3C7', fg: 'FF92400E' },
+        { cat: 'Red (Critical)', range: '15+ Days', lots: redLots, pct: totalLots > 0 ? Math.round((redLots / totalLots) * 100) : 0, pcs: redPCS, bg: 'FFFEE2E2', fg: 'FF991B1B' }
+      ];
+
+      agingRows.forEach(a => {
+        const row = ws2.getRow(r2);
+        row.values = [a.cat, a.range, a.lots, `${a.pct}%`, a.pcs];
+        row.height = 22;
+        for (let c = 1; c <= 5; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: a.fg } };
+          cell.alignment = { vertical: 'middle', horizontal: c <= 2 ? 'left' : 'center', indent: c <= 2 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: a.bg } };
+          if (c === 5) cell.numFmt = '#,##0';
+        }
+        r2++;
+      });
+
+      const totalAgingRow = ws2.getRow(r2);
+      totalAgingRow.values = ['TOTAL', '—', totalLots, '100%', totalPCS];
+      totalAgingRow.height = 24;
+      for (let c = 1; c <= 5; c++) {
+        const cell = totalAgingRow.getCell(c);
+        cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF78350F' } };
+        cell.alignment = { vertical: 'middle', horizontal: c <= 2 ? 'left' : 'center', indent: c <= 2 ? 1 : 0 };
+        cell.border = totalBorder;
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+        if (c === 5) cell.numFmt = '#,##0';
+      }
+      r2 += 2;
+
+      // --- SECTION 4: SUPERVISOR WORKLOAD & MANPOWER ATTENDANCE ---
+      const sec4Title = ws2.getRow(r2);
+      sec4Title.values = ['4. SUPERVISOR WORKLOAD & MANPOWER ATTENDANCE'];
+      ws2.mergeCells(r2, 1, r2, 9);
+      sec4Title.font = { name: 'Segoe UI', size: 10.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      sec4Title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4338CA' } };
+      sec4Title.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+      sec4Title.height = 24;
+      r2++;
+
+      const sec4Headers = ws2.getRow(r2);
+      sec4Headers.values = ['Supervisor', 'Manpower (Attendance)', 'Total Lots', 'Total PCS', 'Avg PCS / Manpower', 'Not Updated', 'Green (1-6d)', 'Yellow (7-15d)', 'Red (15+d)'];
+      sec4Headers.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      sec4Headers.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
+      sec4Headers.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      sec4Headers.height = 28;
+      for (let c = 1; c <= 9; c++) sec4Headers.getCell(c).border = headerBorder;
+      r2++;
+
+      const supervisorWorkload = {};
+      exportData.forEach(item => {
+        const sup = normalizeSupervisorName(item.supervisor);
+        const days = calculateStitchingDays(item.dateOfIssue);
+        if (!supervisorWorkload[sup]) {
+          supervisorWorkload[sup] = { totalLots: 0, totalPCS: 0, greenLots: 0, yellowLots: 0, redLots: 0, notUpdated: 0, manpower: 0 };
+        }
+        supervisorWorkload[sup].totalLots += 1;
+        supervisorWorkload[sup].totalPCS += (item.totalPCS || 0);
+        if (!isStatusUpdatedToday(item.wipStatus, item.completedStatus)) {
+          supervisorWorkload[sup].notUpdated += 1;
+        }
+        if (days <= 6) supervisorWorkload[sup].greenLots += 1;
+        else if (days <= 15) supervisorWorkload[sup].yellowLots += 1;
+        else supervisorWorkload[sup].redLots += 1;
+      });
+
+      const supervisorManpowerData = getLatestManpowerBySupervisor(exportData);
+      const sortedSupervisors = Object.entries(supervisorWorkload).sort(([, a], [, b]) => b.totalLots - a.totalLots);
+
+      sortedSupervisors.forEach(([sup, data], idx) => {
+        const norm = normalizeText(sup);
+        const rawManpower = supervisorManpowerData ? (supervisorManpowerData[norm] || supervisorManpowerData[sup] || 0) : 0;
+        data.manpower = parseInt(rawManpower, 10) || 0;
+        const avgPCS = data.manpower > 0 ? Math.round(data.totalPCS / data.manpower) : 0;
+        const gPct = data.totalLots > 0 ? Math.round((data.greenLots / data.totalLots) * 100) : 0;
+        const yPct = data.totalLots > 0 ? Math.round((data.yellowLots / data.totalLots) * 100) : 0;
+        const rPct = data.totalLots > 0 ? Math.round((data.redLots / data.totalLots) * 100) : 0;
+
+        const row = ws2.getRow(r2);
+        row.values = [
+          sup,
+          data.manpower > 0 ? data.manpower : '—',
+          data.totalLots,
+          data.totalPCS,
+          avgPCS > 0 ? avgPCS : '—',
+          data.notUpdated > 0 ? data.notUpdated : '—',
+          `${data.greenLots} (${gPct}%)`,
+          `${data.yellowLots} (${yPct}%)`,
+          `${data.redLots} (${rPct}%)`
+        ];
+        row.height = 22;
+
+        const bg = idx % 2 === 0 ? 'FFFFFFFF' : 'FFF8FAFC';
+        for (let c = 1; c <= 9; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF0F172A' } };
+          cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'left' : 'center', indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = '#,##0';
+          if (c === 5 && avgPCS > 0) cell.numFmt = '#,##0';
+          if (c === 6 && data.notUpdated > 0) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+            cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF991B1B' } };
+          }
+        }
+        r2++;
+      });
+
+      const totalManpowerAll = sortedSupervisors.reduce((sum, [, d]) => sum + (d.manpower || 0), 0);
+      const avgPCSAll = totalManpowerAll > 0 ? Math.round(totalPCS / totalManpowerAll) : 0;
+      const totalSupRow = ws2.getRow(r2);
+      totalSupRow.values = [
+        'OVERALL TOTALS',
+        totalManpowerAll > 0 ? totalManpowerAll : '—',
+        totalLots,
+        totalPCS,
+        avgPCSAll > 0 ? avgPCSAll : '—',
+        totalStageNotUpdated > 0 ? totalStageNotUpdated : '—',
+        `${greenLots} (${totalLots > 0 ? Math.round((greenLots / totalLots) * 100) : 0}%)`,
+        `${yellowLots} (${totalLots > 0 ? Math.round((yellowLots / totalLots) * 100) : 0}%)`,
+        `${redLots} (${totalLots > 0 ? Math.round((redLots / totalLots) * 100) : 0}%)`
+      ];
+      totalSupRow.height = 26;
+      for (let c = 1; c <= 9; c++) {
+        const cell = totalSupRow.getCell(c);
+        cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF312E81' } };
+        cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'left' : 'center', indent: c === 1 ? 1 : 0 };
+        cell.border = totalBorder;
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } };
+        if (c === 4) cell.numFmt = '#,##0';
+        if (c === 5 && avgPCSAll > 0) cell.numFmt = '#,##0';
+      }
+
+      // ==========================================
+      // SHEET 3: APPLIED FILTERS (AUDIT SHEET)
+      // ==========================================
       const activeFilters = Object.entries(filters)
         .filter(([key, value]) => {
-          if (key === 'dateRange') {
-            const { from, to } = value;
-            return from || to;
-          }
+          if (key === 'dateRange') return value?.from || value?.to;
+          if (Array.isArray(value)) return value.length > 0;
           return typeof value === 'string' && value.trim() !== '';
         })
         .map(([key, value]) => {
-          if (key === 'dateRange') {
-            const { from, to } = value;
-            return `Date Range: ${from || ''} to ${to || ''}`;
-          }
-          return `${key}: ${value}`;
+          if (key === 'dateRange') return [`Date Range`, `${value.from || ''} to ${value.to || ''}`];
+          if (Array.isArray(value)) return [key.charAt(0).toUpperCase() + key.slice(1), value.join(', ')];
+          return [key.charAt(0).toUpperCase() + key.slice(1), String(value)];
         });
 
-      let sheetName = 'Stitching Report';
-      if (activeFilters.length > 0) {
-        sheetName = `Stitching (Filtered)`;
+      if (activeFilters.length > 0 || activeDepts.length > 0) {
+        const ws3 = workbook.addWorksheet('Applied Filters', {
+          views: [{ showGridLines: true }]
+        });
+        ws3.columns = [{ width: 28 }, { width: 65 }];
+
+        const fTitle = ws3.getRow(1);
+        fTitle.values = ['REPORT FILTERS & AUDIT PARAMETERS'];
+        ws3.mergeCells(1, 1, 1, 2);
+        fTitle.font = { name: 'Segoe UI', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+        fTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+        fTitle.alignment = { vertical: 'middle', horizontal: 'center' };
+        fTitle.height = 28;
+
+        const fHead = ws3.getRow(2);
+        fHead.values = ['Filter Parameter', 'Selected Value / Criteria'];
+        fHead.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        fHead.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF475569' } };
+        fHead.alignment = { vertical: 'middle', horizontal: 'center' };
+        fHead.height = 24;
+        fHead.getCell(1).border = headerBorder;
+        fHead.getCell(2).border = headerBorder;
+
+        const filterRows = [
+          ['Export Timestamp', reportDateStr],
+          ['Active Departments', deptLabels.join(', ') || 'None'],
+          ...activeFilters
+        ];
+
+        filterRows.forEach(([param, val], idx) => {
+          const row = ws3.getRow(idx + 3);
+          row.values = [param, val];
+          row.height = 22;
+          const bg = idx % 2 === 0 ? 'FFFFFFFF' : 'FFF8FAFC';
+          for (let c = 1; c <= 2; c++) {
+            const cell = row.getCell(c);
+            cell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF0F172A' }, bold: c === 1 };
+            cell.alignment = { vertical: 'middle', horizontal: c === 1 ? 'left' : 'center', indent: c === 1 ? 1 : 0 };
+            cell.border = thinBorder;
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } };
+          }
+        });
       }
 
-      // Add a filter summary row
-      if (activeFilters.length > 0) {
-        const filterRow = ['Filter Summary:', ...activeFilters];
-        const filterData = [['']]; // Empty row
-        filterData.push(filterRow);
-
-        const filterSheet = XLSX.utils.aoa_to_sheet(filterData);
-        XLSX.utils.book_append_sheet(workbook, filterSheet, 'Filters');
+      let fileName = `Stitching_Production_Report_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      if (filters.supervisor && Array.isArray(filters.supervisor) && filters.supervisor.length > 0) {
+        fileName += `_${filters.supervisor.join('_')}`;
+      } else if (filters.supervisor && typeof filters.supervisor === 'string' && filters.supervisor.trim() !== '') {
+        fileName += `_${filters.supervisor.replace(/\s+/g, '_')}`;
       }
-
-      // Calculate column widths based on dynamic headers
-      const currentHeaders = HEADERS().filter(h => h !== 'Image');
-      const maxWidths = currentHeaders.map((header, colIndex) => {
-        const maxLength = Math.max(
-          header.length,
-          ...exportData.map((item, rowIndex) => {
-            const rowData = [
-              rowIndex + 1,
-              item.lotNumber || '',
-              item.garmentType || '',
-              item.style || '',
-              item.fabric || '',
-              item.brand || '',
-              item.totalPCS || 0,
-              (item.section && item.section !== 'N/A' && item.section !== '—') ? item.section : (abbreviateMWK(item.mwk) === 'K' ? 'KIDS' : abbreviateMWK(item.mwk) === 'M' ? 'GENTS' : abbreviateMWK(item.mwk) === 'W' ? 'WOMEN' : ''),
-              item.season || '',
-              item.partyName || '',
-              item.directStitching || '',
-              item.supervisor || '',
-              item.mwk || '',
-              formatDateToDDMMYY(item.dateOfIssue),
-              calculateStitchingDays(item.dateOfIssue),
-            ];
-
-            if (Array.isArray(selectedDepartments) && selectedDepartments.length > 0) {
-              selectedDepartments.forEach(deptId => {
-                const deptLotsMap = departmentDataMap[deptId] || {};
-                const deptInfo = deptLotsMap[item.lotNumber?.trim()] || null;
-                rowData.push(deptInfo?.issueDate ? formatDateToDDMMYY(deptInfo.issueDate) : '');
-                if (deptInfo?.status === 'Completed' || (deptInfo?.completionDate && deptInfo.completionDate !== '-')) {
-                  rowData.push(deptInfo.completionDate ? formatDateToDDMMYY(deptInfo.completionDate) : 'Completed');
-                } else if (deptInfo?.hasIssue) {
-                  rowData.push(`Issue: ${deptInfo.issueRemark || 'Hold'}`);
-                } else if (deptInfo?.issueDate) {
-                  rowData.push('WIP');
-                } else {
-                  rowData.push('');
-                }
-              });
-            }
-
-            rowData.push(getEmbPrintDate(item.challanHistory));
-
-            // Add WIP Status data - with "Done" for completed lots
-            const isCompleted = isLotCompleted(item.completedStatus);
-            const wipValue = isCompleted ? 'Done' : getLatestWipRemarks(item.wipStatus, false);
-            rowData.push(wipValue);
-
-            // Pintu & EA Remarks
-            const pintuValue = getPintuStatusForPDF(item.lotNumber);
-            const eaValue = getEAStatusForPDF(item.lotNumber);
-            rowData.push(pintuValue !== 'N/A' ? pintuValue : '');
-            rowData.push(eaValue !== 'N/A' ? eaValue : '');
-
-            // Add remaining columns
-            rowData.push(
-              getCompletionDateFormatted(item.completedStatus) || '',
-              isLotCompleted(item.completedStatus) ? 'Completed' : 'Pending'
-            );
-
-            return rowData[colIndex] ? rowData[colIndex].toString().length : 0;
-          })
-        );
-        return { wch: Math.min(maxLength + 2, 50) };
-      });
-
-      worksheet['!cols'] = maxWidths;
-
-      // Generate filename with filter info
-      const today = new Date();
-      let fileName = `Stitching_Report_${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-      // Add filter info to filename if any filter is active
-      if (activeFilters.length > 0) {
-        const filterString = activeFilters
-          .map(f => f.split(':')[1].trim())
-          .join('_')
-          .substring(0, 50); // Limit length
-        fileName = `${fileName}_Filtered_${filterString}`;
+      if (filters.lotStatus) {
+        fileName += `_${filters.lotStatus}`;
       }
+      if (activeDepts.length > 0) {
+        fileName += `_${activeDepts.join('_')}`;
+      }
+      fileName = fileName.replace(/[^\w\-_]/g, '_').substring(0, 100);
 
-      XLSX.writeFile(workbook, `${fileName}.xlsx`);
+      // Write styled buffer and download via saveAs
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      saveAs(blob, `${fileName}.xlsx`);
     } catch (err) {
+      console.error('Error exporting Excel:', err);
       setError(`Failed to export Excel: ${err.message}`);
     } finally {
       setLoading(false);
     }
-  }, [filteredData, filters, calculateStitchingDays, getEmbPrintDate, getLatestWipRemarks, getCompletionDateFormatted, isLotCompleted, formatDateToDDMMYY, getPintuStatusForPDF, getEAStatusForPDF]);
-  const downloadPDF = useCallback(async (customCols = null) => {
+  }, [filteredData, filters, selectedDepartments, departmentDataMap, calculateStitchingDays, getEmbPrintDate, getLatestWipRemarks, getCompletionDateFormatted, isLotCompleted, formatDateToDDMMYY, getPintuStatusForPDF, getEAStatusForPDF, fetchDepartmentData, DEPARTMENT_OPTIONS, getLatestManpowerBySupervisor, normalizeText, abbreviateMWK, extractStageFromStatus, isStatusUpdatedToday, normalizeSupervisorName]);
+
+  const downloadPDF = useCallback(async (customCols = null, customMode = null) => {
     try {
       setLoading(true);
+      setPdfGenerating(true);
+
+      const reportMode = customMode || pdfReportMode || 'combined';
 
       // Use filteredData directly
       const exportData = filteredData;
@@ -2256,228 +3040,7 @@ const StitchingCompleteLot = () => {
         return;
       }
 
-      // Function to normalize supervisor name
-      const normalizeSupervisorName = (name) => {
-        if (!name || name.trim() === '') return 'Unassigned';
-
-        const trimmedName = name.trim();
-        return trimmedName.charAt(0).toUpperCase() + trimmedName.slice(1).toLowerCase();
-      };
-
-      // Function to abbreviate party names
-      const abbreviatePartyName = (partyName) => {
-        if (!partyName || partyName.trim() === '') return 'N/A';
-
-        const name = partyName.trim();
-
-        // Specific abbreviations
-        if (name.toLowerCase().includes('mohit hosiery')) return 'MH';
-        if (name.toLowerCase().includes('hosiery')) return name.split(' ')[0];
-
-        // General abbreviation: take first letters of first two words
-        const words = name.split(' ');
-        if (words.length === 1) {
-          return words[0].substring(0, 3).toUpperCase();
-        } else if (words.length >= 2) {
-          return (words[0].charAt(0) + words[1].charAt(0)).toUpperCase();
-        }
-
-        return name.substring(0, 4).toUpperCase();
-      };
-
-      // Function to abbreviate M/W/K for PDF
-      const abbreviateMWKForPDF = (mwkValue) => {
-        if (!mwkValue || typeof mwkValue !== 'string') return 'N/A';
-
-        const value = mwkValue.trim().toLowerCase();
-
-        if (value.includes('gents') || value === 'm' || value === 'mens') return 'M';
-        if (value.includes('kids') || value === 'k') return 'K';
-        if (value.includes('girls') || value === 'g' || value.includes('girlish') || value.includes('girls')) return 'G';
-        if (value.includes('women') || value.includes('womens') || value === 'w' || value.includes('women')) return 'W';
-
-        // Return first letter if no match
-        return value.charAt(0).toUpperCase();
-      };
-
-      // Function to format date as "29/11/25" for PDF
-      const formatDateToDDMMYYForPDF = (dateString) => {
-        if (!dateString || typeof dateString !== 'string' && typeof dateString !== 'number') {
-          return 'N/A';
-        }
-
-        try {
-          const clean = String(dateString).trim().replace(/^['"\s]+|['"\s]+$/g, '');
-          if (!clean || clean === '-' || clean === 'N/A') return 'N/A';
-
-          // Match ISO string YYYY-MM-DD or YYYY/MM/DD
-          const isoMatch = clean.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
-          if (isoMatch) {
-            const y = isoMatch[1].slice(-2);
-            const m = isoMatch[2].padStart(2, '0');
-            const d = isoMatch[3].padStart(2, '0');
-            return `${d}/${m}/${y}`;
-          }
-
-          // Match DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
-          const parts = clean.split(/[\/\-\.]/);
-          if (parts.length === 3) {
-            let day = parseInt(parts[0], 10);
-            let month = parseInt(parts[1], 10);
-            let year = parseInt(parts[2], 10);
-
-            if (day > 1000) {
-              const tmp = day; day = year; year = tmp;
-            }
-
-            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-              const fullYear = year < 100 ? 2000 + year : year;
-              return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${String(fullYear).slice(-2)}`;
-            }
-          }
-
-          const date = new Date(clean);
-          if (!isNaN(date.getTime())) {
-            const day = String(date.getDate()).padStart(2, '0');
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const year = String(date.getFullYear()).slice(-2);
-            return `${day}/${month}/${year}`;
-          }
-
-          return clean;
-        } catch {
-          return String(dateString);
-        }
-      };
-
-      // Function for season abbreviation
-      const abbreviateSeason = (season) => {
-        if (!season || season.trim() === '') return 'N/A';
-
-        const seasonLower = season.trim().toLowerCase();
-
-        if (seasonLower.includes('summer')) return 'S';
-        if (seasonLower.includes('winter')) return 'W';
-        if (seasonLower.includes('autumn')) return 'A';
-        if (seasonLower.includes('spring')) return 'SP';
-
-        // Return first letter if not a known season
-        return season.charAt(0).toUpperCase();
-      };
-
-      // Function to format Date of Issue as 29/11/25
-      const formatDateOfIssue = (dateString) => {
-        if (!dateString || dateString.trim() === '') return 'N/A';
-
-        try {
-          const date = new Date(dateString);
-
-          if (isNaN(date.getTime())) {
-            // Try different date formats
-            const parts = dateString.split(/[\/\-\.]/);
-            if (parts.length === 3) {
-              const day = parseInt(parts[0], 10);
-              const month = parseInt(parts[1], 10);
-              const year = parseInt(parts[2], 10);
-
-              const fullYear = year < 100 ? 2000 + year : year;
-
-              const testDate = new Date(fullYear, month - 1, day);
-              if (!isNaN(testDate.getTime())) {
-                return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${String(fullYear).slice(-2)}`;
-              }
-            }
-            return dateString;
-          }
-
-          const day = String(date.getDate()).padStart(2, '0');
-          const month = String(date.getMonth() + 1).padStart(2, '0');
-          const year = String(date.getFullYear()).slice(-2);
-          return `${day}/${month}/${year}`;
-        } catch {
-          return dateString;
-        }
-      };
-
-      // NEW: Function to extract stage from WIP status
-      const extractStageFromStatus = (wipRemarks) => {
-        if (!wipRemarks || wipRemarks === 'N/A' || wipRemarks.trim() === '') return 'Other';
-
-        const remarks = wipRemarks.toLowerCase();
-
-        if (remarks.includes('stitching done') && remarks.includes('overlock') && remarks.includes('folding')) {
-          return 'Stitching Done Overlock and Folding Working';
-        } else if (remarks.includes('stitching done') && remarks.includes('overlock')) {
-          return 'Stitching Done Overlock Working';
-        } else if (remarks.includes('stitching done') && remarks.includes('folding')) {
-          return 'Stitching Done Folding Working';
-        } else if (remarks.includes('stitching done')) {
-          return 'Stitching Done';
-        } else if (remarks.includes('overlock')) {
-          return 'Overlock Working';
-        } else if (remarks.includes('folding')) {
-          return 'Folding Working';
-        } else if (remarks.includes('cutting')) {
-          return 'Cutting';
-        } else if (remarks.includes('tailor working')) {
-          return 'Tailor Working';
-        } else if (remarks.includes('emb pending')) {
-          return 'Emb Pending';
-        } else {
-          return 'On Stitching';
-        }
-      };
-
-      // Helper function to check if status was updated today
-      const isStatusUpdatedToday = (wipStatus, completedStatus) => {
-        // If lot is completed, we don't need to check
-        if (isLotCompleted(completedStatus)) {
-          return true; // Completed lots are considered updated
-        }
-
-        if (!wipStatus || wipStatus.trim() === '') {
-          return false;
-        }
-
-        try {
-          if (typeof wipStatus === 'string' && !wipStatus.startsWith('[')) {
-            // If it's a simple string, assume it's not updated today
-            return false;
-          }
-
-          const statusArray = JSON.parse(wipStatus);
-
-          if (!Array.isArray(statusArray) || statusArray.length === 0) {
-            return false;
-          }
-
-          // Get the latest status
-          const sortedStatuses = [...statusArray].sort((a, b) => {
-            const dateA = new Date(a.timestamp).getTime();
-            const dateB = new Date(b.timestamp).getTime();
-            return dateB - dateA;
-          });
-
-          const latestStatus = sortedStatuses[0];
-
-          if (!latestStatus || !latestStatus.timestamp) {
-            return false;
-          }
-
-          // Check if the latest status timestamp is from today
-          const today = new Date();
-          const statusDate = new Date(latestStatus.timestamp);
-
-          // Compare dates (ignoring time)
-          return statusDate.toDateString() === today.toDateString();
-
-        } catch (error) {
-          console.error('Error checking if status updated today:', error);
-          return false;
-        }
-      };
-
-      // Create PDF in landscape mode
+      // Create PDF in landscape mode (A3)
       const doc = new jsPDF({
         orientation: 'landscape',
         unit: 'mm',
@@ -2487,775 +3050,661 @@ const StitchingCompleteLot = () => {
       // Colors
       const headerColor = [15, 76, 129]; // Navy Blue
       const borderColor = [0, 0, 0]; // Black border
-      const textColor = [17, 24, 39]; // Dark text
-      const accentColor = [59, 130, 246]; // Blue accent
-      const highlightColor = [16, 185, 129]; // Green for highlighting
-      const remarksColor = [239, 68, 68]; // Red for remarks and lot number
-      const pcsColor = [239, 68, 68]; // RED for PCS
-      const lotNumberColor = [239, 68, 68]; // RED for lot number
-      const partyColor = [107, 33, 168]; // Purple for Party abbreviation
-      const completedColor = [16, 185, 129]; // Green for completed status
-        const pendingColor = [245, 158, 11]; // Yellow for pending status
-        const issueDateColor = [139, 92, 246]; // Purple for Date of Issue
-        const notUpdatedColor = [185, 28, 28]; // Dark red for "Not updated"
-        const pintuColor = [147, 51, 234]; // Purple for Pintu
-        const eaColor = [219, 39, 119]; // Pink for EA
-        const stageAnalysisColor = [59, 130, 246]; // Blue for stage analysis
+      const stageAnalysisColor = [59, 130, 246]; // Blue for stage analysis
 
-        // Page dimensions
-        const pageWidth = doc.internal.pageSize.getWidth();
-        const pageHeight = doc.internal.pageSize.getHeight();
-        const margin = 8;
-        const contentWidth = pageWidth - (margin * 2);
+      // Page dimensions
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 8;
+      const contentWidth = pageWidth - (margin * 2);
 
-        // Color coding legend helper
-        const addColorLegend = (yPos) => {
-          doc.setFontSize(8);
-          doc.setFont('helvetica', 'bold');
-          doc.setTextColor(59, 130, 246);
-          doc.text('STITCHING DAYS COLOR CODING:', margin, yPos);
+      // Color coding legend helper
+      const addColorLegend = (yPos) => {
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(0, 0, 0);
+        doc.text('STITCHING DAYS COLOR CODING:', margin, yPos);
 
-          const legendItems = [
-            { color: [16, 185, 129], text: '1-6 Days: Good (Green)' },
-            { color: [245, 158, 11], text: '7-15 Days: Average (Yellow)' },
-            { color: [239, 68, 68], text: '15+ Days: Critical (Red)' }
-          ];
-
-          let legendX = margin + 70;
-          legendItems.forEach((item) => {
-            doc.setFillColor(...item.color);
-            doc.rect(legendX, yPos - 3, 5, 5, 'F');
-            doc.setTextColor(50, 50, 50);
-            doc.setFont('helvetica', 'normal');
-            doc.text(item.text, legendX + 7, yPos);
-            legendX += 70;
-          });
-
-          return yPos + 8;
-        };
-
-        // Determine active columns to render in the PDF
-        const allCols = getAvailablePdfColumns();
-        let activeColIds = Array.isArray(customCols) && customCols.length > 0
-          ? customCols
-          : (Array.isArray(selectedPdfColumns) && selectedPdfColumns.length > 0
-            ? selectedPdfColumns
-            : allCols.filter(c => c.defaultChecked || c.isSelectedInPage).map(c => c.id));
-
-        const activeCols = allCols.filter(c => activeColIds.includes(c.id));
-
-        if (activeCols.length === 0) {
-          alert('Please select at least one column for the PDF.');
-          setLoading(false);
-          setPdfGenerating(false);
-          return;
-        }
-
-        // Ensure data for any selected department in activeCols is loaded
-        const neededDepts = [];
-        activeCols.forEach(col => {
-          if (col.deptId && !neededDepts.includes(col.deptId)) {
-            neededDepts.push(col.deptId);
-          }
-        });
-        for (const d of neededDepts) {
-          if (!departmentDataMap[d] && !departmentCache.current.has(d)) {
-            await fetchDepartmentData(d);
-          }
-        }
-
-        // Calculate scaled widths to perfectly fill contentWidth (404mm)
-        const totalBaseWidth = activeCols.reduce((sum, c) => sum + (c.baseWidth || 15), 0);
-        const columnWidths = {};
-        const columnStyles = {};
-
-        const tableHeaders = [
-          activeCols.map((col, idx) => {
-            const scaledWidth = Math.max(7, Math.round((col.baseWidth / totalBaseWidth) * contentWidth * 10) / 10);
-            columnWidths[idx] = scaledWidth;
-            columnStyles[idx] = {
-              cellWidth: scaledWidth,
-              halign: 'center',
-              valign: 'middle'
-            };
-            return {
-              content: col.label,
-              styles: {
-                fontStyle: 'bold',
-                fillColor: headerColor,
-                textColor: [255, 255, 255],
-                cellWidth: scaledWidth,
-                halign: 'center',
-                fontSize: activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5),
-                cellPadding: { top: 3, right: 1, bottom: 3, left: 1 }
-              }
-            };
-          })
+        const legendItems = [
+          { color: [16, 185, 129], text: '1-6 Days: Good (Green)' },
+          { color: [245, 158, 11], text: '7-15 Days: Average (Yellow)' },
+          { color: [239, 68, 68], text: '15+ Days: Critical (Red)' }
         ];
 
-        // Identify list of supervisors to process
-        let supervisorsList = [];
-        if (filters.supervisor && Array.isArray(filters.supervisor) && filters.supervisor.length > 0) {
-          supervisorsList = filters.supervisor;
-        } else if (filters.supervisor && typeof filters.supervisor === 'string' && filters.supervisor.trim() !== '') {
-          supervisorsList = [filters.supervisor];
-        } else {
-          const supSet = new Set();
-          exportData.forEach(item => {
-            const s = (item.supervisor || '').trim();
-            if (s) supSet.add(normalizeSupervisorName(s));
-            else supSet.add('Unassigned');
-          });
-          supervisorsList = Array.from(supSet).sort();
-        }
-
-        let isFirstSupervisorPage = true;
-
-        // Iterate through each supervisor and output on separate pages with serial numbers starting from 1
-        supervisorsList.forEach((supName, supIndex) => {
-          const supData = exportData.filter(item => {
-            const itemSup = normalizeSupervisorName(item.supervisor || '');
-            if (supName.toLowerCase() === 'unassigned') {
-              return !item.supervisor || item.supervisor.trim() === '';
-            }
-            return itemSup.toLowerCase() === supName.toLowerCase();
-          });
-
-          if (supData.length === 0) return;
-
-          if (!isFirstSupervisorPage) {
-            doc.addPage();
-          }
-          isFirstSupervisorPage = false;
-
-          let currentY = 25;
-
-          // Draw supervisor page header
-          const drawSupervisorHeader = () => {
-            doc.setFillColor(255, 255, 255);
-            doc.rect(0, 0, pageWidth, 30, 'F');
-
-            const supTotalPCS = supData.reduce((sum, item) => sum + (item.totalPCS || 0), 0);
-            const supTotalLots = supData.length;
-            const supCompleted = supData.filter(item => isLotCompleted(item.completedStatus)).length;
-            const supPending = supTotalLots - supCompleted;
-
-            let statusTitle = 'STITCHING PRODUCTION REPORT';
-            if (filters.lotStatus === 'Completed') statusTitle = 'COMPLETED LOTS REPORT';
-            else if (filters.lotStatus === 'Pending') statusTitle = 'PENDING LOTS REPORT';
-
-            const title = `${supName.toUpperCase()} - ${statusTitle}`;
-
-            doc.setFontSize(18);
-            doc.setTextColor(15, 76, 129);
-            doc.setFont('Times New Roman', 'bold');
-            doc.text(title, pageWidth / 2, 12, { align: 'center' });
-
-            doc.setFontSize(10);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(15, 76, 129);
-            doc.text(`SUPERVISOR: ${supName.toUpperCase()} (${supIndex + 1}/${supervisorsList.length})`, pageWidth / 2, 18, { align: 'center' });
-
-            // Key Metrics Row
-            doc.setFontSize(11);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(15, 76, 129);
-
-            const today = new Date();
-            const reportDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
-            doc.text(`Report Date: ${reportDate}`, margin, 25);
-
-            const centerX = pageWidth / 2;
-            doc.text(`Lots: ${supTotalLots} | Total PCS: ${supTotalPCS.toLocaleString()} | Completed: ${supCompleted} | Pending: ${supPending}`,
-              centerX, 25, { align: 'center' });
-
-            doc.text(`Supervisor Lots: ${supTotalLots}`, pageWidth - margin, 25, { align: 'right' });
-          };
-
-          drawSupervisorHeader();
-          currentY = addColorLegend(32);
-
-          // Prepare table body for this supervisor with Serial No 1..N
-          const body = supData.map((item, rowIndex) => {
-            const isCompleted = isLotCompleted(item.completedStatus);
-            const stitchingDays = calculateStitchingDays(item.dateOfIssue, item.completedStatus, isCompleted);
-            const stitchingDaysColor = getStitchingDaysColor(stitchingDays);
-            const stitchingDaysTextColor = getStitchingDaysTextColor(stitchingDays);
-            const wipRemarks = getLatestWipRemarks(item.wipStatus);
-            const embPrintDate = getEmbPrintDate(item.challanHistory);
-            const abbreviatedParty = abbreviatePartyName(item.partyName);
-            const abbreviatedSeason = abbreviateSeason(item.season);
-            const totalPCS = item.totalPCS || 0;
-            const completionDate = getCompletionDateFormatted(item.completedStatus);
-
-            const pintuValue = getPintuStatusForPDF ? getPintuStatusForPDF(item.lotNumber) : '';
-            const eaValue = getEAStatusForPDF ? getEAStatusForPDF(item.lotNumber) : '';
-
-            const isUpdatedToday = isStatusUpdatedToday(item.wipStatus, item.completedStatus);
-            const wipDisplayValue = isCompleted
-              ? 'Done'
-              : (isUpdatedToday ? wipRemarks : 'Not updated');
-
-            const lotStatus = isCompleted ? 'Completed' : 'Pending';
-            const issueDate = formatDateOfIssue(item.dateOfIssue);
-
-            const formattedEmbPrintDate = embPrintDate !== '-' ? formatDateToDDMMYYForPDF(embPrintDate) : '-';
-            const formattedCompletionDate = completionDate ? formatDateToDDMMYYForPDF(completionDate) : '-';
-
-            const rowBgColor = rowIndex % 2 === 0 ? [255, 255, 255] : [250, 250, 250];
-
-            let stitchingDaysRGB = [240, 240, 240];
-            let stitchingDaysTextRGB = [100, 100, 100];
-            if (stitchingDaysColor === '#dcfce7') {
-              stitchingDaysRGB = [220, 252, 231];
-              stitchingDaysTextRGB = [22, 101, 52];
-            } else if (stitchingDaysColor === '#fef3c7') {
-              stitchingDaysRGB = [254, 243, 199];
-              stitchingDaysTextRGB = [146, 64, 14];
-            } else if (stitchingDaysColor === '#fee2e2') {
-              stitchingDaysRGB = [254, 226, 226];
-              stitchingDaysTextRGB = [153, 27, 27];
-            }
-
-            let lotStatusColor = [254, 243, 199];
-            let lotStatusTextColor = [146, 64, 14];
-            if (isCompleted) {
-              lotStatusColor = [220, 252, 231];
-              lotStatusTextColor = [22, 101, 52];
-            }
-
-            const cleanCellText = (text) => {
-              if (text == null || text === '' || text === '-') return '—';
-              if (text === 'N/A') return 'N/A';
-              let str = String(text).trim();
-              if (str.includes('_')) {
-                str = str.replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
-                return str.split(' ').map(w => {
-                  if (!w) return '';
-                  if (w.startsWith('(')) {
-                    return '(' + w.slice(1, 2).toUpperCase() + w.slice(2);
-                  }
-                  return w.charAt(0).toUpperCase() + w.slice(1);
-                }).join(' ');
-              }
-              return str;
-            };
-
-            // Map each active column to its cell content and style
-            return activeCols.map((col, colIdx) => {
-              const cellWidth = columnWidths[colIdx];
-              const cellPad = { top: 2, right: 1, bottom: 2, left: 1 };
-              const fontSz = activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5);
-
-              if (col.id === 'sr') {
-                return {
-                  content: (rowIndex + 1).toString(),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, textColor: [100, 100, 100], fontStyle: 'normal', cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'lotNo') {
-                return {
-                  content: cleanCellText(item.lotNumber),
-                  styles: { cellWidth, fontSize: Math.max(fontSz, 9.5), halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: lotNumberColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'fabric') {
-                return {
-                  content: cleanCellText(item.fabric),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: textColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'garment') {
-                return {
-                  content: cleanCellText(item.garmentType),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: textColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'style') {
-                return {
-                  content: cleanCellText(item.style),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: textColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'brand') {
-                return {
-                  content: cleanCellText(item.brand),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: textColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'party') {
-                return {
-                  content: abbreviatedParty,
-                  styles: { cellWidth, fontSize: fontSz + 1, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: partyColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'supervisor') {
-                return {
-                  content: cleanCellText(normalizeSupervisorName(item.supervisor)),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: [59, 130, 246], cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'season') {
-                return {
-                  content: abbreviatedSeason,
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, textColor: textColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'mwk') {
-                return {
-                  content: abbreviateMWKForPDF(item.mwk),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: abbreviateMWKForPDF(item.mwk) === 'M' ? [59, 130, 246] : abbreviateMWKForPDF(item.mwk) === 'W' ? [239, 68, 68] : abbreviateMWKForPDF(item.mwk) === 'K' ? [16, 185, 129] : textColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'direct') {
-                return {
-                  content: item.directStitching ? (item.directStitching.toLowerCase() === 'yes' ? 'Y' : 'N') : 'N/A',
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: item.directStitching && item.directStitching.toLowerCase() === 'yes' ? highlightColor : [100, 100, 100], cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'issueDate') {
-                return {
-                  content: cleanCellText(issueDate),
-                  styles: { cellWidth, fontSize: fontSz + 1, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: issueDateColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'days') {
-                return {
-                  content: stitchingDays.toString(),
-                  styles: { cellWidth, fontSize: fontSz + 1, halign: 'center', fontStyle: 'bold', fillColor: stitchingDaysRGB, textColor: stitchingDaysTextRGB, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'totalPcs') {
-                return {
-                  content: totalPCS > 0 ? totalPCS.toLocaleString() : 'N/A',
-                  styles: { cellWidth, fontSize: Math.max(fontSz, 9.5), halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: pcsColor, cellPadding: cellPad }
-                };
-              }
-
-              // Department Issue Date Column
-              if (col.deptId && col.type === 'issue') {
-                const deptLotsMap = departmentDataMap[col.deptId] || (departmentCache.current.get(col.deptId) || {});
-                const deptInfo = deptLotsMap[item.lotNumber?.trim()] || null;
-                const deptIssueDate = deptInfo?.issueDate ? formatDateToDDMMYYForPDF(deptInfo.issueDate) : '';
-                const hasValidDate = deptIssueDate && deptIssueDate !== 'N/A' && deptIssueDate !== '-';
-                return {
-                  content: hasValidDate ? deptIssueDate : '—',
-                  styles: {
-                    cellWidth,
-                    fontSize: Math.min(fontSz, 7),
-                    halign: 'center',
-                    fontStyle: hasValidDate ? 'bold' : 'normal',
-                    fillColor: rowBgColor,
-                    textColor: hasValidDate ? [30, 41, 59] : [148, 163, 184],
-                    cellPadding: { top: 2, right: 0.5, bottom: 2, left: 0.5 }
-                  }
-                };
-              }
-
-              // Department Completion / Status Column
-              if (col.deptId && col.type === 'comp') {
-                const deptLotsMap = departmentDataMap[col.deptId] || (departmentCache.current.get(col.deptId) || {});
-                const deptInfo = deptLotsMap[item.lotNumber?.trim()] || null;
-                const isDeptCompleted = deptInfo?.status === 'Completed' || (deptInfo?.completionDate && deptInfo.completionDate !== '-');
-                const deptCompDate = deptInfo?.completionDate ? formatDateToDDMMYYForPDF(deptInfo.completionDate) : '';
-
-                const rawIndexWip = getLatestWipRemarks(item.wipStatus, false);
-                const indexWipLower = (rawIndexWip || '').toLowerCase();
-                const targetDeptNorm = col.deptId.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-                let indexWipHasIssue = false;
-                if (
-                  (targetDeptNorm.includes('kaj') && (indexWipLower.includes('kaaj') || indexWipLower.includes('kaj') || indexWipLower.includes('button'))) ||
-                  (targetDeptNorm.includes('overlock') && indexWipLower.includes('overlock')) ||
-                  (targetDeptNorm.includes('feed') && (indexWipLower.includes('feed') || indexWipLower.includes('feedup') || indexWipLower.includes('feed up'))) ||
-                  (targetDeptNorm.includes('folding') && indexWipLower.includes('folding')) ||
-                  (targetDeptNorm.includes('emb') && (indexWipLower.includes('emb') || indexWipLower.includes('embroidery'))) ||
-                  (targetDeptNorm.includes('print') && (indexWipLower.includes('print') || indexWipLower.includes('prt'))) ||
-                  (targetDeptNorm.includes('washing') && (indexWipLower.includes('wash') || indexWipLower.includes('washing'))) ||
-                  (targetDeptNorm.includes('elastic') && indexWipLower.includes('elastic'))
-                ) {
-                  if (indexWipLower.includes('pending') || indexWipLower.includes('hold') || indexWipLower.includes('issue') || indexWipLower.includes('fault')) {
-                    indexWipHasIssue = true;
-                  }
-                }
-
-                const hasIssue = !isDeptCompleted && (deptInfo?.hasIssue || indexWipHasIssue);
-                const issueRemark = deptInfo?.issueRemark || (indexWipHasIssue ? rawIndexWip : '');
-
-                if (isDeptCompleted) {
-                  const compText = deptCompDate && deptCompDate !== '-' && deptCompDate !== 'N/A' ? deptCompDate : 'Done';
-                  return {
-                    content: compText,
-                    styles: {
-                      cellWidth,
-                      fontSize: Math.min(fontSz, 7),
-                      halign: 'center',
-                      fontStyle: 'bold',
-                      fillColor: [220, 252, 231],
-                      textColor: [21, 128, 61],
-                      cellPadding: { top: 2, right: 0.5, bottom: 2, left: 0.5 }
-                    }
-                  };
-                } else if (hasIssue) {
-                  return {
-                    content: issueRemark ? `Hold: ${cleanCellText(issueRemark)}` : 'Hold',
-                    styles: {
-                      cellWidth,
-                      fontSize: Math.max(6, fontSz - 1),
-                      halign: 'center',
-                      fontStyle: 'bold',
-                      fillColor: [254, 226, 226],
-                      textColor: [185, 28, 28],
-                      cellPadding: { top: 2, right: 0.5, bottom: 2, left: 0.5 }
-                    }
-                  };
-                } else if (deptInfo?.issueDate) {
-                  return {
-                    content: 'WIP',
-                    styles: {
-                      cellWidth,
-                      fontSize: fontSz,
-                      halign: 'center',
-                      fontStyle: 'bold',
-                      fillColor: [254, 243, 199],
-                      textColor: [180, 83, 9],
-                      cellPadding: cellPad
-                    }
-                  };
-                } else {
-                  return {
-                    content: '—',
-                    styles: {
-                      cellWidth,
-                      fontSize: fontSz,
-                      halign: 'center',
-                      fillColor: rowBgColor,
-                      textColor: [148, 163, 184],
-                      cellPadding: cellPad
-                    }
-                  };
-                }
-              }
-
-              if (col.id === 'embPrint') {
-                return {
-                  content: cleanCellText(formattedEmbPrintDate),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: formattedEmbPrintDate !== '-' && formattedEmbPrintDate !== '—' ? 'bold' : 'normal', textColor: formattedEmbPrintDate !== '-' && formattedEmbPrintDate !== '—' ? accentColor : [100, 100, 100], cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'wipStatus') {
-                return {
-                  content: cleanCellText(wipDisplayValue),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: !isCompleted && !isUpdatedToday ? [255, 235, 235] : rowBgColor, fontStyle: isCompleted ? 'bold' : (wipRemarks !== 'N/A' ? 'bold' : 'normal'), textColor: isCompleted ? [16, 185, 129] : (isUpdatedToday ? (wipRemarks !== 'N/A' ? remarksColor : [100, 100, 100]) : notUpdatedColor), cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'pintu') {
-                return {
-                  content: cleanCellText(pintuValue),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: pintuColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'ea') {
-                return {
-                  content: cleanCellText(eaValue),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: eaColor, cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'completionDate') {
-                return {
-                  content: cleanCellText(formattedCompletionDate),
-                  styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: formattedCompletionDate !== '-' && formattedCompletionDate !== '—' ? 'bold' : 'normal', textColor: formattedCompletionDate !== '-' && formattedCompletionDate !== '—' ? [59, 130, 246] : [100, 100, 100], cellPadding: cellPad }
-                };
-              }
-              if (col.id === 'lotStatus') {
-                return {
-                  content: cleanCellText(lotStatus),
-                  styles: { cellWidth, fontSize: Math.max(6.5, fontSz - 1), halign: 'center', fontStyle: 'bold', fillColor: lotStatusColor, textColor: lotStatusTextColor, cellPadding: cellPad }
-                };
-              }
-
-              return {
-                content: '—',
-                styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, textColor: [100, 100, 100], cellPadding: cellPad }
-              };
-            });
-          });
-
-          let lastAutoTableY = currentY;
-
-          autoTable(doc, {
-            startY: currentY,
-            head: tableHeaders,
-            body: body,
-            theme: 'grid',
-            headStyles: {
-              fillColor: headerColor,
-              textColor: [255, 255, 255],
-              fontStyle: 'bold',
-              fontSize: activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5),
-              cellPadding: { top: 3.5, right: 1.5, bottom: 3.5, left: 1.5 },
-              lineWidth: 0.5,
-              lineColor: headerColor,
-              halign: 'center',
-              valign: 'middle'
-            },
-            bodyStyles: {
-              fontSize: activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5),
-              cellPadding: { top: 2.5, right: 1.5, bottom: 2.5, left: 1.5 },
-              lineWidth: 0.3,
-              lineColor: borderColor,
-              textColor: textColor,
-              fillColor: [255, 255, 255],
-              font: 'helvetica',
-              valign: 'middle',
-              overflow: 'linebreak',
-              minCellHeight: 6.5,
-              lineHeight: 1.18
-            },
-            columnStyles: columnStyles,
-            margin: { top: 35, left: margin, right: margin },
-            tableWidth: contentWidth,
-            showHead: 'everyPage',
-            showFoot: false,
-            pageBreak: 'auto',
-            rowPageBreak: 'avoid',
-            tableLineWidth: 0.5,
-            tableLineColor: borderColor,
-            didDrawPage: function (data) {
-              drawSupervisorHeader();
-              if (data.cursor && data.cursor.y) {
-                lastAutoTableY = data.cursor.y;
-              }
-            }
-          });
-
-          // Stage-wise Analysis for this supervisor
-          const stageAnalysis = {};
-          supData.forEach(item => {
-            const wipRemarks = getLatestWipRemarks(item.wipStatus);
-            const stage = extractStageFromStatus(wipRemarks);
-
-            if (!stageAnalysis[stage]) {
-              stageAnalysis[stage] = { lots: 0, pcs: 0, notUpdatedLots: 0 };
-            }
-            stageAnalysis[stage].lots += 1;
-            stageAnalysis[stage].pcs += item.totalPCS || 0;
-            if (!isStatusUpdatedToday(item.wipStatus, item.completedStatus)) {
-              stageAnalysis[stage].notUpdatedLots += 1;
-            }
-          });
-
-          const stageArray = Object.entries(stageAnalysis)
-            .map(([stage, data]) => ({
-              stage,
-              lots: data.lots,
-              pcs: data.pcs,
-              notUpdatedLots: data.notUpdatedLots
-            }))
-            .sort((a, b) => b.lots - a.lots);
-
-          const totalStageLots = stageArray.reduce((sum, item) => sum + item.lots, 0);
-          const totalStagePCS = stageArray.reduce((sum, item) => sum + item.pcs, 0);
-          const totalStageNotUpdated = stageArray.reduce((sum, item) => sum + item.notUpdatedLots, 0);
-
-          let summaryStartY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : lastAutoTableY) + 7;
-          if (summaryStartY > pageHeight - 80) {
-            doc.addPage();
-            drawSupervisorHeader();
-            summaryStartY = 35;
-          }
-
-          doc.setFillColor(255, 255, 255);
-          doc.rect(margin - 2, summaryStartY - 8, contentWidth + 4, 16, 'F');
-
-          doc.setFontSize(13);
-          doc.setFont('times', 'bold');
-          doc.setTextColor(15, 76, 129);
-          doc.text(`${supName.toUpperCase()} - STAGE-WISE ANALYSIS`, pageWidth / 2, summaryStartY, { align: 'center' });
-
-          const stageBody = stageArray.map(item => {
-            const percentage = totalStageLots > 0 ? Math.round((item.lots / totalStageLots) * 100) : 0;
-            return [
-              {
-                content: item.stage,
-                styles: {
-                  halign: 'left',
-                  fontSize: 10,
-                  cellPadding: { top: 3, right: 3, bottom: 3, left: 6 },
-                  fontStyle: 'bold',
-                  fillColor: [240, 249, 255]
-                }
-              },
-              {
-                content: item.lots.toString(),
-                styles: {
-                  halign: 'center',
-                  fontSize: 11,
-                  fontStyle: 'bold',
-                  cellPadding: { top: 3, right: 3, bottom: 3, left: 3 }
-                }
-              },
-              {
-                content: `${percentage}%`,
-                styles: {
-                  halign: 'center',
-                  fontSize: 10,
-                  cellPadding: { top: 3, right: 3, bottom: 3, left: 3 },
-                  textColor: percentage >= 50 ? [16, 185, 129] : percentage >= 30 ? [245, 158, 11] : [239, 68, 68]
-                }
-              },
-              {
-                content: item.pcs.toLocaleString(),
-                styles: {
-                  halign: 'center',
-                  fontSize: 11,
-                  fontStyle: 'bold',
-                  cellPadding: { top: 3, right: 3, bottom: 3, left: 3 }
-                }
-              },
-              {
-                content: item.notUpdatedLots > 0 ? `${item.notUpdatedLots}` : '-',
-                styles: {
-                  halign: 'center',
-                  fontSize: 10,
-                  cellPadding: { top: 3, right: 3, bottom: 3, left: 3 },
-                  textColor: item.notUpdatedLots > 0 ? [220, 38, 38] : [100, 100, 100],
-                  fontStyle: item.notUpdatedLots > 0 ? 'bold' : 'normal',
-                  fillColor: item.notUpdatedLots > 0 ? [255, 235, 235] : [255, 255, 255]
-                }
-              }
-            ];
-          });
-
-          stageBody.push([
-            {
-              content: 'TOTAL',
-              styles: {
-                halign: 'left',
-                fontSize: 11,
-                fontStyle: 'bold',
-                fillColor: [225, 239, 255],
-                cellPadding: { top: 4, right: 3, bottom: 4, left: 6 }
-              }
-            },
-            {
-              content: totalStageLots.toString(),
-              styles: {
-                halign: 'center',
-                fontSize: 12,
-                fontStyle: 'bold',
-                fillColor: [225, 239, 255],
-                cellPadding: { top: 4, right: 3, bottom: 4, left: 3 }
-              }
-            },
-            {
-              content: '100%',
-              styles: {
-                halign: 'center',
-                fontSize: 11,
-                fontStyle: 'bold',
-                fillColor: [225, 239, 255],
-                textColor: [59, 130, 246],
-                cellPadding: { top: 4, right: 3, bottom: 4, left: 3 }
-              }
-            },
-            {
-              content: totalStagePCS.toLocaleString(),
-              styles: {
-                halign: 'center',
-                fontSize: 12,
-                fontStyle: 'bold',
-                fillColor: [225, 239, 255],
-                cellPadding: { top: 4, right: 3, bottom: 4, left: 3 }
-              }
-            },
-            {
-              content: totalStageNotUpdated > 0 ? `${totalStageNotUpdated}` : '-',
-              styles: {
-                halign: 'center',
-                fontSize: 11,
-                fontStyle: 'bold',
-                fillColor: [225, 239, 255],
-                textColor: totalStageNotUpdated > 0 ? [220, 38, 38] : [100, 100, 100],
-                cellPadding: { top: 4, right: 3, bottom: 4, left: 3 }
-              }
-            }
-          ]);
-
-          const stageColumnWidths = [
-            contentWidth * 0.45,
-            contentWidth * 0.10,
-            contentWidth * 0.08,
-            contentWidth * 0.17,
-            contentWidth * 0.20
-          ];
-
-          autoTable(doc, {
-            startY: summaryStartY + 7,
-            head: [[
-              { content: 'WORK STAGE', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[0], fillColor: stageAnalysisColor, textColor: [255, 255, 255] } },
-              { content: 'LOTS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[1], fillColor: stageAnalysisColor, textColor: [255, 255, 255] } },
-              { content: '%', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[2], fillColor: stageAnalysisColor, textColor: [255, 255, 255] } },
-              { content: 'TOTAL PCS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[3], fillColor: stageAnalysisColor, textColor: [255, 255, 255] } },
-              { content: 'NOT UPDATED', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[4], fillColor: [220, 38, 38], textColor: [255, 255, 255] } }
-            ]],
-            body: stageBody.map(row => row.map((cell, colIndex) => ({
-              content: cell.content,
-              styles: {
-                ...cell.styles,
-                cellWidth: stageColumnWidths[colIndex]
-              }
-            }))),
-            theme: 'grid',
-            headStyles: {
-              fillColor: stageAnalysisColor,
-              textColor: [255, 255, 255],
-              fontStyle: 'bold',
-              fontSize: 9,
-              cellPadding: { top: 3, right: 2, bottom: 3, left: 2 },
-              lineWidth: 0.5,
-              lineColor: stageAnalysisColor,
-              halign: 'center',
-              valign: 'middle'
-            },
-            bodyStyles: {
-              fontSize: 9,
-              cellPadding: { top: 3, right: 2, bottom: 3, left: 2 },
-              lineWidth: 0.3,
-              lineColor: [220, 220, 220],
-              textColor: textColor,
-              font: 'helvetica',
-              valign: 'middle'
-            },
-            margin: { top: 35, left: margin, right: margin },
-            tableWidth: 'auto',
-            showHead: 'everyPage',
-            showFoot: false,
-            pageBreak: 'auto',
-            rowPageBreak: 'avoid'
-          });
+        let legendX = margin + 70;
+        legendItems.forEach((item) => {
+          doc.setFillColor(...item.color);
+          doc.rect(legendX, yPos - 3, 5, 5, 'F');
+          doc.setTextColor(0, 0, 0);
+          doc.setFont('helvetica', 'normal');
+          doc.text(item.text, legendX + 7, yPos);
+          legendX += 70;
         });
 
-        // ===================== OVERALL SUPERVISOR WORKLOAD & MANPOWER / ATTENDANCE SUMMARY =====================
-        // Add dedicated summary page for Supervisor Workload and Manpower Attendance
-        doc.addPage();
+        return yPos + 8;
+      };
 
+      // Determine active columns to render in the PDF
+      const allCols = getAvailablePdfColumns();
+      let activeColIds = Array.isArray(customCols) && customCols.length > 0
+        ? customCols
+        : (Array.isArray(selectedPdfColumns) && selectedPdfColumns.length > 0
+          ? selectedPdfColumns
+          : allCols.filter(c => c.defaultChecked || c.isSelectedInPage).map(c => c.id));
+
+      const activeCols = activeColIds
+        .map(id => allCols.find(c => c.id === id))
+        .filter(Boolean);
+
+      if (activeCols.length === 0) {
+        alert('Please select at least one column for the PDF.');
+        setLoading(false);
+        setPdfGenerating(false);
+        return;
+      }
+
+      // Ensure data for all selected departments and active column departments is loaded
+      const neededDepts = [];
+      activeCols.forEach(col => {
+        if (col.deptId && !neededDepts.includes(col.deptId)) {
+          neededDepts.push(col.deptId);
+        }
+      });
+      if (Array.isArray(selectedDepartments)) {
+        selectedDepartments.forEach(d => {
+          if (!neededDepts.includes(d)) neededDepts.push(d);
+        });
+      }
+
+      const liveDeptMaps = {};
+      for (const d of neededDepts) {
+        let fetched = departmentDataMap[d] || (departmentCache.current && departmentCache.current.get(d));
+        if (!fetched || Object.keys(fetched).length === 0) {
+          fetched = await fetchDepartmentData(d);
+        }
+        liveDeptMaps[d] = fetched || {};
+      }
+
+      const findDeptLotInfo = (deptId, rawLot) => {
+        if (!deptId || !rawLot) return null;
+        const dMap = liveDeptMaps[deptId] || departmentDataMap[deptId] || (departmentCache.current && departmentCache.current.get(deptId)) || {};
+        const str = String(rawLot).trim();
+        if (dMap[str]) return dMap[str];
+        const clean = str.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (dMap[clean]) return dMap[clean];
+        for (const k in dMap) {
+          if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === clean) {
+            return dMap[k];
+          }
+        }
+        return null;
+      };
+
+      // Calculate scaled widths to perfectly fill contentWidth (404mm)
+      const totalBaseWidth = activeCols.reduce((sum, c) => sum + (c.baseWidth || 15), 0);
+      const columnWidths = {};
+      const columnStyles = {};
+
+      const tableHeaders = [
+        activeCols.map((col, idx) => {
+          const scaledWidth = Math.max(7, Math.round((col.baseWidth / totalBaseWidth) * contentWidth * 10) / 10);
+          columnWidths[idx] = scaledWidth;
+          columnStyles[idx] = {
+            cellWidth: scaledWidth,
+            halign: 'center',
+            valign: 'middle'
+          };
+          return {
+            content: col.label,
+            styles: {
+              fontStyle: 'bold',
+              fillColor: headerColor,
+              textColor: [255, 255, 255],
+              cellWidth: scaledWidth,
+              halign: 'center',
+              fontSize: activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5),
+              cellPadding: { top: 3, right: 1, bottom: 3, left: 1 }
+            }
+          };
+        })
+      ];
+
+      // Identify list of supervisors to process
+      let supervisorsList = [];
+      if (filters.supervisor && Array.isArray(filters.supervisor) && filters.supervisor.length > 0) {
+        supervisorsList = filters.supervisor;
+      } else if (filters.supervisor && typeof filters.supervisor === 'string' && filters.supervisor.trim() !== '') {
+        supervisorsList = [filters.supervisor];
+      } else {
+        const supSet = new Set();
+        exportData.forEach(item => {
+          const s = (item.supervisor || '').trim();
+          if (s) supSet.add(normalizeSupervisorName(s));
+          else supSet.add('Unassigned');
+        });
+        supervisorsList = Array.from(supSet).sort();
+      }
+
+      // Helper function to map data item to table cells
+      const mapItemToRow = (item, rowIndex) => {
+        const isCompleted = isLotCompleted(item.completedStatus);
+        const stitchingDays = calculateStitchingDays(item.dateOfIssue, item.completedStatus, isCompleted);
+        const stitchingDaysColor = getStitchingDaysColor(stitchingDays);
+        const wipRemarks = getLatestWipRemarks(item.wipStatus);
+        const embPrintDate = getEmbPrintDate(item.challanHistory);
+        const abbreviatedParty = abbreviatePartyName(item.partyName);
+        const abbreviatedSeason = abbreviateSeason(item.season);
+        const totalPCS = item.totalPCS || 0;
+        const completionDate = getCompletionDateFormatted(item.completedStatus);
+
+        const pintuValue = getPintuStatusForPDF ? getPintuStatusForPDF(item.lotNumber) : '';
+        const eaValue = getEAStatusForPDF ? getEAStatusForPDF(item.lotNumber) : '';
+
+        const isUpdatedToday = isStatusUpdatedToday(item.wipStatus, item.completedStatus);
+        const wipDisplayValue = isCompleted
+          ? 'Done'
+          : (isUpdatedToday ? wipRemarks : 'Not updated');
+
+        const lotStatus = isCompleted ? 'Completed' : 'Pending';
+        const issueDate = formatDateOfIssue(item.dateOfIssue);
+
+        const formattedEmbPrintDate = embPrintDate !== '-' ? formatDateToDDMMYYForPDF(embPrintDate) : '-';
+        const formattedCompletionDate = completionDate ? formatDateToDDMMYYForPDF(completionDate) : '-';
+
+        const rowBgColor = rowIndex % 2 === 0 ? [255, 255, 255] : [250, 250, 250];
+
+        let stitchingDaysRGB = [240, 240, 240];
+        if (stitchingDaysColor === '#dcfce7') {
+          stitchingDaysRGB = [220, 252, 231];
+        } else if (stitchingDaysColor === '#fef3c7') {
+          stitchingDaysRGB = [254, 243, 199];
+        } else if (stitchingDaysColor === '#fee2e2') {
+          stitchingDaysRGB = [254, 226, 226];
+        }
+
+        let lotStatusColor = [254, 243, 199];
+        if (isCompleted) {
+          lotStatusColor = [220, 252, 231];
+        }
+
+        const cleanCellText = (text) => {
+          if (text == null || text === '' || text === '-') return '—';
+          if (text === 'N/A') return 'N/A';
+          let str = String(text).trim();
+          if (str.includes('_')) {
+            str = str.replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
+            return str.split(' ').map(w => {
+              if (!w) return '';
+              if (w.startsWith('(')) {
+                return '(' + w.slice(1, 2).toUpperCase() + w.slice(2);
+              }
+              return w.charAt(0).toUpperCase() + w.slice(1);
+            }).join(' ');
+          }
+          return str;
+        };
+
+        return activeCols.map((col, colIdx) => {
+          const cellWidth = columnWidths[colIdx];
+          const cellPad = { top: 2, right: 1, bottom: 2, left: 1 };
+          const fontSz = activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5);
+
+          if (col.id === 'sr') {
+            return {
+              content: (rowIndex + 1).toString(),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, textColor: [0, 0, 0], fontStyle: 'normal', cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'lotNo') {
+            return {
+              content: cleanCellText(item.lotNumber),
+              styles: { cellWidth, fontSize: Math.max(fontSz, 9.5), halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'fabric') {
+            return {
+              content: cleanCellText(item.fabric),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'garment') {
+            return {
+              content: cleanCellText(item.garmentType),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'style') {
+            return {
+              content: cleanCellText(item.style),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'brand') {
+            return {
+              content: cleanCellText(item.brand),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'party') {
+            return {
+              content: abbreviatedParty,
+              styles: { cellWidth, fontSize: fontSz + 1, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'supervisor') {
+            return {
+              content: cleanCellText(normalizeSupervisorName(item.supervisor)),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'season') {
+            return {
+              content: abbreviatedSeason,
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'mwk') {
+            return {
+              content: abbreviateMWKForPDF(item.mwk),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'direct') {
+            return {
+              content: item.directStitching ? (item.directStitching.toLowerCase() === 'yes' ? 'Y' : 'N') : 'N/A',
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'issueDate') {
+            return {
+              content: cleanCellText(issueDate),
+              styles: { cellWidth, fontSize: fontSz + 1, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'days') {
+            return {
+              content: stitchingDays.toString(),
+              styles: { cellWidth, fontSize: fontSz + 1, halign: 'center', fontStyle: 'bold', fillColor: stitchingDaysRGB, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'totalPcs') {
+            return {
+              content: totalPCS > 0 ? totalPCS.toLocaleString() : 'N/A',
+              styles: { cellWidth, fontSize: Math.max(fontSz, 9.5), halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'section') {
+            const sectionVal = item.section && item.section !== 'N/A' && item.section !== '—'
+              ? item.section
+              : (abbreviateMWK(item.mwk) === 'K' ? 'KIDS' : abbreviateMWK(item.mwk) === 'M' ? 'GENTS' : abbreviateMWK(item.mwk) === 'W' ? 'WOMEN' : '—');
+            return {
+              content: cleanCellText(sectionVal),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+
+          // Department Issue Date Column
+          if (col.deptId && col.type === 'issue') {
+            const deptInfo = findDeptLotInfo(col.deptId, item.lotNumber);
+            const deptIssueDate = deptInfo?.issueDate ? formatDateToDDMMYYForPDF(deptInfo.issueDate) : '';
+            const hasValidDate = deptIssueDate && deptIssueDate !== 'N/A' && deptIssueDate !== '-';
+            return {
+              content: hasValidDate ? deptIssueDate : '—',
+              styles: {
+                cellWidth,
+                fontSize: Math.min(fontSz, 7),
+                halign: 'center',
+                fontStyle: hasValidDate ? 'bold' : 'normal',
+                fillColor: rowBgColor,
+                textColor: [0, 0, 0],
+                cellPadding: { top: 2, right: 0.5, bottom: 2, left: 0.5 }
+              }
+            };
+          }
+
+          // Department Completion Date Column
+          if (col.deptId && col.type === 'comp') {
+            const deptInfo = findDeptLotInfo(col.deptId, item.lotNumber);
+            const deptCompDate = deptInfo?.completionDate && deptInfo.completionDate !== '-' && deptInfo.completionDate !== 'N/A' ? formatDateToDDMMYYForPDF(deptInfo.completionDate) : '';
+            const hasValidDate = deptCompDate && deptCompDate !== 'N/A' && deptCompDate !== '—' && deptCompDate !== '-';
+
+            return {
+              content: hasValidDate ? deptCompDate : '—',
+              styles: {
+                cellWidth,
+                fontSize: Math.min(fontSz, 7),
+                halign: 'center',
+                fontStyle: hasValidDate ? 'bold' : 'normal',
+                fillColor: hasValidDate ? [220, 252, 231] : rowBgColor,
+                textColor: [0, 0, 0],
+                cellPadding: { top: 2, right: 0.5, bottom: 2, left: 0.5 }
+              }
+            };
+          }
+
+          if (col.id === 'embPrint') {
+            return {
+              content: cleanCellText(formattedEmbPrintDate),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: formattedEmbPrintDate !== '-' && formattedEmbPrintDate !== '—' ? 'bold' : 'normal', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'wipStatus') {
+            return {
+              content: cleanCellText(wipDisplayValue),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: !isCompleted && !isUpdatedToday ? [255, 235, 235] : rowBgColor, fontStyle: isCompleted ? 'bold' : (wipRemarks !== 'N/A' ? 'bold' : 'normal'), textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'pintu') {
+            return {
+              content: cleanCellText(pintuValue),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'ea') {
+            return {
+              content: cleanCellText(eaValue),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'completionDate') {
+            return {
+              content: cleanCellText(formattedCompletionDate),
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, fontStyle: formattedCompletionDate !== '-' && formattedCompletionDate !== '—' ? 'bold' : 'normal', textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'lotStatus') {
+            return {
+              content: cleanCellText(lotStatus),
+              styles: { cellWidth, fontSize: Math.max(6.5, fontSz - 1), halign: 'center', fontStyle: 'bold', fillColor: lotStatusColor, textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+
+          return {
+            content: '—',
+            styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
+          };
+        });
+      };
+
+      // Helper function to render 3 side-by-side executive tables
+      const renderThreeSideBySideSummary = (dataset, titlePrefix, startY) => {
+        const stageAnalysis = {};
+        const garmentAnalysis = {};
+        let greenLots = 0, greenPcs = 0;
+        let yellowLots = 0, yellowPcs = 0;
+        let redLots = 0, redPcs = 0;
+
+        const activeDeptsToCheck = neededDepts && neededDepts.length > 0 ? neededDepts : (selectedDepartments || []);
+
+        dataset.forEach(item => {
+          const lotNum = (item.lotNumber || '').trim();
+          const pcs = item.totalPCS || 0;
+          const stitchingDays = calculateStitchingDays(item.dateOfIssue);
+          const isCompleted = isLotCompleted(item.completedStatus);
+
+          let stage = 'Other';
+          if (isCompleted) {
+            stage = 'Stitching Completed';
+          } else {
+            let deptStageFound = false;
+            if (activeDeptsToCheck.length > 0) {
+              for (const deptId of activeDeptsToCheck) {
+                const deptInfo = findDeptLotInfo(deptId, lotNum);
+                if (deptInfo) {
+                  const hasIssue = deptInfo.issueDate && deptInfo.issueDate !== '-' && deptInfo.issueDate !== 'N/A' && deptInfo.issueDate.trim() !== '';
+                  const isComp = deptInfo.completionDate && deptInfo.completionDate !== '-' && deptInfo.completionDate !== 'N/A' && !deptInfo.completionDate.toLowerCase().includes('pending') && deptInfo.completionDate.trim() !== '';
+                  if (hasIssue && !isComp) {
+                    const opt = DEPARTMENT_OPTIONS.find(d => d.id === deptId);
+                    const deptLabel = opt ? opt.label : deptId;
+                    stage = `${deptLabel} Working`;
+                    deptStageFound = true;
+                    break;
+                  }
+                }
+              }
+            }
+            if (!deptStageFound) {
+              const wipRemarks = getLatestWipRemarks(item.wipStatus);
+              stage = extractStageFromStatus(wipRemarks);
+            }
+          }
+
+          if (!stageAnalysis[stage]) {
+            stageAnalysis[stage] = { lots: 0, pcs: 0, notUpdatedLots: 0 };
+          }
+          stageAnalysis[stage].lots += 1;
+          stageAnalysis[stage].pcs += pcs;
+          if (!isStatusUpdatedToday(item.wipStatus, item.completedStatus)) {
+            stageAnalysis[stage].notUpdatedLots += 1;
+          }
+
+          const garment = (item.garmentType || 'Unassigned').trim() || 'Unassigned';
+          if (!garmentAnalysis[garment]) {
+            garmentAnalysis[garment] = { lots: 0, pcs: 0 };
+          }
+          garmentAnalysis[garment].lots += 1;
+          garmentAnalysis[garment].pcs += pcs;
+
+          if (stitchingDays <= 6) {
+            greenLots += 1;
+            greenPcs += pcs;
+          } else if (stitchingDays <= 15) {
+            yellowLots += 1;
+            yellowPcs += pcs;
+          } else {
+            redLots += 1;
+            redPcs += pcs;
+          }
+        });
+
+        const stageArray = Object.entries(stageAnalysis)
+          .map(([stage, data]) => ({
+            stage,
+            lots: data.lots,
+            pcs: data.pcs,
+            notUpdatedLots: data.notUpdatedLots
+          }))
+          .sort((a, b) => b.lots - a.lots);
+
+        const totalStageLots = stageArray.reduce((sum, item) => sum + item.lots, 0);
+        const totalStagePCS = stageArray.reduce((sum, item) => sum + item.pcs, 0);
+        const totalStageNotUpdated = stageArray.reduce((sum, item) => sum + item.notUpdatedLots, 0);
+
+        const garmentArray = Object.entries(garmentAnalysis)
+          .map(([garment, data]) => ({
+            garment,
+            lots: data.lots,
+            pcs: data.pcs
+          }))
+          .sort((a, b) => b.lots - a.lots);
+
+        const totalGarmentLots = garmentArray.reduce((sum, item) => sum + item.lots, 0);
+        const totalGarmentPCS = garmentArray.reduce((sum, item) => sum + item.pcs, 0);
+
+        const totalDaysLots = greenLots + yellowLots + redLots;
+        const totalDaysPCS = greenPcs + yellowPcs + redPcs;
+        const greenPercent = totalDaysLots > 0 ? Math.round((greenLots / totalDaysLots) * 100) : 0;
+        const yellowPercent = totalDaysLots > 0 ? Math.round((yellowLots / totalDaysLots) * 100) : 0;
+        const redPercent = totalDaysLots > 0 ? Math.round((redLots / totalDaysLots) * 100) : 0;
+
+        const gap = 4.5;
+        const totalUsableWidth = contentWidth - (gap * 2);
+        const width1 = totalUsableWidth * 0.37;
+        const width2 = totalUsableWidth * 0.31;
+        const width3 = totalUsableWidth * 0.32;
+
+        let summaryStartY = startY;
+        if (summaryStartY > pageHeight - 80) {
+          doc.addPage();
+          summaryStartY = 35;
+        }
+
+        doc.setFillColor(255, 255, 255);
+        doc.rect(margin - 2, summaryStartY - 8, contentWidth + 4, 14, 'F');
+
+        const t1Center = margin + (width1 / 2);
+        const t2Center = (margin + width1 + gap) + (width2 / 2);
+        const t3Center = (margin + width1 + gap + width2 + gap) + (width3 / 2);
+
+        doc.setFontSize(10);
+        doc.setFont('times', 'bold');
+        doc.setTextColor(0, 0, 0);
+        doc.text(`${titlePrefix.toUpperCase()} - STAGE ANALYSIS`, t1Center, summaryStartY, { align: 'center' });
+        doc.text(`${titlePrefix.toUpperCase()} - GARMENT SUMMARY`, t2Center, summaryStartY, { align: 'center' });
+        doc.text(`${titlePrefix.toUpperCase()} - DAYS-WISE AGING`, t3Center, summaryStartY, { align: 'center' });
+
+        const stageBody = stageArray.map(item => {
+          const percentage = totalStageLots > 0 ? Math.round((item.lots / totalStageLots) * 100) : 0;
+          return [
+            { content: item.stage, styles: { halign: 'left', fontSize: 8, cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 3 }, fontStyle: 'bold', fillColor: [240, 249, 255], textColor: [0, 0, 0] } },
+            { content: item.lots.toString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: `${percentage}%`, styles: { halign: 'center', fontSize: 8, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: item.pcs.toLocaleString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: item.notUpdatedLots > 0 ? item.notUpdatedLots.toString() : '-', styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', textColor: [0, 0, 0], fillColor: item.notUpdatedLots > 0 ? [255, 235, 235] : [240, 249, 255], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } }
+          ];
+        });
+
+        stageBody.push([
+          { content: 'TOTAL', styles: { halign: 'left', fontSize: 9, fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 3 } } },
+          { content: totalStageLots.toString(), styles: { halign: 'center', fontSize: 9.5, fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } },
+          { content: '100%', styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } },
+          { content: totalStagePCS.toLocaleString(), styles: { halign: 'center', fontSize: 9.5, fontStyle: 'bold', textColor: [0, 0, 0], fillColor: [225, 239, 255], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } },
+          { content: totalStageNotUpdated > 0 ? totalStageNotUpdated.toString() : '-', styles: { halign: 'center', fontSize: 9, fontStyle: 'bold', textColor: [0, 0, 0], fillColor: totalStageNotUpdated > 0 ? [255, 235, 235] : [225, 239, 255], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } }
+        ]);
+
+        const stageColumnWidths = [width1 * 0.42, width1 * 0.13, width1 * 0.11, width1 * 0.18, width1 * 0.18];
+
+        const garmentBody = garmentArray.map(item => [
+          { content: item.garment, styles: { halign: 'left', fontSize: 8, cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 4 }, fontStyle: 'bold', fillColor: [240, 249, 255], textColor: [0, 0, 0] } },
+          { content: item.lots.toString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+          { content: item.pcs.toLocaleString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } }
+        ]);
+
+        garmentBody.push([
+          { content: 'TOTAL', styles: { halign: 'left', fontSize: 9, fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: { top: 3, right: 2, bottom: 3, left: 4 } } },
+          { content: totalGarmentLots.toString(), styles: { halign: 'center', fontSize: 9.5, fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } },
+          { content: totalGarmentPCS.toLocaleString(), styles: { halign: 'center', fontSize: 9.5, fontStyle: 'bold', textColor: [0, 0, 0], fillColor: [225, 239, 255], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } }
+        ]);
+
+        const garmentColumnWidths = [width2 * 0.50, width2 * 0.25, width2 * 0.25];
+
+        const daysBody = [
+          [
+            { content: 'Green (1-6 Days)', styles: { halign: 'left', fontSize: 8, cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 4 }, fontStyle: 'bold', fillColor: [220, 252, 231], textColor: [0, 0, 0] } },
+            { content: greenLots.toString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', fillColor: [220, 252, 231], textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: `${greenPercent}%`, styles: { halign: 'center', fontSize: 8, fontStyle: 'bold', fillColor: [220, 252, 231], textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: greenPcs.toLocaleString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } }
+          ],
+          [
+            { content: 'Yellow (7-15 Days)', styles: { halign: 'left', fontSize: 8, cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 4 }, fontStyle: 'bold', fillColor: [254, 243, 199], textColor: [0, 0, 0] } },
+            { content: yellowLots.toString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', fillColor: [254, 243, 199], textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: `${yellowPercent}%`, styles: { halign: 'center', fontSize: 8, fontStyle: 'bold', fillColor: [254, 243, 199], textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: yellowPcs.toLocaleString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } }
+          ],
+          [
+            { content: 'Red (15+ Days)', styles: { halign: 'left', fontSize: 8, cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 4 }, fontStyle: 'bold', fillColor: [254, 226, 226], textColor: [0, 0, 0] } },
+            { content: redLots.toString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', fillColor: [254, 226, 226], textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: `${redPercent}%`, styles: { halign: 'center', fontSize: 8, fontStyle: 'bold', fillColor: [254, 226, 226], textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } },
+            { content: redPcs.toLocaleString(), styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', textColor: [0, 0, 0], cellPadding: { top: 2.2, right: 1.5, bottom: 2.2, left: 1.5 } } }
+          ],
+          [
+            { content: 'TOTAL', styles: { halign: 'left', fontSize: 9, fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: { top: 3, right: 2, bottom: 3, left: 4 } } },
+            { content: totalDaysLots.toString(), styles: { halign: 'center', fontSize: 9.5, fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } },
+            { content: '100%', styles: { halign: 'center', fontSize: 8.5, fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } },
+            { content: totalDaysPCS.toLocaleString(), styles: { halign: 'center', fontSize: 9.5, fontStyle: 'bold', textColor: [0, 0, 0], fillColor: [225, 239, 255], cellPadding: { top: 3, right: 1.5, bottom: 3, left: 1.5 } } }
+          ]
+        ];
+
+        const daysColumnWidths = [width3 * 0.40, width3 * 0.17, width3 * 0.16, width3 * 0.27];
+
+        // Render Table 1: Stage Analysis
+        autoTable(doc, {
+          startY: summaryStartY + 7,
+          head: [[
+            { content: 'WORK STAGE', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[0], fillColor: stageAnalysisColor, textColor: [255, 255, 255] } },
+            { content: 'LOTS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[1], fillColor: stageAnalysisColor, textColor: [255, 255, 255] } },
+            { content: '%', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[2], fillColor: stageAnalysisColor, textColor: [255, 255, 255] } },
+            { content: 'TOTAL PCS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[3], fillColor: stageAnalysisColor, textColor: [255, 255, 255] } },
+            { content: 'NOT UPDATED', styles: { halign: 'center', fontStyle: 'bold', cellWidth: stageColumnWidths[4], fillColor: [220, 38, 38], textColor: [255, 255, 255] } }
+          ]],
+          body: stageBody.map(row => row.map((cell, colIndex) => ({ ...cell, styles: { ...cell.styles, cellWidth: stageColumnWidths[colIndex] } }))),
+          theme: 'grid',
+          headStyles: { fillColor: stageAnalysisColor, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, cellPadding: { top: 2.5, right: 1, bottom: 2.5, left: 1 }, lineWidth: 0.5, lineColor: stageAnalysisColor, halign: 'center', valign: 'middle' },
+          bodyStyles: { fontSize: 8, cellPadding: { top: 2.2, right: 1, bottom: 2.2, left: 1 }, lineWidth: 0.3, lineColor: [220, 220, 220], textColor: [0, 0, 0], font: 'helvetica', valign: 'middle' },
+          margin: { top: 35, left: margin, right: pageWidth - (margin + width1) },
+          tableWidth: width1,
+          showHead: 'everyPage',
+          showFoot: false,
+          pageBreak: 'auto',
+          rowPageBreak: 'avoid'
+        });
+        const stageFinalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : summaryStartY + 50;
+
+        // Render Table 2: Garment Summary
+        autoTable(doc, {
+          startY: summaryStartY + 7,
+          head: [[
+            { content: 'GARMENT TYPE', styles: { halign: 'center', fontStyle: 'bold', cellWidth: garmentColumnWidths[0], fillColor: [15, 76, 129], textColor: [255, 255, 255] } },
+            { content: 'TOTAL LOTS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: garmentColumnWidths[1], fillColor: [15, 76, 129], textColor: [255, 255, 255] } },
+            { content: 'TOTAL PCS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: garmentColumnWidths[2], fillColor: [15, 76, 129], textColor: [255, 255, 255] } }
+          ]],
+          body: garmentBody.map(row => row.map((cell, colIndex) => ({ ...cell, styles: { ...cell.styles, cellWidth: garmentColumnWidths[colIndex] } }))),
+          theme: 'grid',
+          headStyles: { fillColor: [15, 76, 129], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, cellPadding: { top: 2.5, right: 1, bottom: 2.5, left: 1 }, lineWidth: 0.5, lineColor: [15, 76, 129], halign: 'center', valign: 'middle' },
+          bodyStyles: { fontSize: 8, cellPadding: { top: 2.2, right: 1, bottom: 2.2, left: 1 }, lineWidth: 0.3, lineColor: [220, 220, 220], textColor: [0, 0, 0], font: 'helvetica', valign: 'middle' },
+          margin: { top: 35, left: margin + width1 + gap, right: pageWidth - (margin + width1 + gap + width2) },
+          tableWidth: width2,
+          showHead: 'everyPage',
+          showFoot: false,
+          pageBreak: 'auto',
+          rowPageBreak: 'avoid'
+        });
+        const garmentFinalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : summaryStartY + 50;
+
+        // Render Table 3: Days-Wise Aging Summary
+        autoTable(doc, {
+          startY: summaryStartY + 7,
+          head: [[
+            { content: 'DAYS CATEGORY', styles: { halign: 'center', fontStyle: 'bold', cellWidth: daysColumnWidths[0], fillColor: [59, 130, 246], textColor: [255, 255, 255] } },
+            { content: 'LOTS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: daysColumnWidths[1], fillColor: [59, 130, 246], textColor: [255, 255, 255] } },
+            { content: '%', styles: { halign: 'center', fontStyle: 'bold', cellWidth: daysColumnWidths[2], fillColor: [59, 130, 246], textColor: [255, 255, 255] } },
+            { content: 'TOTAL PCS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: daysColumnWidths[3], fillColor: [59, 130, 246], textColor: [255, 255, 255] } }
+          ]],
+          body: daysBody.map(row => row.map((cell, colIndex) => ({ ...cell, styles: { ...cell.styles, cellWidth: daysColumnWidths[colIndex] } }))),
+          theme: 'grid',
+          headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, cellPadding: { top: 2.5, right: 1, bottom: 2.5, left: 1 }, lineWidth: 0.5, lineColor: [59, 130, 246], halign: 'center', valign: 'middle' },
+          bodyStyles: { fontSize: 8, cellPadding: { top: 2.2, right: 1, bottom: 2.2, left: 1 }, lineWidth: 0.3, lineColor: [220, 220, 220], textColor: [0, 0, 0], font: 'helvetica', valign: 'middle' },
+          margin: { top: 35, left: margin + width1 + gap + width2 + gap, right: margin },
+          tableWidth: width3,
+          showHead: 'everyPage',
+          showFoot: false,
+          pageBreak: 'auto',
+          rowPageBreak: 'avoid'
+        });
+        const daysFinalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : summaryStartY + 50;
+
+        return Math.max(stageFinalY, garmentFinalY, daysFinalY);
+      };
+
+      // Helper function to render Overall Supervisor Workload & Manpower / Attendance Summary Table
+      const renderSupervisorWorkloadSummary = (dataset) => {
+        doc.addPage();
         doc.setFillColor(255, 255, 255);
         doc.rect(0, 0, pageWidth, 30, 'F');
 
-        const totalPCSAll = exportData.reduce((sum, item) => sum + (item.totalPCS || 0), 0);
-        const totalLotsAll = exportData.length;
-        const totalCompletedAll = exportData.filter(item => isLotCompleted(item.completedStatus)).length;
+        const totalPCSAll = dataset.reduce((sum, item) => sum + (item.totalPCS || 0), 0);
+        const totalLotsAll = dataset.length;
+        const totalCompletedAll = dataset.filter(item => isLotCompleted(item.completedStatus)).length;
         const totalPendingAll = totalLotsAll - totalCompletedAll;
 
         doc.setFontSize(18);
-        doc.setTextColor(15, 76, 129);
+        doc.setTextColor(0, 0, 0);
         doc.setFont('Times New Roman', 'bold');
         doc.text('SUPERVISOR WORKLOAD & MANPOWER / ATTENDANCE SUMMARY', pageWidth / 2, 14, { align: 'center' });
 
         doc.setFontSize(11);
         doc.setFont('helvetica', 'bold');
-        doc.setTextColor(15, 76, 129);
+        doc.setTextColor(0, 0, 0);
 
         const summaryDate = new Date();
         const summaryReportDate = `${String(summaryDate.getDate()).padStart(2, '0')}/${String(summaryDate.getMonth() + 1).padStart(2, '0')}/${String(summaryDate.getFullYear()).slice(-2)}`;
@@ -3265,7 +3714,7 @@ const StitchingCompleteLot = () => {
         doc.text(`All Supervisors`, pageWidth - margin, 25, { align: 'right' });
 
         const supervisorWorkload = {};
-        exportData.forEach(item => {
+        dataset.forEach(item => {
           const supervisor = normalizeSupervisorName(item.supervisor);
           const stitchingDays = calculateStitchingDays(item.dateOfIssue);
 
@@ -3303,7 +3752,7 @@ const StitchingCompleteLot = () => {
           }
         });
 
-        const supervisorManpowerData = getLatestManpowerBySupervisor(exportData);
+        const supervisorManpowerData = getLatestManpowerBySupervisor(dataset);
         const sortedSupervisors = Object.entries(supervisorWorkload).sort(([, a], [, b]) => b.totalLots - a.totalLots);
 
         sortedSupervisors.forEach(([supervisor, data]) => {
@@ -3327,7 +3776,8 @@ const StitchingCompleteLot = () => {
                 fontSize: 11,
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 6 },
                 fontStyle: 'bold',
-                fillColor: [240, 249, 255]
+                fillColor: [240, 249, 255],
+                textColor: [0, 0, 0]
               }
             },
             {
@@ -3338,7 +3788,7 @@ const StitchingCompleteLot = () => {
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
                 fontStyle: 'bold',
                 fillColor: manpower > 0 ? [220, 252, 231] : [245, 245, 245],
-                textColor: manpower > 0 ? [22, 101, 52] : [100, 100, 100]
+                textColor: [0, 0, 0]
               }
             },
             {
@@ -3347,7 +3797,8 @@ const StitchingCompleteLot = () => {
                 halign: 'center',
                 fontSize: 12,
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
-                fontStyle: 'bold'
+                fontStyle: 'bold',
+                textColor: [0, 0, 0]
               }
             },
             {
@@ -3357,7 +3808,7 @@ const StitchingCompleteLot = () => {
                 fontSize: 12,
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
                 fontStyle: 'bold',
-                textColor: pcsColor
+                textColor: [0, 0, 0]
               }
             },
             {
@@ -3368,7 +3819,7 @@ const StitchingCompleteLot = () => {
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
                 fontStyle: 'bold',
                 fillColor: [255, 250, 240],
-                textColor: [245, 158, 11]
+                textColor: [0, 0, 0]
               }
             },
             {
@@ -3378,7 +3829,7 @@ const StitchingCompleteLot = () => {
                 fontSize: 11,
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
                 fontStyle: 'bold',
-                textColor: data.notUpdatedLots > 0 ? [220, 38, 38] : [100, 100, 100],
+                textColor: [0, 0, 0],
                 fillColor: data.notUpdatedLots > 0 ? [255, 235, 235] : [255, 255, 255]
               }
             },
@@ -3389,7 +3840,8 @@ const StitchingCompleteLot = () => {
                 fontSize: 12,
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
                 fontStyle: 'bold',
-                textColor: [16, 185, 129]
+                fillColor: [220, 252, 231],
+                textColor: [0, 0, 0]
               }
             },
             {
@@ -3399,7 +3851,8 @@ const StitchingCompleteLot = () => {
                 fontSize: 12,
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
                 fontStyle: 'bold',
-                textColor: [245, 158, 11]
+                fillColor: [254, 243, 199],
+                textColor: [0, 0, 0]
               }
             },
             {
@@ -3409,7 +3862,8 @@ const StitchingCompleteLot = () => {
                 fontSize: 12,
                 cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
                 fontStyle: 'bold',
-                textColor: [239, 68, 68]
+                fillColor: [254, 226, 226],
+                textColor: [0, 0, 0]
               }
             }
           ];
@@ -3428,27 +3882,27 @@ const StitchingCompleteLot = () => {
 
         const totalRowBg = [225, 239, 255];
         summaryBody.push([
-          { content: 'OVERALL TOTALS', styles: { halign: 'left', fontSize: 11, fontStyle: 'bold', fillColor: totalRowBg, cellPadding: { top: 5, right: 3, bottom: 5, left: 6 } } },
-          { content: totalManpowerAll > 0 ? totalManpowerAll.toString() : '-', styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
-          { content: totalLotsAll.toString(), styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
-          { content: totalPCSAll.toLocaleString(), styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
-          { content: avgPCSAll > 0 ? avgPCSAll.toLocaleString() : '-', styles: { halign: 'center', fontSize: 11, fontStyle: 'bold', fillColor: totalRowBg, cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
-          { content: totalNotUpdatedAll > 0 ? totalNotUpdatedAll.toString() : '-', styles: { halign: 'center', fontSize: 11, fontStyle: 'bold', fillColor: totalRowBg, textColor: totalNotUpdatedAll > 0 ? [220, 38, 38] : [100, 100, 100], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
-          { content: `${totalGreenLotsAll} (${greenPctAll}%)`, styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, textColor: [16, 185, 129], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
-          { content: `${totalYellowLotsAll} (${yellowPctAll}%)`, styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, textColor: [245, 158, 11], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
-          { content: `${totalRedLotsAll} (${redPctAll}%)`, styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, textColor: [239, 68, 68], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } }
+          { content: 'OVERALL TOTALS', styles: { halign: 'left', fontSize: 11, fontStyle: 'bold', fillColor: totalRowBg, textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 6 } } },
+          { content: totalManpowerAll > 0 ? totalManpowerAll.toString() : '-', styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
+          { content: totalLotsAll.toString(), styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
+          { content: totalPCSAll.toLocaleString(), styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: totalRowBg, textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
+          { content: avgPCSAll > 0 ? avgPCSAll.toLocaleString() : '-', styles: { halign: 'center', fontSize: 11, fontStyle: 'bold', fillColor: totalRowBg, textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
+          { content: totalNotUpdatedAll > 0 ? totalNotUpdatedAll.toString() : '-', styles: { halign: 'center', fontSize: 11, fontStyle: 'bold', fillColor: totalRowBg, textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
+          { content: `${totalGreenLotsAll} (${greenPctAll}%)`, styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: [220, 252, 231], textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
+          { content: `${totalYellowLotsAll} (${yellowPctAll}%)`, styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: [254, 243, 199], textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } },
+          { content: `${totalRedLotsAll} (${redPctAll}%)`, styles: { halign: 'center', fontSize: 12, fontStyle: 'bold', fillColor: [254, 226, 226], textColor: [0, 0, 0], cellPadding: { top: 5, right: 3, bottom: 5, left: 3 } } }
         ]);
 
         const summaryCols = [
-          contentWidth * 0.18, // Supervisor
-          contentWidth * 0.12, // Manpower (Attendance)
-          contentWidth * 0.09, // Total Lots
-          contentWidth * 0.11, // Total PCS
-          contentWidth * 0.11, // Avg PCS / Manpower
-          contentWidth * 0.11, // Not Updated
-          contentWidth * 0.09, // Green
-          contentWidth * 0.09, // Yellow
-          contentWidth * 0.10  // Red
+          contentWidth * 0.18,
+          contentWidth * 0.12,
+          contentWidth * 0.09,
+          contentWidth * 0.11,
+          contentWidth * 0.11,
+          contentWidth * 0.11,
+          contentWidth * 0.09,
+          contentWidth * 0.09,
+          contentWidth * 0.10
         ];
 
         autoTable(doc, {
@@ -3460,9 +3914,9 @@ const StitchingCompleteLot = () => {
             { content: 'TOTAL PCS', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[3] } },
             { content: 'AVG PCS / MANPOWER', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[4] } },
             { content: 'NOT UPDATED', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[5], fillColor: [220, 38, 38], textColor: [255, 255, 255] } },
-            { content: 'GREEN (1-6 Days)', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[6], textColor: [16, 185, 129] } },
-            { content: 'YELLOW (7-15 Days)', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[7], textColor: [245, 158, 11] } },
-            { content: 'RED (15+ Days)', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[8], textColor: [239, 68, 68] } }
+            { content: 'GREEN (1-6 Days)', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[6], fillColor: [220, 252, 231], textColor: [0, 0, 0] } },
+            { content: 'YELLOW (7-15 Days)', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[7], fillColor: [254, 243, 199], textColor: [0, 0, 0] } },
+            { content: 'RED (15+ Days)', styles: { halign: 'center', fontStyle: 'bold', cellWidth: summaryCols[8], fillColor: [254, 226, 226], textColor: [0, 0, 0] } }
           ]],
           body: summaryBody.map(row => row.map((cell, colIndex) => ({
             content: cell.content,
@@ -3488,7 +3942,7 @@ const StitchingCompleteLot = () => {
             cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
             lineWidth: 0.3,
             lineColor: [220, 220, 220],
-            textColor: textColor,
+            textColor: [0, 0, 0],
             font: 'helvetica',
             valign: 'middle'
           },
@@ -3499,49 +3953,333 @@ const StitchingCompleteLot = () => {
           pageBreak: 'auto',
           rowPageBreak: 'avoid'
         });
+      };
 
-        // Add page numbering on all pages at the end
-        const totalPageCount = doc.internal.getNumberOfPages();
-        for (let p = 1; p <= totalPageCount; p++) {
-          doc.setPage(p);
-          doc.setFontSize(8);
-          doc.setTextColor(100, 100, 100);
-          doc.text(
-            `Page ${p} of ${totalPageCount}`,
-            pageWidth / 2,
-            pageHeight - 6,
-            { align: 'center' }
-          );
-        }
+      // ========================== MODE 1: COMBINED ALL LOTS REPORT ==========================
+      if (reportMode === 'combined') {
+        const totalPCSAll = exportData.reduce((sum, item) => sum + (item.totalPCS || 0), 0);
+        const totalLotsAll = exportData.length;
+        const totalCompletedAll = exportData.filter(item => isLotCompleted(item.completedStatus)).length;
+        const totalPendingAll = totalLotsAll - totalCompletedAll;
 
-        // Generate filename with filter information
-        const today = new Date();
-        let fileName = 'Stitching_Report';
-        fileName += `_${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        const garmentFilter = filters.garmentType && (Array.isArray(filters.garmentType) ? filters.garmentType.filter(Boolean).join(', ') : (typeof filters.garmentType === 'string' ? filters.garmentType.trim() : ''));
 
-        if (filters.supervisor && (Array.isArray(filters.supervisor) ? filters.supervisor.length > 0 : (typeof filters.supervisor === 'string' && filters.supervisor.trim() !== ''))) {
-          const supervisorName = Array.isArray(filters.supervisor)
-            ? filters.supervisor.join('_')
-            : filters.supervisor.replace(/\s+/g, '_');
-          fileName += `_${supervisorName}`;
-        }
+        const drawCombinedHeader = () => {
+          doc.setFillColor(255, 255, 255);
+          doc.rect(0, 0, pageWidth, 30, 'F');
 
-        if (filters.lotStatus) {
-          fileName += `_${filters.lotStatus}`;
-        }
+          let statusTitle = 'STITCHING PRODUCTION REPORT';
+          if (filters.lotStatus === 'Completed') {
+            statusTitle = garmentFilter ? `${garmentFilter.toUpperCase()} COMPLETED LOTS REPORT` : 'COMPLETED LOTS REPORT';
+          } else if (filters.lotStatus === 'Pending') {
+            statusTitle = garmentFilter ? `${garmentFilter.toUpperCase()} PENDING LOTS REPORT` : 'PENDING LOTS REPORT';
+          } else if (garmentFilter) {
+            statusTitle = `${garmentFilter.toUpperCase()} STITCHING PRODUCTION REPORT`;
+          }
 
-        fileName += `_${exportData.length}_records`;
-        fileName = fileName.replace(/[^\w\-_]/g, '_').substring(0, 100);
+          const title = `FACTORY SUITE PRO - ${statusTitle}`;
 
-        doc.save(`${fileName}.pdf`);
-      } catch (err) {
-        console.error('Failed to export PDF:', err);
-        setError(`Failed to export PDF: ${err.message}`);
-      } finally {
-        setLoading(false);
-        setPdfGenerating(false);
+          doc.setFontSize(18);
+          doc.setTextColor(0, 0, 0);
+          doc.setFont('Times New Roman', 'bold');
+          doc.text(title, pageWidth / 2, 12, { align: 'center' });
+
+          doc.setFontSize(10);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(0, 0, 0);
+          doc.text(`COMBINED ALL LOTS REPORT (Total Lots: ${totalLotsAll})`, pageWidth / 2, 18, { align: 'center' });
+
+          // Key Metrics Row
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(0, 0, 0);
+
+          const today = new Date();
+          const reportDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
+          doc.text(`Report Date: ${reportDate}`, margin, 25);
+
+          const centerX = pageWidth / 2;
+          doc.text(`Lots: ${totalLotsAll} | Total PCS: ${totalPCSAll.toLocaleString()} | Completed: ${totalCompletedAll} | Pending: ${totalPendingAll} | Supervisors: ${supervisorsList.length}`,
+            centerX, 25, { align: 'center' });
+
+          doc.text(`Total Records: ${totalLotsAll}`, pageWidth - margin, 25, { align: 'right' });
+        };
+
+        drawCombinedHeader();
+        const currentY = addColorLegend(32);
+
+        // Build continuous table body for all lots
+        const body = exportData.map((item, rowIndex) => mapItemToRow(item, rowIndex));
+
+        // Add Grand Total Row at bottom
+        const totalRow = activeCols.map((col, colIdx) => {
+          const cellWidth = columnWidths[colIdx];
+          const cellPad = { top: 3, right: 1, bottom: 3, left: 1 };
+          const fontSz = activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5);
+
+          if (col.id === 'sr') {
+            return {
+              content: '',
+              styles: { cellWidth, fillColor: [225, 239, 255], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'lotNo') {
+            return {
+              content: `TOTAL (${totalLotsAll})`,
+              styles: { cellWidth, fontSize: Math.max(fontSz, 9.5), halign: 'center', fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'totalPcs') {
+            return {
+              content: totalPCSAll.toLocaleString(),
+              styles: { cellWidth, fontSize: Math.max(fontSz, 9.5), halign: 'center', fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'supervisor') {
+            return {
+              content: `${supervisorsList.length} Sups`,
+              styles: { cellWidth, fontSize: fontSz, halign: 'center', fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          if (col.id === 'lotStatus') {
+            return {
+              content: `${totalCompletedAll} Comp | ${totalPendingAll} Pend`,
+              styles: { cellWidth, fontSize: Math.max(6.5, fontSz - 1), halign: 'center', fontStyle: 'bold', fillColor: [225, 239, 255], textColor: [0, 0, 0], cellPadding: cellPad }
+            };
+          }
+          return {
+            content: '',
+            styles: { cellWidth, fillColor: [225, 239, 255], cellPadding: cellPad }
+          };
+        });
+
+        body.push(totalRow);
+
+        let lastAutoTableY = currentY;
+
+        autoTable(doc, {
+          startY: currentY,
+          head: tableHeaders,
+          body: body,
+          theme: 'grid',
+          headStyles: {
+            fillColor: headerColor,
+            textColor: [255, 255, 255],
+            fontStyle: 'bold',
+            fontSize: activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5),
+            cellPadding: { top: 3.5, right: 1.5, bottom: 3.5, left: 1.5 },
+            lineWidth: 0.5,
+            lineColor: headerColor,
+            halign: 'center',
+            valign: 'middle'
+          },
+          bodyStyles: {
+            fontSize: activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5),
+            cellPadding: { top: 2.5, right: 1.5, bottom: 2.5, left: 1.5 },
+            lineWidth: 0.3,
+            lineColor: borderColor,
+            textColor: [0, 0, 0],
+            fillColor: [255, 255, 255],
+            font: 'helvetica',
+            valign: 'middle',
+            overflow: 'linebreak',
+            minCellHeight: 6.5,
+            lineHeight: 1.18
+          },
+          columnStyles: columnStyles,
+          margin: { top: 35, left: margin, right: margin },
+          tableWidth: contentWidth,
+          showHead: 'everyPage',
+          showFoot: false,
+          pageBreak: 'auto',
+          rowPageBreak: 'avoid',
+          tableLineWidth: 0.5,
+          tableLineColor: borderColor,
+          didDrawPage: function (data) {
+            drawCombinedHeader();
+            if (data.cursor && data.cursor.y) {
+              lastAutoTableY = data.cursor.y;
+            }
+          }
+        });
+
+        const summaryStartY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : lastAutoTableY) + 12;
+        renderThreeSideBySideSummary(exportData, 'COMBINED PRODUCTION', summaryStartY);
+
+        // Overall supervisor summary page
+        renderSupervisorWorkloadSummary(exportData);
+
+      } else {
+        // ========================== MODE 2: SUPERVISOR-WISE REPORT ==========================
+        let isFirstSupervisorPage = true;
+
+        supervisorsList.forEach((supName, supIndex) => {
+          const supData = exportData.filter(item => {
+            const itemSup = normalizeSupervisorName(item.supervisor || '');
+            if (supName.toLowerCase() === 'unassigned') {
+              return !item.supervisor || item.supervisor.trim() === '';
+            }
+            return itemSup.toLowerCase() === supName.toLowerCase();
+          });
+
+          if (supData.length === 0) return;
+
+          if (!isFirstSupervisorPage) {
+            doc.addPage();
+          }
+          isFirstSupervisorPage = false;
+
+          let currentY = 25;
+
+          const drawSupervisorHeader = () => {
+            doc.setFillColor(255, 255, 255);
+            doc.rect(0, 0, pageWidth, 30, 'F');
+
+            const supTotalPCS = supData.reduce((sum, item) => sum + (item.totalPCS || 0), 0);
+            const supTotalLots = supData.length;
+            const supCompleted = supData.filter(item => isLotCompleted(item.completedStatus)).length;
+            const supPending = supTotalLots - supCompleted;
+
+            let statusTitle = 'STITCHING PRODUCTION REPORT';
+            if (filters.lotStatus === 'Completed') statusTitle = 'COMPLETED LOTS REPORT';
+            else if (filters.lotStatus === 'Pending') statusTitle = 'PENDING LOTS REPORT';
+
+            const title = `${supName.toUpperCase()} - ${statusTitle}`;
+
+            doc.setFontSize(18);
+            doc.setTextColor(0, 0, 0);
+            doc.setFont('Times New Roman', 'bold');
+            doc.text(title, pageWidth / 2, 12, { align: 'center' });
+
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(0, 0, 0);
+            doc.text(`SUPERVISOR: ${supName.toUpperCase()} (${supIndex + 1}/${supervisorsList.length})`, pageWidth / 2, 18, { align: 'center' });
+
+            doc.setFontSize(11);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(0, 0, 0);
+
+            const today = new Date();
+            const reportDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
+            doc.text(`Report Date: ${reportDate}`, margin, 25);
+
+            const centerX = pageWidth / 2;
+            doc.text(`Lots: ${supTotalLots} | Total PCS: ${supTotalPCS.toLocaleString()} | Completed: ${supCompleted} | Pending: ${supPending}`,
+              centerX, 25, { align: 'center' });
+
+            doc.text(`Supervisor Lots: ${supTotalLots}`, pageWidth - margin, 25, { align: 'right' });
+          };
+
+          drawSupervisorHeader();
+          currentY = addColorLegend(32);
+
+          const body = supData.map((item, rowIndex) => mapItemToRow(item, rowIndex));
+
+          let lastAutoTableY = currentY;
+
+          autoTable(doc, {
+            startY: currentY,
+            head: tableHeaders,
+            body: body,
+            theme: 'grid',
+            headStyles: {
+              fillColor: headerColor,
+              textColor: [255, 255, 255],
+              fontStyle: 'bold',
+              fontSize: activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5),
+              cellPadding: { top: 3.5, right: 1.5, bottom: 3.5, left: 1.5 },
+              lineWidth: 0.5,
+              lineColor: headerColor,
+              halign: 'center',
+              valign: 'middle'
+            },
+            bodyStyles: {
+              fontSize: activeCols.length > 24 ? 7.5 : (activeCols.length > 18 ? 8.5 : 9.5),
+              cellPadding: { top: 2.5, right: 1.5, bottom: 2.5, left: 1.5 },
+              lineWidth: 0.3,
+              lineColor: borderColor,
+              textColor: [0, 0, 0],
+              fillColor: [255, 255, 255],
+              font: 'helvetica',
+              valign: 'middle',
+              overflow: 'linebreak',
+              minCellHeight: 6.5,
+              lineHeight: 1.18
+            },
+            columnStyles: columnStyles,
+            margin: { top: 35, left: margin, right: margin },
+            tableWidth: contentWidth,
+            showHead: 'everyPage',
+            showFoot: false,
+            pageBreak: 'auto',
+            rowPageBreak: 'avoid',
+            tableLineWidth: 0.5,
+            tableLineColor: borderColor,
+            didDrawPage: function (data) {
+              drawSupervisorHeader();
+              if (data.cursor && data.cursor.y) {
+                lastAutoTableY = data.cursor.y;
+              }
+            }
+          });
+
+          const summaryStartY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : lastAutoTableY) + 7;
+          renderThreeSideBySideSummary(supData, supName, summaryStartY);
+        });
+
+        // Dedicated summary page for Supervisor Workload and Manpower Attendance
+        renderSupervisorWorkloadSummary(exportData);
       }
-    }, [filteredData, filters, calculateStitchingDays, getStitchingDaysColor, getStitchingDaysTextColor, getEmbPrintDate, getLatestWipRemarks, getCompletionDateFormatted, isLotCompleted, getPintuStatusForPDF, getEAStatusForPDF, getLatestManpowerBySupervisor, departmentDataMap, selectedPdfColumns, getAvailablePdfColumns, fetchDepartmentData, normalizeText]);
+
+      // Add page numbering on all pages at the end
+      const totalPageCount = doc.internal.getNumberOfPages();
+      for (let p = 1; p <= totalPageCount; p++) {
+        doc.setPage(p);
+        doc.setFontSize(8);
+        doc.setTextColor(100, 100, 100);
+        doc.text(
+          `Page ${p} of ${totalPageCount}`,
+          pageWidth / 2,
+          pageHeight - 6,
+          { align: 'center' }
+        );
+      }
+
+      // Generate filename with filter information
+      const today = new Date();
+      let fileName = reportMode === 'combined' ? 'Stitching_Combined_Report' : 'Stitching_Supervisor_Report';
+      fileName += `_${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+      if (filters.supervisor && (Array.isArray(filters.supervisor) ? filters.supervisor.length > 0 : (typeof filters.supervisor === 'string' && filters.supervisor.trim() !== ''))) {
+        const supervisorName = Array.isArray(filters.supervisor)
+          ? filters.supervisor.join('_')
+          : filters.supervisor.replace(/\s+/g, '_');
+        fileName += `_${supervisorName}`;
+      }
+
+      if (filters.lotStatus) {
+        fileName += `_${filters.lotStatus}`;
+      }
+
+      if (filters.garmentType && (Array.isArray(filters.garmentType) ? filters.garmentType.length > 0 : typeof filters.garmentType === 'string' && filters.garmentType.trim() !== '')) {
+        const gName = Array.isArray(filters.garmentType) ? filters.garmentType.join('_') : filters.garmentType.replace(/\s+/g, '_');
+        fileName += `_${gName}`;
+      }
+
+      fileName += `_${exportData.length}_records`;
+      fileName = fileName.replace(/[^\w\-_]/g, '_').substring(0, 100);
+
+      doc.save(`${fileName}.pdf`);
+    } catch (err) {
+      console.error('Failed to export PDF:', err);
+      setError(`Failed to export PDF: ${err.message}`);
+    } finally {
+      setLoading(false);
+      setPdfGenerating(false);
+    }
+  }, [filteredData, filters, selectedDepartments, departmentDataMap, selectedPdfColumns, pdfReportMode, getAvailablePdfColumns, fetchDepartmentData, DEPARTMENT_OPTIONS, calculateStitchingDays, getStitchingDaysColor, getStitchingDaysTextColor, getEmbPrintDate, getLatestWipRemarks, getCompletionDateFormatted, isLotCompleted, getPintuStatusForPDF, getEAStatusForPDF, getLatestManpowerBySupervisor, normalizeSupervisorName, abbreviatePartyName, abbreviateMWKForPDF, formatDateToDDMMYYForPDF, abbreviateSeason, formatDateOfIssue, extractStageFromStatus, isStatusUpdatedToday, normalizeText]);
+
   const handleRefresh = useCallback(async () => {
     try {
       setLoading(true);
@@ -4685,7 +5423,7 @@ const StitchingCompleteLot = () => {
                   </span>
                 </div>
                 <p style={{ margin: "4px 0 0 0", fontSize: "0.82rem", color: "#e0f2fe" }}>
-                  Select the columns to include in your supervisor-wise PDF report. All selected departments are included by default.
+                  Export high-resolution production reports in Combined or Supervisor-Wise format.
                 </p>
               </div>
               <button
@@ -4707,6 +5445,87 @@ const StitchingCompleteLot = () => {
               >
                 ✕
               </button>
+            </div>
+
+            {/* Report Mode Selection (Combined vs Supervisor-Wise) */}
+            <div style={{
+              padding: "12px 28px",
+              background: "#f0f9ff",
+              borderBottom: "1.5px solid #bae6fd",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span style={{ fontSize: "1.1rem" }}>📑</span>
+                  <span style={{ fontSize: "0.84rem", fontWeight: 800, color: "#0369a1", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                    Select PDF Report Structure:
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => setPdfReportMode('combined')}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "7px",
+                      padding: "7px 16px",
+                      borderRadius: "10px",
+                      border: pdfReportMode === 'combined' ? "2px solid #0f4c81" : "1.5px solid #cbd5e1",
+                      background: pdfReportMode === 'combined' ? "linear-gradient(135deg, #0f4c81 0%, #1e3a8a 100%)" : "#ffffff",
+                      color: pdfReportMode === 'combined' ? "#ffffff" : "#334155",
+                      fontWeight: 800,
+                      fontSize: "0.82rem",
+                      cursor: "pointer",
+                      boxShadow: pdfReportMode === 'combined' ? "0 4px 10px rgba(15, 76, 129, 0.25)" : "none",
+                      transition: "all 0.15s"
+                    }}
+                  >
+                    <span>📊</span>
+                    <span>Combined Report (All Lots Together)</span>
+                    {pdfReportMode === 'combined' && (
+                      <span style={{ fontSize: "0.7rem", background: "rgba(255,255,255,0.25)", padding: "1px 6px", borderRadius: "8px" }}>
+                        Active
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPdfReportMode('supervisorWise')}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "7px",
+                      padding: "7px 16px",
+                      borderRadius: "10px",
+                      border: pdfReportMode === 'supervisorWise' ? "2px solid #0f4c81" : "1.5px solid #cbd5e1",
+                      background: pdfReportMode === 'supervisorWise' ? "linear-gradient(135deg, #0f4c81 0%, #1e3a8a 100%)" : "#ffffff",
+                      color: pdfReportMode === 'supervisorWise' ? "#ffffff" : "#334155",
+                      fontWeight: 800,
+                      fontSize: "0.82rem",
+                      cursor: "pointer",
+                      boxShadow: pdfReportMode === 'supervisorWise' ? "0 4px 10px rgba(15, 76, 129, 0.25)" : "none",
+                      transition: "all 0.15s"
+                    }}
+                  >
+                    <span>🏢</span>
+                    <span>Supervisor-Wise Report (Separate Pages)</span>
+                    {pdfReportMode === 'supervisorWise' && (
+                      <span style={{ fontSize: "0.7rem", background: "rgba(255,255,255,0.25)", padding: "1px 6px", borderRadius: "8px" }}>
+                        Active
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <div style={{ fontSize: "0.76rem", color: "#0369a1", fontWeight: 600 }}>
+                {pdfReportMode === 'combined'
+                  ? '✨ Combined Mode: All filtered records (e.g., Shirt Pending Lots) are presented in one continuous table with continuous Serial No. (1..N) and overall Executive Summary breakdown.'
+                  : '✨ Supervisor-Wise Mode: Generates individual pages for each supervisor with supervisor-specific Serial No. (1..N), individual stage breakdowns, and supervisor workload summary.'}
+              </div>
             </div>
 
             {/* Quick Action & Counter Bar */}
@@ -4736,7 +5555,7 @@ const StitchingCompleteLot = () => {
                   ({filteredData.length} records will be generated across supervisors)
                 </span>
               </div>
-              <div style={{ display: "flex", gap: "8px" }}>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                 <button
                   onClick={() => setSelectedPdfColumns(getAvailablePdfColumns().map(c => c.id))}
                   style={{
@@ -4751,6 +5570,26 @@ const StitchingCompleteLot = () => {
                   }}
                 >
                   Select All
+                </button>
+                <button
+                  onClick={() => {
+                    const pageBaseCols = ['sr', 'lotNo', 'garment', 'style', 'fabric', 'brand', 'totalPcs', 'section', 'season', 'party', 'direct', 'supervisor', 'mwk', 'issueDate', 'days'];
+                    const activeDeptCols = getAvailablePdfColumns().filter(c => c.isSelectedInPage).map(c => c.id);
+                    const trackingCols = ['embPrint', 'wipStatus', 'pintu', 'ea', 'completionDate', 'lotStatus'];
+                    setSelectedPdfColumns([...pageBaseCols, ...activeDeptCols, ...trackingCols]);
+                  }}
+                  style={{
+                    background: "#ecfdf5",
+                    border: "1px solid #a7f3d0",
+                    padding: "4px 12px",
+                    borderRadius: "8px",
+                    fontSize: "0.78rem",
+                    fontWeight: 700,
+                    color: "#065f46",
+                    cursor: "pointer"
+                  }}
+                >
+                  Match Page Table View
                 </button>
                 <button
                   onClick={() => setSelectedPdfColumns([])}
@@ -5042,7 +5881,7 @@ const StitchingCompleteLot = () => {
 
                 <button
                   onClick={async () => {
-                    await downloadPDF(selectedPdfColumns);
+                    await downloadPDF(selectedPdfColumns, pdfReportMode);
                     setPdfModalOpen(false);
                   }}
                   disabled={selectedPdfColumns.length === 0 || pdfGenerating || loading}
@@ -5064,9 +5903,9 @@ const StitchingCompleteLot = () => {
                   }}
                 >
                   {pdfGenerating ? (
-                    <>⏳ Generating PDF...</>
+                    <>⏳ Generating {pdfReportMode === 'combined' ? 'Combined' : 'Supervisor-Wise'} PDF...</>
                   ) : (
-                    <>📥 Download PDF ({selectedPdfColumns.length} Cols)</>
+                    <>📥 Download {pdfReportMode === 'combined' ? 'Combined' : 'Supervisor-Wise'} PDF ({selectedPdfColumns.length} Cols)</>
                   )}
                 </button>
               </div>

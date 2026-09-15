@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend } from './config';
+import { fetchRemarksForTab, saveRemarkForLot } from './embPrintRemarksService';
 import axios from 'axios';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 
 const MultiSelectDropdown = ({ options, selectedValues, onChange, placeholder }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -212,6 +217,23 @@ const getDirectImageUrl = (url) => {
   return trimmed;
 };
 
+const getBase64ImageFromUrl = async (imageUrl) => {
+  if (!imageUrl || imageUrl === 'N/A') return null;
+  try {
+    const res = await fetch(imageUrl, { referrerPolicy: 'no-referrer' });
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (err) {
+    console.error('Failed to convert image to base64:', err);
+    return null;
+  }
+};
+
 const PendingIssuetoStitching = () => {
   const [data, setData] = useState([]);
   const [filteredData, setFilteredData] = useState([]);
@@ -240,9 +262,12 @@ const PendingIssuetoStitching = () => {
     garmentType: [],
     style: [],
     brand: [],
-    season: '',
+    section: [],
+    season: [],
+    party: [],
     directStitch: '',
     colorPending: '',
+    remarksStatus: '',
     status: [],
     search: ''
   });
@@ -252,8 +277,10 @@ const PendingIssuetoStitching = () => {
     garmentType: new Set(),
     style: new Set(),
     brand: new Set(),
+    section: new Set(),
     season: new Set(),
-    directStitch: new Set(),
+    party: new Set(),
+    directStitch: new Set(['Yes', 'No']),
     colorPending: new Set(['Yes', 'No']),
     status: new Set(['Direct', 'Ready for Stitching', 'Printing Working', 'Embroidery Working', 'Pending'])
   });
@@ -261,6 +288,80 @@ const PendingIssuetoStitching = () => {
   // Color pending states
   const [colorPendingLots, setColorPendingLots] = useState({});
   const [lotPriorities, setLotPriorities] = useState({});
+
+  // Remarks States & Realtime Synchronization
+  const [remarksMap, setRemarksMap] = useState({});
+  const [remarksModalOpen, setRemarksModalOpen] = useState(false);
+  const [selectedRemarksLot, setSelectedRemarksLot] = useState(null);
+  const [newRemarkInputText, setNewRemarkInputText] = useState('');
+  const [savingRemark, setSavingRemark] = useState(false);
+
+  // Fetch Remarks from Google Sheets & Subscribe to updates
+  useEffect(() => {
+    fetchRemarksForTab('PENDING_STITCHING').then(map => {
+      if (map && typeof map === 'object') {
+        setRemarksMap(map);
+      }
+    });
+
+    const handleRemarkUpdated = (e) => {
+      if (e.detail && (e.detail.tabType === 'PENDING_STITCHING' || !e.detail.tabType)) {
+        setRemarksMap(prev => ({
+          ...prev,
+          [e.detail.lotNumber]: e.detail.history
+        }));
+      }
+    };
+
+    window.addEventListener('emb_print_remark_updated', handleRemarkUpdated);
+    return () => {
+      window.removeEventListener('emb_print_remark_updated', handleRemarkUpdated);
+    };
+  }, []);
+
+  const handleOpenRemarksModal = (item) => {
+    setSelectedRemarksLot(item);
+    setNewRemarkInputText('');
+    setRemarksModalOpen(true);
+  };
+
+  const handleCloseRemarksModal = () => {
+    setRemarksModalOpen(false);
+    setSelectedRemarksLot(null);
+    setNewRemarkInputText('');
+  };
+
+  const handleSaveRemark = async () => {
+    if (!selectedRemarksLot || !newRemarkInputText.trim()) return;
+
+    try {
+      setSavingRemark(true);
+      const lotNumber = (selectedRemarksLot['Lot Number'] || selectedRemarksLot.lotNumber)?.toString().trim();
+      const updatedHistory = await saveRemarkForLot({
+        tabType: 'PENDING_STITCHING',
+        lotNumber: lotNumber,
+        partyName: selectedRemarksLot['Party Name'] || selectedRemarksLot.partyName || '',
+        fabric: selectedRemarksLot['Fabric'] || selectedRemarksLot.fabric || '',
+        style: selectedRemarksLot['Style'] || selectedRemarksLot.style || selectedRemarksLot['Garment Type'] || '',
+        remarkText: newRemarkInputText.trim()
+      });
+
+      if (updatedHistory) {
+        setRemarksMap(prev => ({
+          ...prev,
+          [lotNumber]: updatedHistory
+        }));
+      }
+
+      setNewRemarkInputText('');
+      setRemarksModalOpen(false);
+    } catch (err) {
+      console.error('Error saving remark:', err);
+      alert('Failed to save remark. Please try again.');
+    } finally {
+      setSavingRemark(false);
+    }
+  };
 
   const tableRef = useRef();
 
@@ -272,30 +373,36 @@ const PendingIssuetoStitching = () => {
 
   const columnsConfig = [
     { key: 'srNo', label: '#', align: 'center', minWidth: '45px' },
-    { key: 'Lot Number', label: 'LOT #', align: 'left', minWidth: '95px' },
-    { key: 'Fabric', label: 'FABRIC', align: 'left', minWidth: '140px' },
-    { key: 'Garment Type', label: 'GARMENT TYPE', align: 'left', minWidth: '140px' },
-    { key: 'Style', label: 'STYLE', align: 'left', minWidth: '130px' },
-    { key: 'Brand', label: 'BRAND', align: 'left', minWidth: '120px' },
-    { key: 'Season', label: 'SEASON', align: 'center', minWidth: '95px' },
-    { key: 'Direct Stitching', label: 'DIRECT', align: 'center', minWidth: '85px' },
+    { key: 'Lot Number', label: 'LOT #', align: 'center', minWidth: '95px' },
+    { key: 'Garment Type', label: 'GARMENT TYPE', align: 'center', minWidth: '140px' },
+    { key: 'Style', label: 'STYLE', align: 'center', minWidth: '130px' },
+    { key: 'Fabric', label: 'FABRIC', align: 'center', minWidth: '140px' },
+    { key: 'Brand', label: 'BRAND', align: 'center', minWidth: '120px' },
     { key: 'Total Pcs', label: 'TOTAL PCS', align: 'center', minWidth: '100px' },
+    { key: 'Section', label: 'SECTION', align: 'center', minWidth: '95px' },
+    { key: 'Season', label: 'SEASON', align: 'center', minWidth: '95px' },
+    { key: 'Party Name', label: 'PARTY NAME', align: 'center', minWidth: '140px' },
+    { key: 'Direct Stitching', label: 'DIRECT', align: 'center', minWidth: '85px' },
     { key: 'Image', label: 'IMAGE', align: 'center', minWidth: '85px' },
     { key: 'Color Status', label: 'COLOR STATUS', align: 'center', minWidth: '140px' },
-    { key: 'Status', label: 'STATUS', align: 'center', minWidth: '145px' }
+    { key: 'Status', label: 'STATUS', align: 'center', minWidth: '145px' },
+    { key: 'Remarks', label: '💬 REMARKS', align: 'center', minWidth: '220px' }
   ];
 
-  // Updated columns - REMOVED CHALLAN HISTORY
+  // Updated columns
   const targetColumns = [
     'Lot Number',
     'Fabric',
     'Garment Type',
     'Style',
     'Brand',
-    'Season',
-    'Direct Stitching',
     'Total Pcs',
-    'Image'
+    'Section',
+    'Season',
+    'Party Name',
+    'Direct Stitching',
+    'Image',
+    'Remarks'
   ];
 
   // Column headers display names
@@ -693,7 +800,7 @@ const PendingIssuetoStitching = () => {
     if (data.length > 0) {
       applyFilters();
     }
-  }, [data, filters]);
+  }, [data, filters, remarksMap]);
 
   const fetchData = async () => {
     try {
@@ -731,89 +838,124 @@ const PendingIssuetoStitching = () => {
         return;
       }
 
-      const headers = rows[0].map(h => h.trim());
+      const headers = rows[0].map(h => (h || '').toString().trim());
 
-      // Find indices of all target columns
-      const columnIndices = {};
-      targetColumns.forEach(column => {
-        columnIndices[column] = headers.findIndex(header => {
-          const hLower = header.toLowerCase();
-          const cLower = column.toLowerCase();
-          if (cLower === 'image') {
-            return hLower === 'image' || hLower === 'image url' || hLower === 'imageurl' || hLower.includes('image');
-          }
-          return hLower === cLower;
+      // Find indices with exact match first, then alias support
+      const findHeaderIndex = (patterns, excludePatterns = []) => {
+        // First try exact match
+        const exactIdx = headers.findIndex(h => {
+          if (!h) return false;
+          const cleanH = h.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+          return patterns.some(p => {
+            const cleanP = p.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return cleanH === cleanP;
+          });
         });
-      });
+        if (exactIdx !== -1) return exactIdx;
 
-      // Also find Challan History index for status calculation only
-      const challanHistoryIndex = headers.findIndex(header => header.toLowerCase().includes('challan history'));
+        // Fallback: substring match with exclusions
+        return headers.findIndex(h => {
+          if (!h) return false;
+          const cleanH = h.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+          const isExcluded = excludePatterns.some(ex => {
+            const cleanEx = ex.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return cleanH.includes(cleanEx);
+          });
+          if (isExcluded) return false;
 
-      // Find supervisor index for filtering
-      const supervisorIndex = headers.findIndex(header =>
-        header.toLowerCase().includes('supervisor')
-      );
+          return patterns.some(p => {
+            const cleanP = p.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return cleanH.includes(cleanP);
+          });
+        });
+      };
 
-      if (supervisorIndex === -1) {
-        throw new Error('Supervisor column not found');
-      }
+      const lotIndex = findHeaderIndex(['lotnumber', 'lot no', 'lot#', 'lot']);
+      const fabricIndex = findHeaderIndex(['fabric', 'material']);
+      const garmentTypeIndex = findHeaderIndex(['garmenttype', 'garment', 'item']);
+      const styleIndex = findHeaderIndex(['style', 'styledesc', 'stylename']);
+      const brandIndex = findHeaderIndex(['brand', 'brandname']);
+      const sectionIndex = findHeaderIndex(['mwk', 'm/w/k', 'section', 'gender', 'm w k'], ['garment', 'style', 'fabric', 'party']);
+      const seasonIndex = findHeaderIndex(['season', 'seasontype']);
+      const partyIndex = findHeaderIndex(['partyname', 'party', 'embparty', 'vendor']);
+      const directIndex = findHeaderIndex(['directstitching', 'directstitch', 'direct']);
+      const totalPcsIndex = findHeaderIndex(['totalpcs', 'totalpieces', 'totalqty', 'total']);
+      const imageIndex = findHeaderIndex(['imageurl', 'image', 'photo', 'picture']);
+      const challanHistoryIndex = findHeaderIndex(['challanhistory', 'challan']);
+      const supervisorIndex = findHeaderIndex(['supervisor']);
 
       // Filter and map data
       const filteredData = rows.slice(1)
         .filter(row => {
           // Check supervisor column is empty
-          const supervisorEmpty = !row[supervisorIndex] || row[supervisorIndex].trim() === '';
-
-          // Check if row has any data in target columns
-          let hasData = false;
-          targetColumns.forEach(column => {
-            const columnIndex = columnIndices[column];
-            if (columnIndex !== -1 && row[columnIndex] !== undefined && row[columnIndex].toString().trim() !== '') {
-              hasData = true;
-            }
-          });
-
-          return supervisorEmpty && hasData;
+          const supervisorEmpty = supervisorIndex === -1 || !row[supervisorIndex] || row[supervisorIndex].trim() === '';
+          const lotNo = lotIndex !== -1 ? (row[lotIndex] || '').toString().trim() : '';
+          return supervisorEmpty && lotNo !== '';
         })
-        .map(row => {
-          const rowData = {};
-          targetColumns.forEach(column => {
-            const columnIndex = columnIndices[column];
-            if (columnIndex !== -1 && row[columnIndex] !== undefined && row[columnIndex].toString().trim() !== '') {
-              let value = row[columnIndex].toString().trim();
+        .map((row, idx) => {
+          const lotNumber = lotIndex !== -1 ? (row[lotIndex] || '').toString().trim() : `Lot-${idx + 1}`;
+          const fabric = fabricIndex !== -1 && row[fabricIndex] ? row[fabricIndex].toString().trim() : 'N/A';
+          const garmentType = garmentTypeIndex !== -1 && row[garmentTypeIndex] ? row[garmentTypeIndex].toString().trim() : 'N/A';
+          const style = styleIndex !== -1 && row[styleIndex] ? normalizeStyle(row[styleIndex].toString().trim()) : 'N/A';
+          const brand = brandIndex !== -1 && row[brandIndex] ? normalizeBrand(row[brandIndex].toString().trim()) : 'N/A';
+          const section = sectionIndex !== -1 && row[sectionIndex] && row[sectionIndex].toString().trim() !== '' ? row[sectionIndex].toString().trim() : '—';
+          const rawSeason = seasonIndex !== -1 && row[seasonIndex] ? row[seasonIndex].toString().trim() : '';
+          const season = rawSeason ? normalizeSeason(rawSeason) : 'N/A';
+          const directStitching = directIndex !== -1 && row[directIndex] ? row[directIndex].toString().trim() : 'No';
 
-              // Apply normalization for specific columns
-              if (column === 'Brand') {
-                value = normalizeBrand(value);
-              } else if (column === 'Style') {
-                value = normalizeStyle(value);
-              } else if (column === 'Season') {
-                value = normalizeSeason(value);
-              } else if (column === 'Image') {
-                value = getDirectImageUrl(value);
-              }
+          const directLower = directStitching.toLowerCase();
+          const isDirect = directLower === 'yes' || directLower === 'y';
 
-              rowData[column] = value;
-            } else {
-              rowData[column] = 'N/A';
-            }
-          });
+          let partyName = partyIndex !== -1 && row[partyIndex] ? row[partyIndex].toString().trim() : '';
+          if (!partyName || partyName === 'N/A' || partyName === '-') {
+            partyName = isDirect ? 'Direct Stitching' : '—';
+          }
 
-          // Add color pending information
-          const lotNumber = rowData['Lot Number'];
+          const rawImage = imageIndex !== -1 && row[imageIndex] ? row[imageIndex].toString().trim() : '';
+          const imageUrl = getDirectImageUrl(rawImage);
+
           const pendingInfo = pendingData[lotNumber] || {};
-          rowData.hasColorPending = pendingInfo.pendingColors?.length > 0 || false;
-          rowData.pendingColors = pendingInfo.pendingColors || [];
-          rowData.pendingColorsText = pendingInfo.pendingColors?.join(', ') || '';
-          rowData.isRepeatedLot = pendingInfo.isRepeatedLot || false;
-          rowData.priority = pendingInfo.priority || '';
+          const hasColorPending = pendingInfo.pendingColors?.length > 0 || false;
+          const pendingColors = pendingInfo.pendingColors || [];
+          const pendingColorsText = pendingColors.join(', ');
+          const isRepeatedLot = pendingInfo.isRepeatedLot || false;
+          const priority = pendingInfo.priority || '';
 
-          // Add status - FIXED: Direct Stitching "yes" = "Direct"
-          const directStitching = rowData['Direct Stitching'];
           const challanHistory = challanHistoryIndex !== -1 ? row[challanHistoryIndex] : '';
-          rowData.status = getStatus(directStitching, challanHistory);
+          const status = getStatus(directStitching, challanHistory);
 
-          return rowData;
+          return {
+            'Lot Number': lotNumber,
+            lotNumber: lotNumber,
+            'Fabric': fabric,
+            fabric: fabric,
+            'Garment Type': garmentType,
+            garmentType: garmentType,
+            'Style': style,
+            style: style,
+            'Brand': brand,
+            brand: brand,
+            'Section': section,
+            'M/W/K': section,
+            section: section,
+            'Season': season,
+            season: season,
+            'Party Name': partyName,
+            'Party': partyName,
+            partyName: partyName,
+            'Direct Stitching': isDirect ? 'Yes' : 'No',
+            directStitching: isDirect ? 'yes' : 'no',
+            'Image': imageUrl || 'N/A',
+            imageUrl: imageUrl,
+            'Total Pcs': totalPcsIndex !== -1 && row[totalPcsIndex] ? row[totalPcsIndex] : 'N/A',
+            hasColorPending,
+            pendingColors,
+            pendingColorsText,
+            isRepeatedLot,
+            priority,
+            status,
+            rawRow: row
+          };
         });
 
       setData(filteredData);
@@ -825,6 +967,8 @@ const PendingIssuetoStitching = () => {
       const fabricOptions = new Set();
       const garmentTypeOptions = new Set();
       const styleOptions = new Set();
+      const sectionOptions = new Set();
+      const partyOptions = new Set();
       const directStitchOptions = new Set();
       const statusOptions = new Set();
 
@@ -839,12 +983,13 @@ const PendingIssuetoStitching = () => {
       };
 
       filteredData.forEach(row => {
-        if (row.Brand && row.Brand !== 'N/A') brands.add(row.Brand);
-        if (row.Season && row.Season !== 'N/A') seasons.add(row.Season);
-        if (row.Fabric && row.Fabric !== 'N/A') fabricOptions.add(row.Fabric);
-        if (row['Garment Type'] && row['Garment Type'] !== 'N/A') garmentTypeOptions.add(row['Garment Type']);
-        if (row.Style && row.Style !== 'N/A') styleOptions.add(row.Style);
-        if (row['Direct Stitching'] && row['Direct Stitching'] !== 'N/A') directStitchOptions.add(row['Direct Stitching']);
+        if (row.Brand && row.Brand !== 'N/A' && row.Brand !== '-') brands.add(row.Brand);
+        if (row.Season && row.Season !== 'N/A' && row.Season !== '-') seasons.add(row.Season);
+        if (row.Fabric && row.Fabric !== 'N/A' && row.Fabric !== '-') fabricOptions.add(row.Fabric);
+        if (row['Garment Type'] && row['Garment Type'] !== 'N/A' && row['Garment Type'] !== '-') garmentTypeOptions.add(row['Garment Type']);
+        if (row.Style && row.Style !== 'N/A' && row.Style !== '-') styleOptions.add(row.Style);
+        if (row.Section && row.Section !== '—' && row.Section !== 'N/A' && row.Section !== '-') sectionOptions.add(row.Section);
+        if (row['Party Name'] && row['Party Name'] !== '—' && row['Party Name'] !== 'N/A' && row['Party Name'] !== '-') partyOptions.add(row['Party Name']);
         if (row.status) statusOptions.add(row.status);
 
         if (row.hasColorPending) colorPendingCount++;
@@ -877,8 +1022,10 @@ const PendingIssuetoStitching = () => {
         garmentType: garmentTypeOptions,
         style: styleOptions,
         brand: brands,
+        section: sectionOptions,
         season: seasons,
-        directStitch: directStitchOptions,
+        party: partyOptions,
+        directStitch: new Set(['Yes', 'No']),
         colorPending: new Set(['Yes', 'No']),
         status: statusOptions
       });
@@ -951,8 +1098,8 @@ const PendingIssuetoStitching = () => {
       const matrix = matrixMap[row['Lot Number']];
       if (matrix) {
         const total = getTotalPcsFromMatrix(matrix);
-        if (total !== 'N/A' && !isNaN(total)) {
-          totalPieces += parseInt(total);
+        if (typeof total === 'number' && total > 0) {
+          totalPieces += total;
         }
       }
     });
@@ -983,11 +1130,21 @@ const PendingIssuetoStitching = () => {
     if (filters.brand && filters.brand.length > 0) {
       result = result.filter(row => filters.brand.includes(row.Brand));
     }
-    if (filters.season) {
-      result = result.filter(row => row.Season === filters.season);
+    if (filters.section && filters.section.length > 0) {
+      result = result.filter(row => filters.section.includes(row.Section) || filters.section.includes(row['M/W/K']));
+    }
+    if (filters.season && filters.season.length > 0) {
+      result = result.filter(row => filters.season.includes(row.Season));
+    }
+    if (filters.party && filters.party.length > 0) {
+      result = result.filter(row => filters.party.includes(row['Party Name']) || filters.party.includes(row.Party));
     }
     if (filters.directStitch) {
-      result = result.filter(row => row['Direct Stitching'] === filters.directStitch);
+      if (filters.directStitch === 'Yes') {
+        result = result.filter(row => row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'yes');
+      } else if (filters.directStitch === 'No') {
+        result = result.filter(row => !row['Direct Stitching'] || row['Direct Stitching'].toString().toLowerCase() !== 'yes');
+      }
     }
 
     // Apply color pending filter
@@ -999,6 +1156,23 @@ const PendingIssuetoStitching = () => {
       }
     }
 
+    // Apply remarks filter
+    if (filters.remarksStatus) {
+      if (filters.remarksStatus === 'With Remarks') {
+        result = result.filter(row => {
+          const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+          const lotRemarks = remarksMap[lotNo] || [];
+          return lotRemarks.length > 0;
+        });
+      } else if (filters.remarksStatus === 'Without Remarks') {
+        result = result.filter(row => {
+          const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+          const lotRemarks = remarksMap[lotNo] || [];
+          return lotRemarks.length === 0;
+        });
+      }
+    }
+
     // Apply status filter
     if (filters.status && filters.status.length > 0) {
       result = result.filter(row => filters.status.includes(row.status));
@@ -1007,11 +1181,16 @@ const PendingIssuetoStitching = () => {
     // Apply search filter if search term exists
     if (filters.search) {
       const searchLower = filters.search.toLowerCase();
-      result = result.filter(row =>
-        Object.values(row).some(value =>
+      result = result.filter(row => {
+        const directMatch = Object.values(row).some(value =>
           value && value.toString().toLowerCase().includes(searchLower)
-        )
-      );
+        );
+        if (directMatch) return true;
+
+        const lotNumber = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+        const lotRemarks = remarksMap[lotNumber] || [];
+        return lotRemarks.some(r => r.text && r.text.toLowerCase().includes(searchLower));
+      });
     }
 
     setFilteredData(result);
@@ -1030,45 +1209,54 @@ const PendingIssuetoStitching = () => {
       garmentType: [],
       style: [],
       brand: [],
-      season: '',
+      section: [],
+      season: [],
+      party: [],
       directStitch: '',
       colorPending: '',
+      remarksStatus: '',
       status: [],
       search: ''
     });
   };
 
   const getTotalPcsFromMatrix = (matrix) => {
-    if (!matrix) return 'N/A';
+    if (!matrix || !Array.isArray(matrix)) return 0;
 
     for (let i = 0; i < matrix.length; i++) {
       const row = matrix[i];
       if (row && row[0] && row[0].toString().toLowerCase().includes('total')) {
         const totalPcs = row[row.length - 1];
-        return totalPcs || 'N/A';
+        const parsed = parseInt(String(totalPcs || '').replace(/,/g, '').trim(), 10);
+        return isNaN(parsed) ? 0 : parsed;
       }
     }
 
-    return 'N/A';
+    return 0;
   };
 
   const getTotalForLot = (lotNumber) => {
-    const matrix = matrixData[lotNumber];
-    if (!matrix) return 'N/A';
-    return getTotalPcsFromMatrix(matrix);
+    const lotStr = String(lotNumber || '').trim();
+    const matrix = matrixData[lotStr];
+    if (matrix) {
+      const val = getTotalPcsFromMatrix(matrix);
+      if (typeof val === 'number' && val > 0) return val;
+    }
+    const item = data.find(d => String(d['Lot Number'] || d.lotNumber || '').trim() === lotStr);
+    if (item && item['Total Pcs'] && item['Total Pcs'] !== 'N/A') {
+      const parsed = parseInt(String(item['Total Pcs']).replace(/,/g, '').trim(), 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    return 0;
   };
 
   // Calculate total pieces for filtered data
   const calculateFilteredTotalPieces = () => {
     let total = 0;
     filteredData.forEach(row => {
-      const matrix = matrixData[row['Lot Number']];
-      if (matrix) {
-        const totalPcs = getTotalPcsFromMatrix(matrix);
-        if (totalPcs !== 'N/A' && !isNaN(totalPcs)) {
-          total += parseInt(totalPcs);
-        }
-      }
+      const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+      const pcs = getTotalForLot(lotNo);
+      total += (typeof pcs === 'number' ? pcs : (parseInt(pcs, 10) || 0));
     });
     return total;
   };
@@ -1162,411 +1350,1116 @@ const PendingIssuetoStitching = () => {
     }
   };
 
-  // Download PDF function - Fixed to show pending color names and "OK" instead of "Ready"
-  // Download PDF function - Fixed to show pending color names and "OK" instead of "Ready"
-  const downloadPDF = () => {
+  // ================= EXCEL EXPORT (MULTI-SHEET) =================
+  const exportToExcel = async () => {
     if (filteredData.length === 0) {
       alert('No data to download');
       return;
     }
 
     try {
-      const filteredTotalPieces = calculateFilteredTotalPieces();
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Factory Suite Pro';
+      workbook.created = new Date();
+
+      const totalPieces = calculateFilteredTotalPieces();
       const { colorPendingCount, repeatedLotCount } = calculateColorPendingStats();
       const statusStats = calculateStatusStats();
+      const totalLots = filteredData.length;
 
-      const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Production Status Report</title>
-        <style>
-          @page { 
-            size: A4 landscape; 
-            margin: 8mm; 
-          }
-          body {
-            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-            margin: 0;
-            padding: 0;
-            color: #000000;
-            background-color: #ffffff;
-            font-size: 10px;
-          }
-          
-          .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 2px solid #000000;
-            padding-bottom: 8px;
-            margin-bottom: 15px;
-          }
-          
-          .title-area {
-            text-align: left;
-          }
-          
-          .title {
-            font-size: 20px;
-            font-weight: 800;
-            color: #000000;
-            margin: 0;
-            letter-spacing: -0.025em;
-          }
-          
-          .subtitle {
-            font-size: 11px;
-            color: #000000;
-            margin: 4px 0 0 0;
-            font-weight: 500;
-          }
-          
-          .meta-area {
-            text-align: right;
-            font-size: 10px;
-            color: #000000;
-          }
-          
-          .meta-item {
-            margin-bottom: 2px;
-          }
-          
-          .meta-label {
-            font-weight: 600;
-          }
-          
-          /* Summary Cards */
-          .summary-section {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 12px;
-            margin-bottom: 15px;
-          }
-          
-          .summary-card {
-            background: #ffffff;
-            border: 1px solid #000000;
-            border-radius: 6px;
-            padding: 8px;
-            text-align: center;
-          }
-          
-          .summary-value {
-            font-size: 14px;
-            font-weight: 700;
-            color: #000000;
-            margin-bottom: 2px;
-          }
-          
-          .summary-label {
-            font-size: 8px;
-            color: #000000;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-          }
-          
-          table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 9px;
-            margin-bottom: 15px;
-          }
-          
-          th {
-            background-color: #f1f5f9;
-            color: #000000;
-            font-weight: 700;
-            text-transform: uppercase;
-            font-size: 8px;
-            letter-spacing: 0.05em;
-            padding: 6px;
-            text-align: left;
-            border: 1px solid #000000;
-          }
-          
-          td {
-            padding: 6px;
-            border: 1px solid #000000;
-            color: #000000;
-            vertical-align: middle;
-          }
-          
-          tr:nth-child(even) {
-            background-color: #f8fafc;
-          }
-          
-          .col-sr { width: 4%; text-align: center; }
-          .col-lot { width: 9%; font-weight: 700; }
-          .col-fabric { width: 11%; }
-          .col-type { width: 9%; }
-          .col-style { width: 9%; }
-          .col-image { width: 8%; text-align: center; }
-          .col-brand { width: 8%; }
-          .col-season { width: 7%; }
-          .col-direct { width: 6%; text-align: center; }
-          .col-pcs { width: 7%; text-align: center; font-weight: 700; }
-          .col-color { width: 12%; }
-          .col-status { width: 10%; text-align: center; }
-          
-          .pcs-badge {
-            font-weight: 700;
-            display: inline-block;
-          }
-          
-          .direct-yes {
-            font-weight: 700;
-          }
-          
-          .direct-no {
-            font-weight: 500;
-          }
-          
-          /* Status Badges */
-          .status-badge {
-            padding: 2px 6px;
-            border: 1px solid #000000;
-            border-radius: 4px;
-            font-size: 8px;
-            font-weight: 700;
-            display: inline-block;
-            text-align: center;
-            color: #000000;
-          }
-          
-          .color-pending {
-            font-weight: 700;
-            display: inline-block;
-          }
-          
-          .color-ok {
-            font-weight: 500;
-          }
-          
-          .repeated-star {
-            font-weight: 700;
-            margin-right: 2px;
-          }
-          
-          .footer {
-            border-top: 1px solid #000000;
-            padding-top: 8px;
-            display: flex;
-            justify-content: space-between;
-            font-size: 8px;
-            color: #000000;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div class="title-area">
-            <h1 class="title">Production Status Report</h1>
-            <p class="subtitle">Pending Issues to Stitching After Cutting</p>
-          </div>
-          <div class="meta-area">
-            <div class="meta-item"><span class="meta-label">Date:</span> ${new Date().toLocaleDateString('en-GB')}</div>
-            <div class="meta-item"><span class="meta-label">Time:</span> ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</div>
-          </div>
-        </div>
-        
-        <div class="summary-section">
-          <div class="summary-card">
-            <div class="summary-value">${filteredData.length}</div>
-            <div class="summary-label">Total Lots</div>
-          </div>
-          <div class="summary-card">
-            <div class="summary-value">${filteredTotalPieces.toLocaleString()}</div>
-            <div class="summary-label">Total Pieces</div>
-          </div>
-          <div class="summary-card">
-            <div class="summary-value">${colorPendingCount}</div>
-            <div class="summary-label">Color Pending</div>
-          </div>
-          <div class="summary-card">
-            <div class="summary-value">${repeatedLotCount}</div>
-            <div class="summary-label">Repeated Lots</div>
-          </div>
-          <div class="summary-card">
-            <div class="summary-value">${statusStats.direct}</div>
-            <div class="summary-label">Direct Lots</div>
-          </div>
-        </div>
-        
-        <table>
-          <thead>
-            <tr>
-              <th class="col-sr">#</th>
-              <th class="col-lot">LOT #</th>
-              <th class="col-fabric">FABRIC</th>
-              <th class="col-type">GARMENT TYPE</th>
-              <th class="col-style">STYLE</th>
-              <th class="col-brand">BRAND</th>
-              <th class="col-season">SEASON</th>
-              <th class="col-direct">DIRECT</th>
-              <th class="col-pcs">TOTAL PCS</th>
-              <th class="col-image">IMAGE</th>
-              <th class="col-color">COLOR STATUS</th>
-              <th class="col-status">STATUS</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${filteredData.map((row, index) => {
-        const isColorPending = row.hasColorPending || false;
-        const isRepeated = row.isRepeatedLot || false;
-        const pendingColors = row.pendingColors || [];
-        const pendingColorsText = row.pendingColorsText || '';
-        const statusClass = row.status ? row.status.toLowerCase().replace(/\s+/g, '-').replace('working', '') : 'pending';
+      // Grouping data for executive summary
+      const garmentMap = {};
+      const seasonMap = {};
+      const partyMap = {};
+      const statusMap = {};
 
-        return `
-                <tr>
-                  <td class="col-sr" style="text-align: center;">${index + 1}</td>
-                  <td class="col-lot">
-                    ${isRepeated ? '<span class="repeated-star">★</span>' : ''}
-                    ${row['Lot Number'] || 'N/A'}
-                  </td>
-                  <td>${row['Fabric'] || 'N/A'}</td>
-                  <td>${row['Garment Type'] || 'N/A'}</td>
-                  <td>${row['Style'] || 'N/A'}</td>
-                  <td>${row['Brand'] || 'N/A'}</td>
-                  <td style="text-align: center;">${row['Season'] || 'N/A'}</td>
-                  <td class="col-direct" style="text-align: center;">
-                    ${row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'yes' ?
-            '<span class="direct-yes">Yes</span>' :
-            row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'no' ?
-              '<span class="direct-no">No</span>' :
-              row['Direct Stitching'] || 'N/A'
-          }
-                  </td>
-                  <td class="col-pcs" style="text-align: center;">
-                    <span class="pcs-badge">${getTotalForLot(row['Lot Number']) || 0}</span>
-                  </td>
-                  <td class="col-image" style="text-align: center;">
-                    ${row['Image'] && row['Image'] !== 'N/A'
-            ? `<img src="${row['Image']}" referrerpolicy="no-referrer" style="width: 35px; height: 35px; object-fit: cover; border: 1px solid #000000; border-radius: 3px;" />`
-            : '<span style="font-size: 8px; color: #666;">No Image</span>'}
-                  </td>
-                  <td class="col-color" style="text-align: center;">
-                    ${isColorPending ?
-            `<span class="color-pending" title="${pendingColorsText}">⚠️ Pending: ${pendingColors.slice(0, 2).join(', ')}${pendingColors.length > 2 ? '...' : ''}</span>` :
-            '<span class="color-ok">✓ OK</span>'
-          }
-                  </td>
-                  <td class="col-status" style="text-align: center;">
-                    <span class="status-badge">
-                      ${row.status || 'Pending'}
-                    </span>
-                  </td>
-                </tr>
-              `;
-      }).join('')}
-          </tbody>
-        </table>
-        
-        <div class="footer">
-          <div>System Generated Report | Confidential Production Data</div>
-          <div>Direct: ${statusStats.direct} | Ready: ${statusStats.ready} | Printing: ${statusStats.printing} | Embroidery: ${statusStats.embroidery} | Pending: ${statusStats.pending}</div>
-        </div>
-      </body>
-      </html>
-    `;
+      filteredData.forEach(row => {
+        const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+        const pcs = Number(getTotalForLot(lotNo)) || 0;
+        const garment = (row['Garment Type'] || 'Unknown').trim();
+        const season = (row['Season'] || 'N/A').trim();
+        const party = (row['Party Name'] || (row['Direct Stitching'] === 'Yes' ? 'Direct Stitching' : '—')).trim();
+        const status = (row.status || 'Pending').trim();
 
-      const blob = new Blob([htmlContent], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = url;
-      document.body.appendChild(iframe);
+        if (!garmentMap[garment]) garmentMap[garment] = { totalLots: 0, totalPcs: 0 };
+        garmentMap[garment].totalLots += 1;
+        garmentMap[garment].totalPcs += pcs;
 
-      iframe.onload = function () {
-        setTimeout(() => {
-          iframe.contentWindow.focus();
-          iframe.contentWindow.print();
-          setTimeout(() => {
-            document.body.removeChild(iframe);
-            URL.revokeObjectURL(url);
-          }, 1000);
-        }, 500);
+        if (!seasonMap[season]) seasonMap[season] = { totalLots: 0, totalPcs: 0 };
+        seasonMap[season].totalLots += 1;
+        seasonMap[season].totalPcs += pcs;
+
+        if (!partyMap[party]) partyMap[party] = { totalLots: 0, totalPcs: 0 };
+        partyMap[party].totalLots += 1;
+        partyMap[party].totalPcs += pcs;
+
+        if (!statusMap[status]) statusMap[status] = { totalLots: 0, totalPcs: 0 };
+        statusMap[status].totalLots += 1;
+        statusMap[status].totalPcs += pcs;
+      });
+
+      const sortedGarments = Object.keys(garmentMap).map(name => ({
+        name,
+        totalLots: garmentMap[name].totalLots,
+        totalPcs: garmentMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedSeasons = Object.keys(seasonMap).map(name => ({
+        name,
+        totalLots: seasonMap[name].totalLots,
+        totalPcs: seasonMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedParties = Object.keys(partyMap).map(name => ({
+        name,
+        totalLots: partyMap[name].totalLots,
+        totalPcs: partyMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedStatuses = Object.keys(statusMap).map(name => ({
+        name,
+        totalLots: statusMap[name].totalLots,
+        totalPcs: statusMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
       };
 
-    } catch (error) {
-      console.error('PDF Error:', error);
-      alert('Error generating PDF.');
+      // ================= SHEET 1: DATA TABLE =================
+      const ws1 = workbook.addWorksheet('Pending Stitching', {
+        views: [{ showGridLines: true }]
+      });
+
+      // Title Banner
+      ws1.mergeCells('A1:O1');
+      const titleCell = ws1.getCell('A1');
+      titleCell.value = 'FACTORY SUITE PRO - PENDING ISSUES TO STITCHING AFTER CUTTING';
+      titleCell.font = { name: 'Segoe UI', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E1B4B' } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws1.getRow(1).height = 30;
+
+      // Subtitle KPI Banner
+      ws1.mergeCells('A2:O2');
+      const subCell = ws1.getCell('A2');
+      subCell.value = `Total Lots: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()}   |   Color Pending: ${colorPendingCount}   |   Repeated Lots: ${repeatedLotCount}   |   Direct Lots: ${statusStats.direct}   |   Generated: ${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN')}`;
+      subCell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FFC7D2FE' } };
+      subCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF312E81' } };
+      subCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws1.getRow(2).height = 22;
+
+      // Header Row
+      const tableHeaders = [
+        '#', 'Lot #', 'Garment Type', 'Style', 'Fabric', 'Brand',
+        'Total Pcs', 'Section', 'Season', 'Party Name', 'Direct',
+        'Color Status', 'Status', 'Pending Colors', 'Remarks'
+      ];
+      const headerRow = ws1.addRow(tableHeaders);
+      headerRow.height = 24;
+      headerRow.eachCell((cell) => {
+        cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = thinBorder;
+      });
+
+      // Data Rows
+      filteredData.forEach((row, index) => {
+        const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+        const lotRemarks = remarksMap[lotNo] || [];
+        const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1].text : '';
+        const isRepeated = row.isRepeatedLot || false;
+        const isColorPending = row.hasColorPending || false;
+        const pcs = Number(getTotalForLot(lotNo)) || 0;
+
+        const r = ws1.addRow([
+          index + 1,
+          isRepeated ? `★ ${row['Lot Number']}` : row['Lot Number'],
+          row['Garment Type'] || 'N/A',
+          row['Style'] || 'N/A',
+          row['Fabric'] || 'N/A',
+          row['Brand'] || 'N/A',
+          pcs,
+          row['Section'] || row['M/W/K'] || '—',
+          row['Season'] || 'N/A',
+          row['Party Name'] || row['Party'] || '—',
+          row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'yes' ? 'Yes' : 'No',
+          isColorPending ? 'Color Pending' : 'OK',
+          row.status || 'Pending',
+          row.pendingColorsText || '',
+          latestRemark || ''
+        ]);
+
+        r.height = 20;
+
+        // Apply borders and alternating fill
+        r.eachCell((cell) => {
+          cell.font = { name: 'Segoe UI', size: 9 };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          cell.border = thinBorder;
+          if (index % 2 === 1) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+          }
+        });
+
+        // Highlight Lot Number if repeated
+        if (isRepeated) {
+          r.getCell(2).font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFB45309' } };
+          r.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+        }
+
+        // Total Pcs formatting
+        r.getCell(7).numFmt = '#,##0';
+        r.getCell(7).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF1E40AF' } };
+
+        // Color status badge
+        if (isColorPending) {
+          r.getCell(12).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+          r.getCell(12).font = { name: 'Segoe UI', size: 8.5, bold: true, color: { argb: 'FFDC2626' } };
+        } else {
+          r.getCell(12).font = { name: 'Segoe UI', size: 8.5, color: { argb: 'FF16A34A' } };
+        }
+
+        // Direct badge
+        if (row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'yes') {
+          r.getCell(11).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF15803D' } };
+        }
+      });
+
+      // Total Row
+      const totalRow1 = ws1.addRow([
+        '',
+        `TOTAL (${totalLots} Lots)`,
+        '',
+        '',
+        '',
+        '',
+        totalPieces,
+        '',
+        '',
+        '',
+        '',
+        `${colorPendingCount} Color Pending`,
+        `${statusStats.direct} Direct`,
+        '',
+        `${repeatedLotCount} Repeated`
+      ]);
+      totalRow1.height = 24;
+      totalRow1.eachCell((cell) => {
+        cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF000000' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FF000000' } },
+          bottom: { style: 'double', color: { argb: 'FF000000' } },
+          left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+        };
+      });
+      totalRow1.getCell(7).numFmt = '#,##0';
+
+      // Set column widths
+      const colWidths1 = [6, 14, 18, 18, 18, 15, 14, 12, 14, 20, 12, 16, 18, 24, 30];
+      colWidths1.forEach((w, i) => {
+        ws1.getColumn(i + 1).width = w;
+      });
+
+      // ================= SHEET 2: EXECUTIVE SUMMARY =================
+      const ws2 = workbook.addWorksheet('Executive Summary', {
+        views: [{ showGridLines: true }]
+      });
+
+      // Section 1: Garment Type Breakdown
+      ws2.mergeCells('A1:D1');
+      const gTitle = ws2.getCell('A1');
+      gTitle.value = '1. GARMENT TYPE BREAKDOWN (LOTS & PIECES DISTRIBUTION)';
+      gTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      gTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } };
+      gTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(1).height = 26;
+
+      const gHeader = ws2.addRow(['Garment Type', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      gHeader.height = 22;
+      gHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF134E4A' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedGarments.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const gTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      gTotalRow.height = 22;
+      gTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      gTotalRow.getCell(3).numFmt = '#,##0';
+      gTotalRow.getCell(4).numFmt = '0.0%';
+
+      // Spacer
+      ws2.addRow([]);
+
+      // Section 2: Season Breakdown
+      const seasonStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${seasonStartRow}:D${seasonStartRow}`);
+      const sTitle = ws2.getCell(`A${seasonStartRow}`);
+      sTitle.value = '2. SEASON WISE BREAKDOWN (LOTS & PIECES DISTRIBUTION)';
+      sTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      sTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4338CA' } };
+      sTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(seasonStartRow).height = 26;
+
+      const sHeader = ws2.addRow(['Season', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      sHeader.height = 22;
+      sHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF312E81' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedSeasons.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const sTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      sTotalRow.height = 22;
+      sTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      sTotalRow.getCell(3).numFmt = '#,##0';
+      sTotalRow.getCell(4).numFmt = '0.0%';
+
+      // Spacer
+      ws2.addRow([]);
+
+      // Section 3: Party Summary
+      const partyStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${partyStartRow}:D${partyStartRow}`);
+      const pTitle = ws2.getCell(`A${partyStartRow}`);
+      pTitle.value = '3. PARTY SUMMARY & WORKLOAD ALLOCATION';
+      pTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      pTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
+      pTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(partyStartRow).height = 26;
+
+      const pHeader = ws2.addRow(['Party Name', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      pHeader.height = 22;
+      pHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedParties.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const pTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      pTotalRow.height = 22;
+      pTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      pTotalRow.getCell(3).numFmt = '#,##0';
+      pTotalRow.getCell(4).numFmt = '0.0%';
+
+      // Spacer
+      ws2.addRow([]);
+
+      // Section 4: Status Breakdown
+      const statusStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${statusStartRow}:D${statusStartRow}`);
+      const stTitle = ws2.getCell(`A${statusStartRow}`);
+      stTitle.value = '4. STATUS & PROCESS WORKFLOW BREAKDOWN';
+      stTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      stTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF9333EA' } };
+      stTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(statusStartRow).height = 26;
+
+      const stHeader = ws2.addRow(['Status', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      stHeader.height = 22;
+      stHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6B21A8' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedStatuses.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const stTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      stTotalRow.height = 22;
+      stTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      stTotalRow.getCell(3).numFmt = '#,##0';
+      stTotalRow.getCell(4).numFmt = '0.0%';
+
+      ws2.getColumn(1).width = 34;
+      ws2.getColumn(2).width = 16;
+      ws2.getColumn(3).width = 22;
+      ws2.getColumn(4).width = 16;
+
+      // ================= SHEET 3: APPLIED FILTERS =================
+      const ws3 = workbook.addWorksheet('Applied Filters', {
+        views: [{ showGridLines: true }]
+      });
+
+      ws3.mergeCells('A1:B1');
+      const fTitle = ws3.getCell('A1');
+      fTitle.value = 'APPLIED FILTERS & REPORT METADATA';
+      fTitle.font = { name: 'Segoe UI', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+      fTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      fTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws3.getRow(1).height = 28;
+
+      const filterItems = [
+        ['Report Generated', `${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN')}`],
+        ['Total Lots Exported', totalLots],
+        ['Total Pieces Exported', totalPieces.toLocaleString()],
+        ['Color Pending Lots', colorPendingCount],
+        ['Repeated Lots', repeatedLotCount],
+        ['Direct Lots', statusStats.direct],
+        ['Fabric Filter', filters.fabric.length ? filters.fabric.join(', ') : 'All Fabrics'],
+        ['Garment Type Filter', filters.garmentType.length ? filters.garmentType.join(', ') : 'All Types'],
+        ['Style Filter', filters.style.length ? filters.style.join(', ') : 'All Styles'],
+        ['Brand Filter', filters.brand.length ? filters.brand.join(', ') : 'All Brands'],
+        ['Section Filter', filters.section.length ? filters.section.join(', ') : 'All Sections'],
+        ['Season Filter', filters.season.length ? filters.season.join(', ') : 'All Seasons'],
+        ['Party Name Filter', filters.party.length ? filters.party.join(', ') : 'All Parties'],
+        ['Direct Stitching Filter', filters.directStitch || 'All'],
+        ['Color Pending Filter', filters.colorPending || 'All'],
+        ['Status Filter', filters.status.length ? filters.status.join(', ') : 'All Statuses'],
+        ['Search Query', filters.search || 'None']
+      ];
+
+      filterItems.forEach(([k, v], idx) => {
+        const r = ws3.addRow([k, v]);
+        r.height = 20;
+        r.getCell(1).font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF1E293B' } };
+        r.getCell(2).font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF334155' } };
+        r.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
+        r.eachCell(c => {
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      ws3.getColumn(1).width = 24;
+      ws3.getColumn(2).width = 50;
+
+      // Generate and Save Excel File
+      const buffer = await workbook.xlsx.writeBuffer();
+      const ts = new Date().toISOString().slice(0, 10);
+      saveAs(new Blob([buffer]), `Pending_Stitching_Issues_${ts}.xlsx`);
+
+    } catch (e) {
+      console.error('Excel export error:', e);
+      alert(`Excel export failed: ${e.message}`);
     }
   };
-  const handleBack = () => {
-    window.history.back();
-  };
 
-  const downloadCSV = () => {
+  // ================= PROFESSIONAL PDF EXPORT (A3 LANDSCAPE WITH PICTURES) =================
+  const exportToPDF = async () => {
     if (filteredData.length === 0) {
       alert('No data to download');
       return;
     }
 
     try {
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "pt",
+        format: "a3"
+      });
+
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const margin = 15;
+      const contentWidth = pageW - (margin * 2);
+
       const { colorPendingCount, repeatedLotCount } = calculateColorPendingStats();
+      const totalPieces = calculateFilteredTotalPieces();
+      const totalLots = filteredData.length;
       const statusStats = calculateStatusStats();
 
-      // Headers without Challan History
-      const headers = ['#', 'Lot Number', 'Fabric', 'Garment Type', 'Style', 'Brand', 'Season', 'Direct Stitching', 'Total Pcs', 'Color Status', 'Pending Colors', 'Status', 'Priority'];
-      const csvData = filteredData.map((row, index) => {
-        const rowData = {
-          '#': index + 1,
-          'Lot Number': row['Lot Number'],
-          'Fabric': row['Fabric'],
-          'Garment Type': row['Garment Type'],
-          'Style': row['Style'],
-          'Brand': row['Brand'],
-          'Season': row['Season'],
-          'Direct Stitching': row['Direct Stitching'],
-          'Total Pcs': getTotalForLot(row['Lot Number']),
-          'Color Status': row.hasColorPending ? 'Color Pending' : 'OK',
-          'Pending Colors': row.pendingColorsText || '',
-          'Status': row.status || '',
-          'Priority': row.priority || ''
-        };
+      // Pre-load base64 images for all filtered lots
+      const imageBase64Map = new Map();
+      await Promise.all(
+        filteredData.map(async (row) => {
+          const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+          const imgUrl = row['Image'] && row['Image'] !== 'N/A' ? row['Image'] : '';
+          if (imgUrl) {
+            const directUrl = getDirectImageUrl(imgUrl);
+            const b64 = await getBase64ImageFromUrl(directUrl);
+            if (b64) {
+              imageBase64Map.set(lotNo, b64);
+            }
+          }
+        })
+      );
 
-        return headers.map(column => {
-          const value = rowData[column] || '';
-          const escapedValue = String(value).replace(/"/g, '""');
-          return escapedValue.includes(',') ? `"${escapedValue}"` : escapedValue;
-        }).join(',');
-      }).join('\n');
+      // Grouping data for executive summary
+      const garmentMap = {};
+      const seasonMap = {};
+      const partyMap = {};
+      const statusMap = {};
 
-      // Add summary rows
-      const summaryRows = [
+      filteredData.forEach(row => {
+        const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+        const pcs = Number(getTotalForLot(lotNo)) || 0;
+        const garment = (row['Garment Type'] || 'Unknown').trim();
+        const season = (row['Season'] || 'N/A').trim();
+        const party = (row['Party Name'] || (row['Direct Stitching'] === 'Yes' ? 'Direct Stitching' : '—')).trim();
+        const status = (row.status || 'Pending').trim();
+
+        if (!garmentMap[garment]) garmentMap[garment] = { totalLots: 0, totalPcs: 0 };
+        garmentMap[garment].totalLots += 1;
+        garmentMap[garment].totalPcs += pcs;
+
+        if (!seasonMap[season]) seasonMap[season] = { totalLots: 0, totalPcs: 0 };
+        seasonMap[season].totalLots += 1;
+        seasonMap[season].totalPcs += pcs;
+
+        if (!partyMap[party]) partyMap[party] = { totalLots: 0, totalPcs: 0 };
+        partyMap[party].totalLots += 1;
+        partyMap[party].totalPcs += pcs;
+
+        if (!statusMap[status]) statusMap[status] = { totalLots: 0, totalPcs: 0 };
+        statusMap[status].totalLots += 1;
+        statusMap[status].totalPcs += pcs;
+      });
+
+      const sortedGarments = Object.keys(garmentMap).map(name => ({
+        name,
+        totalLots: garmentMap[name].totalLots,
+        totalPcs: garmentMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedSeasons = Object.keys(seasonMap).map(name => ({
+        name,
+        totalLots: seasonMap[name].totalLots,
+        totalPcs: seasonMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedParties = Object.keys(partyMap).map(name => ({
+        name,
+        totalLots: partyMap[name].totalLots,
+        totalPcs: partyMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedStatuses = Object.keys(statusMap).map(name => ({
+        name,
+        totalLots: statusMap[name].totalLots,
+        totalPcs: statusMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      // Main Header Block
+      doc.setFillColor(15, 23, 42); // Dark Navy
+      doc.rect(margin, 12, contentWidth, 48, 'F');
+
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text("FACTORY SUITE PRO - PENDING ISSUES TO STITCHING", pageW / 2, 30, { align: 'center' });
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(199, 210, 254);
+      const subText = `Total Lots: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()}   |   Color Pending: ${colorPendingCount}   |   Repeated Lots: ${repeatedLotCount}   |   Direct Lots: ${statusStats.direct}   |   Ready: ${statusStats.ready}   |   Printing: ${statusStats.printing}   |   Embroidery: ${statusStats.embroidery}   |   Pending: ${statusStats.pending}`;
+      doc.text(subText, pageW / 2, 48, { align: 'center' });
+
+      // Filter Banner
+      doc.setFillColor(241, 245, 249);
+      doc.rect(margin, 63, contentWidth, 16, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(0, 0, 0); // Pure Black
+      const filterSummary = `Filters: Fabric: ${filters.fabric.length ? filters.fabric.join(', ') : 'All'} | Garment: ${filters.garmentType.length ? filters.garmentType.join(', ') : 'All'} | Style: ${filters.style.length ? filters.style.join(', ') : 'All'} | Brand: ${filters.brand.length ? filters.brand.join(', ') : 'All'} | Section: ${filters.section.length ? filters.section.join(', ') : 'All'} | Season: ${filters.season.length ? filters.season.join(', ') : 'All'} | Party: ${filters.party.length ? filters.party.join(', ') : 'All'} | Direct: ${filters.directStitch || 'All'} | Remarks: ${filters.remarksStatus || 'All'} | Status: ${filters.status.length ? filters.status.join(', ') : 'All'}`;
+      doc.text(filterSummary, pageW / 2, 74, { align: 'center' });
+
+      // Table columns & rows
+      const tableColumns = [
+        '#',
+        'Image',
+        'Lot Number',
+        'Garment Type',
+        'Style',
+        'Fabric',
+        'Brand',
+        'Total Pcs',
+        'Section',
+        'Season',
+        'Party Name',
+        'Direct',
+        'Color Status',
+        'Status',
+        'Remarks'
+      ];
+
+      const tableBody = filteredData.map((row, idx) => {
+        const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+        const lotRemarks = remarksMap[lotNo] || [];
+        const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1].text : '—';
+        const isColorPending = row.hasColorPending || false;
+        const pendingColors = row.pendingColors || [];
+        const pcs = Number(getTotalForLot(lotNo)) || 0;
+
+        let colorStatusText = 'OK';
+        if (isColorPending) {
+          colorStatusText = pendingColors.length > 0
+            ? `Pending: ${pendingColors.slice(0, 2).join(', ')}${pendingColors.length > 2 ? '...' : ''}`
+            : 'Color Pending';
+        }
+
+        return [
+          (idx + 1).toString(),
+          '', // Image cell rendered via didDrawCell
+          row.isRepeatedLot ? `★ ${row['Lot Number']}` : row['Lot Number'],
+          row['Garment Type'] || 'N/A',
+          row['Style'] || 'N/A',
+          row['Fabric'] || 'N/A',
+          row['Brand'] || 'N/A',
+          pcs.toLocaleString(),
+          row['Section'] || row['M/W/K'] || '—',
+          row['Season'] || 'N/A',
+          row['Party Name'] || row['Party'] || '—',
+          row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'yes' ? 'Yes' : 'No',
+          colorStatusText,
+          row.status || 'Pending',
+          latestRemark
+        ];
+      });
+
+      // Add Total Row
+      tableBody.push([
         '',
-        'SUMMARY',
-        `Total Lots,${filteredData.length}`,
-        `Total Pieces,${calculateFilteredTotalPieces()}`,
-        `Color Pending Lots,${colorPendingCount}`,
-        `Repeated Lots,${repeatedLotCount}`,
-        'Status Counts',
-        `Direct,${statusStats.direct}`,
-        `Ready for Stitching,${statusStats.ready}`,
-        `Printing Working,${statusStats.printing}`,
-        `Embroidery Working,${statusStats.embroidery}`,
-        `Pending,${statusStats.pending}`
-      ].join('\n');
+        '',
+        `TOTAL (${totalLots})`,
+        '',
+        '',
+        '',
+        '',
+        totalPieces.toLocaleString(),
+        '',
+        '',
+        '',
+        `${statusStats.direct} Direct`,
+        `${colorPendingCount} Color Pending`,
+        `${statusStats.pending} Pending`,
+        `${repeatedLotCount} Repeated`
+      ]);
 
-      const csvContent = `${headers.join(',')}\n${csvData}\n${summaryRows}`;
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      const url = URL.createObjectURL(blob);
+      const baseWidths = [26, 42, 68, 88, 88, 90, 78, 62, 50, 62, 95, 48, 100, 90, 145];
+      const sumBase = baseWidths.reduce((a, b) => a + b, 0);
+      const scaleFactor = contentWidth / sumBase;
+      const columnStyles = {};
+      baseWidths.forEach((w, idx) => {
+        columnStyles[idx] = {
+          cellWidth: w * scaleFactor,
+          halign: 'center',
+          valign: 'middle'
+        };
+      });
+      columnStyles[7].fontStyle = 'bold';
 
-      link.setAttribute('href', url);
-      link.setAttribute('download', `Production_Status_${new Date().toISOString().split('T')[0]}.csv`);
-      link.style.visibility = 'hidden';
+      autoTable(doc, {
+        head: [tableColumns],
+        body: tableBody,
+        startY: 85,
+        tableWidth: contentWidth,
+        margin: { top: 85, right: margin, bottom: 25, left: margin },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3, right: 2, bottom: 3, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0], // Pure Black
+          lineColor: [0, 0, 0], // Black grid lines
+          lineWidth: 0.3,
+          fontStyle: 'normal',
+          minCellHeight: 25,
+        },
+        headStyles: {
+          fillColor: [15, 23, 42],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          lineColor: [0, 0, 0],
+          lineWidth: 0.5,
+          halign: 'center',
+          fontSize: 9,
+          valign: 'middle',
+          cellPadding: { top: 5, right: 2, bottom: 5, left: 2 },
+          minCellHeight: 14,
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+        columnStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
 
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } catch (error) {
-      console.error('Error generating CSV:', error);
-      alert('Error generating CSV. Please try again.');
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [226, 232, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.halign = 'center';
+              data.cell.styles.valign = 'middle';
+              return;
+            }
+
+            const row = filteredData[rowIndex];
+            if (!row) return;
+
+            // Repeated lot styling
+            if (row.isRepeatedLot && data.column.index === 2) {
+              data.cell.styles.fillColor = [254, 243, 199];
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.textColor = [146, 64, 14];
+            }
+
+            // Color status styling
+            if (data.column.index === 12) {
+              if (row.hasColorPending) {
+                data.cell.styles.fillColor = [254, 226, 226];
+                data.cell.styles.textColor = [220, 38, 38];
+                data.cell.styles.fontStyle = 'bold';
+              } else {
+                data.cell.styles.textColor = [22, 163, 74];
+              }
+            }
+
+            // Direct styling
+            if (data.column.index === 11 && row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'yes') {
+              data.cell.styles.textColor = [21, 128, 61];
+              data.cell.styles.fontStyle = 'bold';
+            }
+          }
+        },
+        didDrawCell: function (data) {
+          if (data.column.index === 1 && data.section === 'body') {
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
+            if (isTotalRow) return;
+
+            const row = filteredData[rowIndex];
+            if (!row) return;
+
+            const lotNo = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+            const b64 = imageBase64Map.get(lotNo);
+            if (b64) {
+              try {
+                const imgSize = 20;
+                const posX = data.cell.x + (data.cell.width - imgSize) / 2;
+                const posY = data.cell.y + (data.cell.height - imgSize) / 2;
+                doc.addImage(b64, 'JPEG', posX, posY, imgSize, imgSize);
+              } catch (e) {
+                console.warn('Could not draw image in PDF cell:', e);
+              }
+            }
+          }
+        }
+      });
+
+      // --- 4-COLUMN SIDE-BY-SIDE EXECUTIVE SUMMARY ---
+      // 1. Garment Body
+      const gBody = sortedGarments.map(item => {
+        const pct = totalPieces > 0 ? ((item.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [
+          item.name,
+          item.totalLots.toString(),
+          item.totalPcs.toLocaleString(),
+          `${pct}%`
+        ];
+      });
+      gBody.push([
+        "TOTAL",
+        totalLots.toString(),
+        totalPieces.toLocaleString(),
+        "100.0%"
+      ]);
+
+      // 2. Season Body
+      const sBody = sortedSeasons.map(item => {
+        const pct = totalPieces > 0 ? ((item.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [
+          item.name,
+          item.totalLots.toString(),
+          item.totalPcs.toLocaleString(),
+          `${pct}%`
+        ];
+      });
+      sBody.push([
+        "TOTAL",
+        totalLots.toString(),
+        totalPieces.toLocaleString(),
+        "100.0%"
+      ]);
+
+      // 3. Party Body
+      const pBody = sortedParties.map(party => {
+        const pct = totalPieces > 0 ? ((party.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [
+          party.name,
+          party.totalLots.toString(),
+          party.totalPcs.toLocaleString(),
+          `${pct}%`
+        ];
+      });
+      pBody.push([
+        "TOTAL",
+        totalLots.toString(),
+        totalPieces.toLocaleString(),
+        "100.0%"
+      ]);
+
+      // 4. Status Body
+      const stBody = sortedStatuses.map(st => {
+        const pct = totalPieces > 0 ? ((st.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [
+          st.name,
+          st.totalLots.toString(),
+          st.totalPcs.toLocaleString(),
+          `${pct}%`
+        ];
+      });
+      stBody.push([
+        "TOTAL",
+        totalLots.toString(),
+        totalPieces.toLocaleString(),
+        "100.0%"
+      ]);
+
+      const maxRows = Math.max(gBody.length, sBody.length, pBody.length, stBody.length);
+      const approxSummaryHeight = 55 + (maxRows * 18);
+
+      let summaryStartY = doc.lastAutoTable.finalY + 22;
+      const neededSpace = approxSummaryHeight + 35;
+      if (summaryStartY + neededSpace > pageH - 30) {
+        doc.addPage();
+        summaryStartY = 40;
+      } else {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.8);
+        doc.line(margin, summaryStartY - 8, pageW - margin, summaryStartY - 8);
+      }
+
+      // Title & KPI Subtitle
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0); // Pure Black
+      const summaryTitle = "EXECUTIVE SUMMARY & PRODUCTION BREAKDOWN";
+      doc.text(summaryTitle, pageW / 2, summaryStartY + 4, { align: 'center' });
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(0, 0, 0);
+      const summarySub = `Total Lots: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()} Pcs   |   Seasons: ${sortedSeasons.length}   |   Parties: ${sortedParties.length}   |   Garment Types: ${sortedGarments.length}   |   Repeated Lots: ${repeatedLotCount}`;
+      doc.text(summarySub, pageW / 2, summaryStartY + 16, { align: 'center' });
+
+      const sectionTitleY = summaryStartY + 30;
+      const tableStartY = sectionTitleY + 6;
+
+      // 4 Columns Side-by-Side Configuration
+      const gap = 12;
+      const totalCols = 4;
+      const totalGaps = gap * (totalCols - 1);
+      const colWidth = (contentWidth - totalGaps) / totalCols;
+      const col1X = margin;
+      const col2X = col1X + colWidth + gap;
+      const col3X = col2X + colWidth + gap;
+      const col4X = col3X + colWidth + gap;
+
+      // Section Titles above each Column
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("1. GARMENT BREAKDOWN", col1X + colWidth / 2, sectionTitleY, { align: 'center' });
+      doc.text("2. SEASON BREAKDOWN", col2X + colWidth / 2, sectionTitleY, { align: 'center' });
+      doc.text("3. PARTY SUMMARY", col3X + colWidth / 2, sectionTitleY, { align: 'center' });
+      doc.text("4. STATUS / PROCESS BREAKDOWN", col4X + colWidth / 2, sectionTitleY, { align: 'center' });
+
+      const summaryColStyles = {
+        0: { cellWidth: colWidth * 0.40, halign: 'center', valign: 'middle' },
+        1: { cellWidth: colWidth * 0.18, halign: 'center', valign: 'middle' },
+        2: { cellWidth: colWidth * 0.24, halign: 'center', valign: 'middle' },
+        3: { cellWidth: colWidth * 0.18, halign: 'center', valign: 'middle' },
+      };
+
+      // Column 1 Table: Garment Type Breakdown
+      autoTable(doc, {
+        head: [['Garment Type', 'Lots', 'Total Pcs', 'Share %']],
+        body: gBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col1X, right: pageW - (col1X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          valign: 'middle',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            data.cell.styles.valign = 'middle';
+            if (data.row.index === gBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Column 2 Table: Season Breakdown
+      autoTable(doc, {
+        head: [['Season', 'Lots', 'Total Pcs', 'Share %']],
+        body: sBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col2X, right: pageW - (col2X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [67, 56, 202], // Indigo
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          valign: 'middle',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            data.cell.styles.valign = 'middle';
+            if (data.row.index === sBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Column 3 Table: Party Summary
+      autoTable(doc, {
+        head: [['Party Name', 'Lots', 'Total Pcs', 'Share %']],
+        body: pBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col3X, right: pageW - (col3X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [30, 64, 175], // Blue
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          valign: 'middle',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            data.cell.styles.valign = 'middle';
+            if (data.row.index === pBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Column 4 Table: Status Breakdown
+      autoTable(doc, {
+        head: [['Status', 'Lots', 'Total Pcs', 'Share %']],
+        body: stBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col4X, right: pageW - (col4X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [147, 51, 234], // Purple
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          valign: 'middle',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            data.cell.styles.valign = 'middle';
+            if (data.row.index === stBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Footer with Page Numbers
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(0, 0, 0); // Pure Black
+        doc.text(
+          `Factory Suite Pro  |  Confidential Production Report  |  Page ${i} of ${totalPages}`,
+          pageW / 2,
+          pageH - 12,
+          { align: 'center' }
+        );
+      }
+
+      // Save PDF File
+      const ts = new Date().toISOString().slice(0, 10);
+      doc.save(`Pending_Stitching_Report_${ts}.pdf`);
+
+    } catch (e) {
+      console.error('PDF export error:', e);
+      alert(`PDF export failed: ${e.message}`);
     }
+  };
+
+  // Aliases for compatibility
+  const downloadPDF = exportToPDF;
+  const downloadCSV = exportToExcel;
+  const exportToCSV = exportToExcel;
+
+  const handleBack = () => {
+    window.history.back();
   };
 
   // EmbroideryChallan Theme Styles
@@ -1823,37 +2716,41 @@ const PendingIssuetoStitching = () => {
 
     tableContainer: {
       background: "#ffffff",
-      borderRadius: "20px",
+      borderRadius: "16px",
       overflow: "hidden",
       boxShadow: "0 10px 30px rgba(0, 0, 0, 0.03)",
       marginBottom: "20px",
       overflowX: "auto",
-      border: "1px solid #e2e8f0"
+      border: "1px solid #cbd5e1"
     },
 
     table: {
       width: "100%",
       borderCollapse: "collapse",
-      minWidth: "1200px"
+      minWidth: "1200px",
+      border: "1px solid #cbd5e1"
     },
 
     tableHeader: {
       background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 100%)",
       color: "#ffffff",
-      padding: "14px 16px",
+      padding: "12px 14px",
       textAlign: "center",
+      verticalAlign: "middle",
       fontWeight: "700",
       fontSize: "0.82rem",
-      borderRight: "1px solid rgba(255, 255, 255, 0.1)",
+      border: "1px solid #334155",
       letterSpacing: "0.03em",
       textTransform: "uppercase"
     },
 
     tableCell: {
-      padding: "12px 16px",
-      borderBottom: "1px solid #e2e8f0",
+      padding: "10px 12px",
+      border: "1px solid #cbd5e1",
       fontSize: "0.875rem",
-      color: "#0f172a"
+      color: "#0f172a",
+      textAlign: "center",
+      verticalAlign: "middle"
     },
 
     tableRowEven: {
@@ -2186,7 +3083,7 @@ const PendingIssuetoStitching = () => {
               🔄 Refresh
             </button>
             <button
-              onClick={downloadPDF}
+              onClick={exportToPDF}
               disabled={filteredData.length === 0}
               style={{
                 ...styles.exportBtnPdf,
@@ -2196,14 +3093,14 @@ const PendingIssuetoStitching = () => {
               📄 Export PDF
             </button>
             <button
-              onClick={downloadCSV}
+              onClick={exportToExcel}
               disabled={filteredData.length === 0}
               style={{
                 ...styles.exportBtnExcel,
                 ...(filteredData.length === 0 && { opacity: 0.5, cursor: 'not-allowed' })
               }}
             >
-              📊 Export CSV
+              📊 Export Excel
             </button>
           </div>
         </div>
@@ -2239,8 +3136,8 @@ const PendingIssuetoStitching = () => {
               <label style={styles.filterLabel}>Fabric</label>
               <MultiSelectDropdown
                 placeholder="All Fabrics"
-                options={Array.from(filterOptions.fabric).sort()}
-                selectedValues={filters.fabric}
+                options={Array.from(filterOptions.fabric || []).sort()}
+                selectedValues={filters.fabric || []}
                 onChange={(val) => handleFilterChange('fabric', val)}
               />
             </div>
@@ -2250,9 +3147,31 @@ const PendingIssuetoStitching = () => {
               <label style={styles.filterLabel}>Garment Type</label>
               <MultiSelectDropdown
                 placeholder="All Types"
-                options={Array.from(filterOptions.garmentType).sort()}
-                selectedValues={filters.garmentType}
+                options={Array.from(filterOptions.garmentType || []).sort()}
+                selectedValues={filters.garmentType || []}
                 onChange={(val) => handleFilterChange('garmentType', val)}
+              />
+            </div>
+
+            {/* Section Filter */}
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Section</label>
+              <MultiSelectDropdown
+                placeholder="All Sections"
+                options={Array.from(filterOptions.section || []).sort()}
+                selectedValues={filters.section || []}
+                onChange={(val) => handleFilterChange('section', val)}
+              />
+            </div>
+
+            {/* Season Filter */}
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Season</label>
+              <MultiSelectDropdown
+                placeholder="All Seasons"
+                options={Array.from(filterOptions.season || []).sort()}
+                selectedValues={filters.season || []}
+                onChange={(val) => handleFilterChange('season', val)}
               />
             </div>
 
@@ -2261,8 +3180,8 @@ const PendingIssuetoStitching = () => {
               <label style={styles.filterLabel}>Style</label>
               <MultiSelectDropdown
                 placeholder="All Styles"
-                options={Array.from(filterOptions.style).sort()}
-                selectedValues={filters.style}
+                options={Array.from(filterOptions.style || []).sort()}
+                selectedValues={filters.style || []}
                 onChange={(val) => handleFilterChange('style', val)}
               />
             </div>
@@ -2272,10 +3191,35 @@ const PendingIssuetoStitching = () => {
               <label style={styles.filterLabel}>Brand</label>
               <MultiSelectDropdown
                 placeholder="All Brands"
-                options={Array.from(filterOptions.brand).sort()}
-                selectedValues={filters.brand}
+                options={Array.from(filterOptions.brand || []).sort()}
+                selectedValues={filters.brand || []}
                 onChange={(val) => handleFilterChange('brand', val)}
               />
+            </div>
+
+            {/* Party Name Filter */}
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Party Name</label>
+              <MultiSelectDropdown
+                placeholder="All Parties"
+                options={Array.from(filterOptions.party || []).sort()}
+                selectedValues={filters.party || []}
+                onChange={(val) => handleFilterChange('party', val)}
+              />
+            </div>
+
+            {/* Direct Stitching Filter */}
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Direct Stitching</label>
+              <select
+                value={filters.directStitch || ''}
+                onChange={(e) => handleFilterChange('directStitch', e.target.value)}
+                style={styles.filterSelect}
+              >
+                <option value="">All</option>
+                <option value="Yes">Direct (Yes)</option>
+                <option value="No">Non-Direct (No)</option>
+              </select>
             </div>
 
             {/* Status Filter */}
@@ -2283,8 +3227,8 @@ const PendingIssuetoStitching = () => {
               <label style={styles.filterLabel}>Status</label>
               <MultiSelectDropdown
                 placeholder="All Status"
-                options={Array.from(filterOptions.status).sort()}
-                selectedValues={filters.status}
+                options={Array.from(filterOptions.status || []).sort()}
+                selectedValues={filters.status || []}
                 onChange={(val) => handleFilterChange('status', val)}
               />
             </div>
@@ -2293,13 +3237,27 @@ const PendingIssuetoStitching = () => {
             <div style={styles.filterGroup}>
               <label style={styles.filterLabel}>Color Status</label>
               <select
-                value={filters.colorPending}
+                value={filters.colorPending || ''}
                 onChange={(e) => handleFilterChange('colorPending', e.target.value)}
                 style={styles.filterSelect}
               >
                 <option value="">All</option>
                 <option value="Yes">Color Pending</option>
                 <option value="No">Color OK</option>
+              </select>
+            </div>
+
+            {/* Remarks Filter */}
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Remarks</label>
+              <select
+                value={filters.remarksStatus || ''}
+                onChange={(e) => handleFilterChange('remarksStatus', e.target.value)}
+                style={styles.filterSelect}
+              >
+                <option value="">All Remarks</option>
+                <option value="With Remarks">With Remarks</option>
+                <option value="Without Remarks">Without Remarks</option>
               </select>
             </div>
           </div>
@@ -2365,58 +3323,68 @@ const PendingIssuetoStitching = () => {
                         onMouseLeave={() => setHoveredRow(null)}
                       >
                         {/* 1. Sr. No */}
-                        <td style={{ ...styles.tableCell, textAlign: 'center', fontWeight: 600 }}>
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600 }}>
                           {index + 1}
                           {isRepeated && <span style={{ color: '#f59e0b', marginLeft: '2px' }}>★</span>}
                         </td>
 
                         {/* 2. Lot Number */}
-                        <td style={{ ...styles.tableCell, ...styles.lotCell, textAlign: 'left' }}>
+                        <td style={{ ...styles.tableCell, ...styles.lotCell, textAlign: 'center', verticalAlign: 'middle' }}>
                           {row['Lot Number']}
                           {isColorPending && <span style={{ marginLeft: '4px' }}>⚠️</span>}
                         </td>
 
-                        {/* 3. Fabric */}
-                        <td style={{ ...styles.tableCell, textAlign: 'left', fontWeight: 600 }}>
-                          {row['Fabric']}
+                        {/* Garment Type */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', fontWeight: 500 }}>
+                          {row['Garment Type'] || 'N/A'}
                         </td>
 
-                        {/* 4. Garment Type */}
-                        <td style={{ ...styles.tableCell, textAlign: 'left', fontWeight: 500 }}>
-                          {row['Garment Type']}
+                        {/* Style */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', fontWeight: 500 }}>
+                          {row['Style'] || 'N/A'}
                         </td>
 
-                        {/* 5. Style */}
-                        <td style={{ ...styles.tableCell, textAlign: 'left', fontWeight: 500 }}>
-                          {row['Style']}
+                        {/* Fabric */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600 }}>
+                          {row['Fabric'] || 'N/A'}
                         </td>
 
-                        {/* 6. Brand */}
-                        <td style={{ ...styles.tableCell, textAlign: 'left', fontWeight: 600, color: '#334155' }}>
-                          {row['Brand']}
+                        {/* Brand */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600, color: '#334155' }}>
+                          {row['Brand'] || 'N/A'}
                         </td>
 
-                        {/* 7. Season */}
-                        <td style={{ ...styles.tableCell, textAlign: 'center', fontWeight: 600, color: '#475569' }}>
-                          {row['Season']}
+                        {/* Total Pcs */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle' }}>
+                          <span style={styles.pcsBadge}>
+                            {getTotalForLot(row['Lot Number']) || 0}
+                          </span>
                         </td>
 
-                        {/* 8. Direct Stitching */}
-                        <td style={{ ...styles.tableCell, textAlign: 'center' }}>
+                        {/* Section */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600, color: '#475569' }}>
+                          {row['Section'] || row['M/W/K'] || '—'}
+                        </td>
+
+                        {/* Season */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600, color: '#475569' }}>
+                          {row['Season'] || 'N/A'}
+                        </td>
+
+                        {/* Party Name */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', fontWeight: 500 }}>
+                          {row['Party Name'] || row['Party'] || '—'}
+                        </td>
+
+                        {/* Direct Stitching */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle' }}>
                           {row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'yes' ? (
                             <span style={styles.directYes}>✓ Yes</span>
                           ) : row['Direct Stitching'] && row['Direct Stitching'].toString().toLowerCase() === 'no' ? (
                             <span style={styles.directNo}>✗ No</span>
                           ) : (
-                            row['Direct Stitching']
+                            row['Direct Stitching'] || 'N/A'
                           )}
-                        </td>
-
-                        {/* 9. Total Pcs */}
-                        <td style={{ ...styles.tableCell, textAlign: 'center' }}>
-                          <span style={styles.pcsBadge}>
-                            {getTotalForLot(row['Lot Number'])}
-                          </span>
                         </td>
 
                         {/* 10. Image */}
@@ -2438,24 +3406,24 @@ const PendingIssuetoStitching = () => {
                         </td>
 
                         {/* 11. Color Status */}
-                        <td style={{ ...styles.tableCell, textAlign: 'center' }}>
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle' }}>
                           {isColorPending ? (
                             <span
                               style={styles.colorPendingStatus}
                               title={pendingColorsText}
                             >
-                              ⚠️ Pending: {pendingColors.slice(0, 2).join(', ')}
+                              Pending: {pendingColors.slice(0, 2).join(', ')}
                               {pendingColors.length > 2 && ` +${pendingColors.length - 2}`}
                             </span>
                           ) : (
                             <span style={styles.colorOkStatus}>
-                              ✓ OK
+                              OK
                             </span>
                           )}
                         </td>
 
                         {/* 12. Status */}
-                        <td style={{ ...styles.tableCell, textAlign: 'center' }}>
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle' }}>
                           <span style={{
                             ...styles.statusBadge,
                             ...statusStyle
@@ -2463,6 +3431,85 @@ const PendingIssuetoStitching = () => {
                             <span style={{ fontSize: '0.85rem' }}>{statusStyle.icon}</span>
                             <span>{row.status || 'Pending'}</span>
                           </span>
+                        </td>
+
+                        {/* 13. Remarks */}
+                        <td style={{ ...styles.tableCell, textAlign: 'center', verticalAlign: 'middle', minWidth: '200px', maxWidth: '260px' }}>
+                          {(() => {
+                            const lot = (row['Lot Number'] || row.lotNumber)?.toString().trim();
+                            const lotRemarks = remarksMap[lot] || [];
+                            const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1] : null;
+
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
+                                {latestRemark ? (
+                                  <div
+                                    onClick={() => handleOpenRemarksModal(row)}
+                                    style={{
+                                      background: '#f8fafc',
+                                      border: '1px solid #cbd5e1',
+                                      borderLeft: '3.5px solid #6366f1',
+                                      borderRadius: '8px',
+                                      padding: '5px 8px',
+                                      fontSize: '0.78rem',
+                                      color: '#1e293b',
+                                      width: '100%',
+                                      boxSizing: 'border-box',
+                                      textAlign: 'left',
+                                      cursor: 'pointer'
+                                    }}
+                                    title="Click to view history or add remark"
+                                  >
+                                    <div style={{ fontWeight: 600, wordBreak: 'break-word', whiteSpace: 'normal', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                      {latestRemark.text}
+                                    </div>
+                                    <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '3px' }}>
+                                      🕒 {latestRemark.timestamp}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#94a3b8', fontSize: '0.76rem', fontStyle: 'italic' }}>No remarks</span>
+                                )}
+
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+                                  <button
+                                    onClick={() => handleOpenRemarksModal(row)}
+                                    style={{
+                                      background: '#eef2ff',
+                                      color: '#4338ca',
+                                      border: '1px dashed #818cf8',
+                                      borderRadius: '6px',
+                                      padding: '3px 8px',
+                                      fontSize: '0.72rem',
+                                      fontWeight: '700',
+                                      cursor: 'pointer',
+                                      transition: 'all 0.15s ease'
+                                    }}
+                                  >
+                                    {latestRemark ? '✏️ Remark' : '+ Add Remark'}
+                                  </button>
+
+                                  {lotRemarks.length > 1 && (
+                                    <button
+                                      onClick={() => handleOpenRemarksModal(row)}
+                                      style={{
+                                        background: '#ffffff',
+                                        color: '#6366f1',
+                                        border: '1px solid #c7d2fe',
+                                        borderRadius: '6px',
+                                        padding: '3px 7px',
+                                        fontSize: '0.7rem',
+                                        fontWeight: '700',
+                                        cursor: 'pointer'
+                                      }}
+                                    >
+                                      📜 ({lotRemarks.length})
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </td>
                       </tr>
                     );
@@ -2483,6 +3530,273 @@ const PendingIssuetoStitching = () => {
           </>
         )}
       </main>
+
+      {/* Interactive Remarks Modal */}
+      {remarksModalOpen && selectedRemarksLot && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            padding: '16px'
+          }}
+          onClick={handleCloseRemarksModal}
+        >
+          <div
+            style={{
+              background: '#ffffff',
+              borderRadius: '24px',
+              maxWidth: '560px',
+              width: '100%',
+              maxHeight: '88vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.35)',
+              border: '1px solid rgba(226, 232, 240, 0.8)',
+              overflow: 'hidden'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 100%)',
+                color: '#ffffff',
+                padding: '18px 22px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '1.3rem' }}>💬</span>
+                <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: '800', color: '#ffffff' }}>
+                  Stitching Issue Remarks
+                </h3>
+                <span style={{ background: 'rgba(255, 255, 255, 0.2)', color: '#ffd700', padding: '3px 10px', borderRadius: '12px', fontSize: '0.82rem', fontWeight: '800' }}>
+                  #{selectedRemarksLot['Lot Number'] || selectedRemarksLot.lotNumber}
+                </span>
+              </div>
+              <button
+                style={{
+                  background: 'rgba(255, 255, 255, 0.15)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  color: '#ffffff',
+                  fontSize: '1.1rem',
+                  borderRadius: '10px',
+                  width: '32px',
+                  height: '32px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                onClick={handleCloseRemarksModal}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: '20px 22px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Lot Information Summary */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '14px', padding: '12px 14px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: '0.68rem', fontWeight: '800', textTransform: 'uppercase', color: '#64748b' }}>Fabric</span>
+                  <span style={{ fontSize: '0.84rem', fontWeight: '700', color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {selectedRemarksLot['Fabric'] || selectedRemarksLot.fabric || '-'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: '0.68rem', fontWeight: '800', textTransform: 'uppercase', color: '#64748b' }}>Garment / Style</span>
+                  <span style={{ fontSize: '0.84rem', fontWeight: '700', color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {selectedRemarksLot['Garment Type'] || selectedRemarksLot['Style'] || '-'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: '0.68rem', fontWeight: '800', textTransform: 'uppercase', color: '#64748b' }}>Total Pcs</span>
+                  <span style={{ fontSize: '0.84rem', fontWeight: '800', color: '#ef4444' }}>
+                    {getTotalForLot(selectedRemarksLot['Lot Number']) || 0} pcs
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: '0.68rem', fontWeight: '800', textTransform: 'uppercase', color: '#64748b' }}>Brand</span>
+                  <span style={{ fontSize: '0.84rem', fontWeight: '700', color: '#1e293b' }}>
+                    {selectedRemarksLot['Brand'] || '-'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: '0.68rem', fontWeight: '800', textTransform: 'uppercase', color: '#64748b' }}>Direct</span>
+                  <span style={{ fontSize: '0.84rem', fontWeight: '700', color: '#15803d' }}>
+                    {selectedRemarksLot['Direct Stitching'] || '-'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: '0.68rem', fontWeight: '800', textTransform: 'uppercase', color: '#64748b' }}>Status</span>
+                  <span style={{ fontSize: '0.84rem', fontWeight: '700', color: '#4338ca' }}>
+                    {selectedRemarksLot.status || 'Pending'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Remarks History */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <h4 style={{ fontSize: '0.8rem', fontWeight: '800', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>📜</span> Remarks History ({(remarksMap[(selectedRemarksLot['Lot Number'] || selectedRemarksLot.lotNumber)?.toString().trim()] || []).length})
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '160px', overflowY: 'auto', paddingRight: '4px' }}>
+                  {(() => {
+                    const lotNum = (selectedRemarksLot['Lot Number'] || selectedRemarksLot.lotNumber)?.toString().trim();
+                    const history = remarksMap[lotNum] || [];
+                    if (history.length === 0) {
+                      return (
+                        <div style={{ textAlign: 'center', padding: '14px', color: '#94a3b8', fontSize: '0.82rem' }}>
+                          No previous remarks for this lot. Add the first remark below!
+                        </div>
+                      );
+                    }
+                    return history.map((item, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          background: i === history.length - 1 ? '#f5f7ff' : '#ffffff',
+                          border: `1px solid ${i === history.length - 1 ? '#c7d2fe' : '#e2e8f0'}`,
+                          borderLeft: `4px solid ${i === history.length - 1 ? '#4338ca' : '#6366f1'}`,
+                          borderRadius: '10px',
+                          padding: '8px 12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '3px'
+                        }}
+                      >
+                        <div style={{ fontSize: '0.85rem', color: '#0f172a', fontWeight: '600', wordBreak: 'break-word' }}>
+                          {item.text}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span>🕒</span> {item.timestamp}
+                          {i === history.length - 1 && (
+                            <span style={{ marginLeft: 'auto', color: '#4338ca', fontWeight: '700', fontSize: '0.68rem', background: '#e0e7ff', padding: '2px 6px', borderRadius: '4px' }}>
+                              Latest
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+
+              {/* Enter New Remark Input */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <h4 style={{ fontSize: '0.8rem', fontWeight: '800', color: '#1e1b4b', textTransform: 'uppercase', letterSpacing: '0.04em', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>✏️</span> Enter Your Remark
+                </h4>
+
+                {/* Quick Presets */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                  {[
+                    "Fabric Issued to Stitching",
+                    "Ready for Issue",
+                    "Embroidery In Progress",
+                    "Printing In Progress",
+                    "Color Pending Issue",
+                    "Urgent Stitching Required",
+                    "Hold - Pattern Verification"
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setNewRemarkInputText(preset)}
+                      style={{
+                        background: '#f1f5f9',
+                        border: '1px solid #cbd5e1',
+                        color: '#334155',
+                        padding: '3px 8px',
+                        borderRadius: '14px',
+                        fontSize: '0.72rem',
+                        fontWeight: '700',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      + {preset}
+                    </button>
+                  ))}
+                </div>
+
+                <textarea
+                  style={{
+                    width: '100%',
+                    minHeight: '80px',
+                    padding: '10px 12px',
+                    border: '1.5px solid #cbd5e1',
+                    borderRadius: '12px',
+                    fontFamily: 'inherit',
+                    fontSize: '0.88rem',
+                    color: '#0f172a',
+                    boxSizing: 'border-box',
+                    resize: 'vertical',
+                    outline: 'none'
+                  }}
+                  placeholder="Type your custom remark here..."
+                  value={newRemarkInputText}
+                  onChange={(e) => setNewRemarkInputText(e.target.value)}
+                  rows={3}
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div style={{ padding: '14px 22px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={handleCloseRemarksModal}
+                disabled={savingRemark}
+                style={{
+                  padding: '8px 18px',
+                  background: '#ffffff',
+                  color: '#475569',
+                  border: '1.5px solid #cbd5e1',
+                  borderRadius: '12px',
+                  fontSize: '0.85rem',
+                  fontWeight: '700',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveRemark}
+                disabled={savingRemark || !newRemarkInputText.trim()}
+                style={{
+                  padding: '8px 22px',
+                  background: 'linear-gradient(135deg, #4338ca 0%, #3730a3 100%)',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '12px',
+                  fontSize: '0.85rem',
+                  fontWeight: '800',
+                  cursor: savingRemark || !newRemarkInputText.trim() ? 'not-allowed' : 'pointer',
+                  opacity: savingRemark || !newRemarkInputText.trim() ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                {savingRemark ? '⏳ Saving...' : '💾 Save Remark'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Image Lightbox Modal */}
       {viewImageSrc && (

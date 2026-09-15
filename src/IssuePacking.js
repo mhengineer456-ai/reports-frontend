@@ -1,1644 +1,2032 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import * as XLSX from 'xlsx';
+// src/IssuePacking.js
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { Link, useHistory } from "react-router-dom";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
+import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend } from "./config";
+import { getCurrentUser, logoutUser } from "./auth";
 
-const IssueToPacking = () => {
-  const [data, setData] = useState([]);
-  const [filteredData, setFilteredData] = useState([]);
-  const [recentLots, setRecentLots] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [stats, setStats] = useState({
-    totalRecords: 0,
-    totalPcs: 0,
-    packingSupervisors: [],
-    garmentTypes: []
+/**
+ * Factory Suite Pro - Issue to Packing Dashboard
+ * Full Executive Standard:
+ * - Direct real-time sync from Issues sheet & JobOrder master metadata
+ * - 13 canonical columns populated (Brand, Section, Season, Party Name, Direct Stitching, etc.)
+ * - 3-Sheet Excel Export (.xlsx) via ExcelJS
+ * - Direct A3 Landscape PDF Export (.pdf) with Pure Black Text & 4-Column Executive Summary
+ * - Top Brand Bar with Navigation Links & Dedicated Back Buttons
+ */
+
+// ====== CONFIG ======
+const API_KEY = GOOGLE_API_KEY;
+const ISSUES_SHEET_ID = SPREADSHEET_IDS.ISSUES || "1uo14nKO_yHu4AJ2rOgaJajuprcinj6xw1AUMFJ6_zYM";
+const JOB_SHEET_ID = SPREADSHEET_IDS.JOBORDER;
+const ISSUES_RANGE = "Issues!A:Z";
+const JOB_RANGE = "JobOrder!A:AZ";
+
+// Display columns (13 canonical columns)
+const DISPLAY_HEADERS = [
+  "Sr. No",
+  "Lot Number",
+  "Garment Type",
+  "Style",
+  "Fabric",
+  "Brand",
+  "PCS",
+  "Section",
+  "Season",
+  "Party Name",
+  "Direct Stitching",
+  "Packing Supervisor",
+  "Packing Date",
+];
+
+const COLUMN_ICONS = {
+  "Sr. No": "#️⃣",
+  "Lot Number": "🏷️",
+  "Garment Type": "👕",
+  "Style": "🎨",
+  "Fabric": "🧵",
+  "Brand": "🏢",
+  "PCS": "🔢",
+  "Section": "👥",
+  "Season": "🍂",
+  "Party Name": "🤝",
+  "Direct Stitching": "⚡",
+  "Packing Supervisor": "👨‍💼",
+  "Packing Date": "📅",
+};
+
+// Recent lot threshold (24 hours)
+const RECENT_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+/* ---------- Utility Functions ---------- */
+const norm = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const clean = (v) => (v == null ? "" : String(v).trim());
+
+const titleCase = (s) =>
+  String(s || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+
+function formatDisplayDate(d) {
+  if (!d) return "—";
+  const parsed = new Date(d);
+  if (isNaN(parsed.getTime())) return String(d);
+  return parsed.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
   });
+}
+
+// Parse date string to Date object
+const parseDateString = (dateStr) => {
+  if (!dateStr) return null;
+  const str = String(dateStr).trim();
+
+  const d1 = new Date(str);
+  if (!isNaN(d1.getTime()) && str.includes("-") && str.length >= 8) {
+    return d1;
+  }
+
+  // MM/DD/YYYY or DD/MM/YYYY
+  const slashParts = str.split("/");
+  if (slashParts.length === 3) {
+    const p0 = parseInt(slashParts[0], 10);
+    const p1 = parseInt(slashParts[1], 10);
+    const p2 = parseInt(slashParts[2].split(" ")[0], 10);
+
+    // If p0 > 12, it's DD/MM/YYYY
+    if (p0 > 12) {
+      const d = new Date(p2, p1 - 1, p0);
+      if (!isNaN(d.getTime())) return d;
+    } else {
+      // Default MM/DD/YYYY
+      const d = new Date(p2, p0 - 1, p1);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+
+  // DD-MM-YYYY
+  const dashParts = str.split("-");
+  if (dashParts.length === 3 && dashParts[2].length === 4) {
+    const d = new Date(parseInt(dashParts[2], 10), parseInt(dashParts[1], 10) - 1, parseInt(dashParts[0], 10));
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  return null;
+};
+
+/* ---------- Main Component ---------- */
+export default function IssueToPacking() {
+  const history = useHistory();
+  const currentUser = getCurrentUser();
+
+  const handleLogout = () => {
+    logoutUser();
+    history.push("/");
+  };
+
+  const handleGoBack = () => {
+    try {
+      if (window.history.length > 1) {
+        history.goBack();
+        return;
+      }
+    } catch { }
+    history.push("/dashboard");
+  };
+
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState("Loading issue to packing data...");
+  const [error, setError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   // Filters
-  const [filters, setFilters] = useState({
-    lotNumber: '',
-    garmentType: '',
-    fabric: '',
-    style: '',
-    packingSupervisor: '',
-    startDate: '',
-    endDate: ''
+  const [filterLot, setFilterLot] = useState("");
+  const [filterSupervisor, setFilterSupervisor] = useState("");
+  const [filterGarment, setFilterGarment] = useState("");
+  const [filterBrand, setFilterBrand] = useState("");
+  const [filterFabric, setFilterFabric] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [showOnlyRecent, setShowOnlyRecent] = useState(false);
+
+  // Date Range Filter State
+  const [dateRangeFilter, setDateRangeFilter] = useState({
+    startDate: "",
+    endDate: "",
+    enabled: false
   });
 
-  // Dropdown options
-  const [dropdownOptions, setDropdownOptions] = useState({
-    lotNumbers: [],
-    garmentTypes: [],
-    fabrics: [],
-    styles: [],
-    packingSupervisors: []
+  const [sortConfig, setSortConfig] = useState({
+    key: "Packing Date",
+    direction: "desc",
   });
+  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(1);
 
-  // Replace these with your actual values
-  const API_KEY = 'AIzaSyAomDFBkOySlIxKWSKGHe6ATv9gvaBr7uk';
-  const SPREADSHEET_ID = '1uo14nKO_yHu4AJ2rOgaJajuprcinj6xw1AUMFJ6_zYM';
-  const SHEET_NAME = 'Issues';
-  const RANGE = 'A:H';
+  const abortRef = useRef(null);
+
+  const loadData = async (mode = "initial") => {
+    if (mode === "initial") {
+      setLoading(true);
+      setLoadingProgress(0);
+      setLoadingMessage("Connecting to packing & job order spreadsheets...");
+    } else {
+      setRefreshing(true);
+    }
+    setError("");
+
+    try {
+      abortRef.current?.abort();
+    } catch { }
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    try {
+      setLoadingMessage("Fetching Issues and JobOrder sheets...");
+      setLoadingProgress(20);
+
+      const [issuesRes, jobRes] = await Promise.all([
+        fetchSheetDataFromBackend(ISSUES_SHEET_ID, ISSUES_RANGE),
+        fetchSheetDataFromBackend(JOB_SHEET_ID, JOB_RANGE)
+      ]);
+
+      setLoadingProgress(55);
+      setLoadingMessage("Mapping Job Order metadata...");
+
+      // Parse JobOrder Sheet for authoritative master metadata
+      const jobMap = new Map();
+      const jobValues = jobRes?.values || [];
+      if (jobValues.length > 0) {
+        const jHeader = (jobValues[0] || []).map(h => norm(String(h || "")));
+        const getJ = (row, key) => {
+          const idx = jHeader.indexOf(key);
+          return idx !== -1 ? (row[idx] ?? "") : "";
+        };
+
+        for (let i = 1; i < jobValues.length; i++) {
+          const row = jobValues[i] || [];
+          const lot = clean(getJ(row, "lotno") || getJ(row, "lotnumber") || getJ(row, "lot"));
+          if (!lot) continue;
+
+          jobMap.set(norm(lot), {
+            lot,
+            garmentType: clean(getJ(row, "garmenttype") || getJ(row, "garment")),
+            style: clean(getJ(row, "style")),
+            fabric: clean(getJ(row, "fabric")),
+            brand: clean(getJ(row, "brand")),
+            section: clean(getJ(row, "section") || getJ(row, "mwk")),
+            season: clean(getJ(row, "season")),
+            partyName: clean(getJ(row, "partyname") || getJ(row, "party")),
+            directStitching: clean(getJ(row, "directstitching") || getJ(row, "direct")),
+            jobOrderNo: clean(getJ(row, "joborderno") || getJ(row, "joborder")),
+            date: clean(getJ(row, "date") || getJ(row, "podate"))
+          });
+        }
+      }
+
+      setLoadingProgress(75);
+      setLoadingMessage("Processing packing issues records...");
+
+      // Parse Issues Sheet
+      const issueValues = issuesRes?.values || [];
+      const formatted = [];
+
+      if (issueValues.length > 0) {
+        const header = (issueValues[0] || []).map(h => norm(String(h || "")));
+        const getI = (row, key) => {
+          const idx = header.indexOf(key);
+          return idx !== -1 ? (row[idx] ?? "") : "";
+        };
+
+        // If headers aren't standard, fallback to positional indices
+        const tsIdx = header.findIndex(h => h.includes("timestamp") || h.includes("time") || h.includes("date")) !== -1
+          ? header.findIndex(h => h.includes("timestamp") || h.includes("time") || h.includes("date")) : 0;
+        const lotIdx = header.findIndex(h => h.includes("lot")) !== -1
+          ? header.findIndex(h => h.includes("lot")) : 1;
+        const gIdx = header.findIndex(h => h.includes("garment")) !== -1
+          ? header.findIndex(h => h.includes("garment")) : 2;
+        const fabIdx = header.findIndex(h => h.includes("fabric")) !== -1
+          ? header.findIndex(h => h.includes("fabric")) : 3;
+        const styleIdx = header.findIndex(h => h.includes("style")) !== -1
+          ? header.findIndex(h => h.includes("style")) : 4;
+        const supIdx = header.findIndex(h => h.includes("supervisor")) !== -1
+          ? header.findIndex(h => h.includes("supervisor")) : 5;
+        const pDateIdx = header.findIndex(h => h.includes("packingdate") || h.includes("pdate")) !== -1
+          ? header.findIndex(h => h.includes("packingdate") || h.includes("pdate")) : 6;
+        const pcsIdx = header.findIndex(h => h.includes("pcs") || h.includes("qty") || h.includes("total")) !== -1
+          ? header.findIndex(h => h.includes("pcs") || h.includes("qty") || h.includes("total")) : 7;
+
+        for (let i = 1; i < issueValues.length; i++) {
+          const row = issueValues[i] || [];
+          if (!row || !Array.isArray(row) || row.length === 0) continue;
+
+          const lot = clean(row[lotIdx]);
+          if (!lot) continue;
+
+          const timestamp = clean(row[tsIdx]);
+          const rawGarment = clean(row[gIdx]);
+          const rawFabric = clean(row[fabIdx]);
+          const rawStyle = clean(row[styleIdx]);
+          const supervisor = clean(row[supIdx]);
+          const packingDate = clean(row[pDateIdx]);
+          const pcsVal = parseFloat(String(row[pcsIdx] || "0").replace(/,/g, "")) || 0;
+
+          const jInfo = jobMap.get(norm(lot)) || {};
+
+          let partyDisplay = jInfo.partyName || "—";
+          if (partyDisplay.toLowerCase().includes("mohit")) partyDisplay = "MH (Mohit Hosiery)";
+
+          const parsedDate = parseDateString(packingDate || timestamp);
+          const isRecent = timestamp ? (Date.now() - new Date(timestamp).getTime() < RECENT_THRESHOLD_MS) : false;
+
+          formatted.push({
+            timestamp: timestamp || "—",
+            _parsedDate: parsedDate,
+            "Lot Number": lot,
+            "Garment Type": jInfo.garmentType || rawGarment || "—",
+            "Style": jInfo.style || rawStyle || "—",
+            "Fabric": jInfo.fabric || rawFabric || "—",
+            "Brand": jInfo.brand || "—",
+            "PCS": pcsVal,
+            "Section": jInfo.section || "—",
+            "Season": jInfo.season || "—",
+            "Party Name": partyDisplay,
+            "Direct Stitching": jInfo.directStitching ? (String(jInfo.directStitching).toLowerCase() === "yes" ? "Yes" : "No") : "No",
+            "Packing Supervisor": titleCase(supervisor) || "—",
+            "Packing Date": packingDate || formatDisplayDate(timestamp) || "—",
+            _isRecent: isRecent,
+            _supKey: norm(supervisor)
+          });
+        }
+      }
+
+      setRows(formatted);
+      setLastUpdated(new Date().toLocaleString());
+      setLoadingProgress(100);
+
+    } catch (e) {
+      if (e?.name === "AbortError") {
+        console.log("Request aborted");
+      } else {
+        console.error("Error loading data:", e);
+        setError(e.message || "Failed to load data");
+      }
+    } finally {
+      if (mode === "initial") {
+        setTimeout(() => {
+          setLoading(false);
+          setLoadingProgress(0);
+        }, 300);
+      } else {
+        setRefreshing(false);
+      }
+    }
+  };
 
   useEffect(() => {
-    fetchData();
+    loadData("initial");
+    return () => {
+      try {
+        abortRef.current?.abort();
+      } catch { }
+    };
   }, []);
 
-  useEffect(() => {
-    applyFilters();
-  }, [data, filters]);
+  /* ---------- Filter Options ---------- */
+  const uniqueLots = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Lot Number"]).filter(Boolean))).sort();
+  }, [rows]);
 
-const fetchData = async () => {
-  try {
-    setLoading(true);
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${SHEET_NAME}!${RANGE}?key=${API_KEY}`;
-    
-    const response = await axios.get(url);
-    
-    if (response.data.values) {
-      const rows = response.data.values.slice(1); // Skip header row
-      
-      // Filter out completely empty rows
-      const validRows = rows.filter(row => {
-        // Check if row exists and is an array
-        if (!row || !Array.isArray(row)) return false;
-        
-        // Check if row has ANY non-empty cell
-        const hasData = row.some(cell => {
-          return cell !== undefined && 
-                 cell !== null && 
-                 cell !== '' && 
-                 (typeof cell !== 'string' || cell.trim() !== '');
-        });
-        
-        return hasData;
+  const uniqueSupervisors = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Packing Supervisor"]).filter(s => s && s !== "—"))).sort();
+  }, [rows]);
+
+  const uniqueGarments = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Garment Type"]).filter(g => g && g !== "—"))).sort();
+  }, [rows]);
+
+  const uniqueBrands = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Brand"]).filter(b => b && b !== "—"))).sort();
+  }, [rows]);
+
+  const uniqueFabrics = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Fabric"]).filter(f => f && f !== "—"))).sort();
+  }, [rows]);
+
+  /* ---------- Enhanced Filtering ---------- */
+  const filteredRows = useMemo(() => {
+    let filtered = rows;
+
+    if (filterLot) filtered = filtered.filter((r) => r["Lot Number"] === filterLot);
+    if (filterSupervisor) filtered = filtered.filter((r) => r["Packing Supervisor"] === filterSupervisor);
+    if (filterGarment) filtered = filtered.filter((r) => r["Garment Type"] === filterGarment);
+    if (filterBrand) filtered = filtered.filter((r) => r["Brand"] === filterBrand);
+    if (filterFabric) filtered = filtered.filter((r) => r["Fabric"] === filterFabric);
+    if (showOnlyRecent) filtered = filtered.filter((r) => r._isRecent);
+
+    // Apply date range filter
+    if (dateRangeFilter.enabled && (dateRangeFilter.startDate || dateRangeFilter.endDate)) {
+      filtered = filtered.filter((row) => {
+        const rowDate = row._parsedDate;
+        if (!rowDate) return false;
+
+        const rowTime = rowDate.getTime();
+        const startTime = dateRangeFilter.startDate ? new Date(dateRangeFilter.startDate).getTime() : null;
+        const endTime = dateRangeFilter.endDate ? new Date(dateRangeFilter.endDate).getTime() + 86400000 : null;
+
+        if (startTime && rowTime < startTime) return false;
+        if (endTime && rowTime >= endTime) return false;
+
+        return true;
       });
-      
-      console.log(`Loaded ${validRows.length} valid records (skipped ${rows.length - validRows.length} empty rows)`);
-      
-      const formattedData = validRows.map(row => ({
-        timestamp: row[0] || '',
-        lotNumber: row[1] || '',
-        garmentType: row[2] || '',
-        fabric: row[3] || '',
-        style: row[4] || '',
-        packingSupervisor: row[5] || '',
-        packingDate: row[6] || '',
-        totalPcs: parseInt(row[7]) || 0,
-        // Calculate if lot is recently issued (within last 24 hours)
-        isRecent: isRecentLot(row[0])
-      }));
-      
-      setData(formattedData);
-      
-      // Separate recent lots
-      const recent = formattedData.filter(item => item.isRecent);
-      setRecentLots(recent);
-      
-      extractDropdownOptions(formattedData);
-      calculateStats(formattedData);
-    }
-    setLoading(false);
-  } catch (err) {
-    setError('Error fetching data. Please check your API key and spreadsheet ID.');
-    setLoading(false);
-    console.error('Error:', err);
-  }
-};
-
-  const isRecentLot = (timestamp) => {
-    if (!timestamp) return false;
-    const lotDate = new Date(timestamp);
-    const now = new Date();
-    const hoursDifference = (now - lotDate) / (1000 * 60 * 60);
-    return hoursDifference <= 24;
-  };
-
-  const extractDropdownOptions = (dataArray) => {
-    const lotNumbers = [...new Set(dataArray.map(item => item.lotNumber))].filter(Boolean).sort();
-    const garmentTypes = [...new Set(dataArray.map(item => item.garmentType))].filter(Boolean).sort();
-    const fabrics = [...new Set(dataArray.map(item => item.fabric))].filter(Boolean).sort();
-    const styles = [...new Set(dataArray.map(item => item.style))].filter(Boolean).sort();
-    const packingSupervisors = [...new Set(dataArray.map(item => item.packingSupervisor))].filter(Boolean).sort();
-
-    setDropdownOptions({
-      lotNumbers,
-      garmentTypes,
-      fabrics,
-      styles,
-      packingSupervisors
-    });
-  };
-
-  const calculateStats = (dataArray) => {
-    const totalPcs = dataArray.reduce((sum, item) => sum + item.totalPcs, 0);
-    
-    // Count supervisors with their data
-    const supervisorCounts = dataArray.reduce((acc, item) => {
-      if (item.packingSupervisor) {
-        acc[item.packingSupervisor] = (acc[item.packingSupervisor] || 0) + 1;
-      }
-      return acc;
-    }, {});
-    
-    const supervisors = Object.entries(supervisorCounts)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count);
-    
-    // Count garment types with their data
-    const garmentTypeCounts = dataArray.reduce((acc, item) => {
-      if (item.garmentType) {
-        acc[item.garmentType] = (acc[item.garmentType] || 0) + 1;
-      }
-      return acc;
-    }, {});
-    
-    const garmentTypes = Object.entries(garmentTypeCounts)
-      .map(([type, count]) => ({ type, count }))
-      .sort((a, b) => b.count - a.count);
-    
-    setStats({
-      totalRecords: dataArray.length,
-      totalPcs,
-      packingSupervisors: supervisors,
-      garmentTypes
-    });
-  };
-
-  const applyFilters = () => {
-    let filtered = [...data];
-
-    if (filters.lotNumber) {
-      filtered = filtered.filter(item => item.lotNumber === filters.lotNumber);
     }
 
-    if (filters.garmentType) {
-      filtered = filtered.filter(item => item.garmentType === filters.garmentType);
-    }
-
-    if (filters.fabric) {
-      filtered = filtered.filter(item => item.fabric === filters.fabric);
-    }
-
-    if (filters.style) {
-      filtered = filtered.filter(item => item.style === filters.style);
-    }
-
-    if (filters.packingSupervisor) {
-      filtered = filtered.filter(item => item.packingSupervisor === filters.packingSupervisor);
-    }
-
-    if (filters.startDate) {
-      filtered = filtered.filter(item => 
-        new Date(item.packingDate) >= new Date(filters.startDate)
+    // Apply search across all canonical columns
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase().trim();
+      filtered = filtered.filter((r) =>
+        DISPLAY_HEADERS.some((h) => String(r[h] ?? "").toLowerCase().includes(term))
       );
     }
 
-    if (filters.endDate) {
-      filtered = filtered.filter(item => 
-        new Date(item.packingDate) <= new Date(filters.endDate)
-      );
+    // Apply sorting
+    if (sortConfig.key) {
+      const { key, direction } = sortConfig;
+      filtered = [...filtered].sort((a, b) => {
+        if (key === "Packing Date" || key === "Timestamp") {
+          const da = a._parsedDate ? a._parsedDate.getTime() : 0;
+          const db = b._parsedDate ? b._parsedDate.getTime() : 0;
+          if (da < db) return direction === "asc" ? -1 : 1;
+          if (da > db) return direction === "asc" ? 1 : -1;
+          return 0;
+        }
+
+        if (key === "PCS") {
+          const va = Number(a.PCS) || 0;
+          const vb = Number(b.PCS) || 0;
+          if (va < vb) return direction === "asc" ? -1 : 1;
+          if (va > vb) return direction === "asc" ? 1 : -1;
+          return 0;
+        }
+
+        const va = String(a[key] ?? "").toLowerCase();
+        const vb = String(b[key] ?? "").toLowerCase();
+        if (va < vb) return direction === "asc" ? -1 : 1;
+        if (va > vb) return direction === "asc" ? 1 : -1;
+        return 0;
+      });
     }
 
-    setFilteredData(filtered);
-    // Update recent lots based on filtered data
-    const recent = filtered.filter(item => item.isRecent);
-    setRecentLots(recent);
-    calculateStats(filtered);
-  };
+    return filtered;
+  }, [rows, filterLot, filterSupervisor, filterGarment, filterBrand, filterFabric, showOnlyRecent, dateRangeFilter, searchTerm, sortConfig]);
 
-  const handleFilterChange = (e) => {
-    const { name, value } = e.target;
-    setFilters(prev => ({
-      ...prev,
-      [name]: value
+  /* ---------- Analytics ---------- */
+  const analytics = useMemo(() => {
+    const totalRecords = filteredRows.length;
+    const totalPCS = filteredRows.reduce((sum, r) => sum + (Number(r.PCS) || 0), 0);
+    const uniqueLotsSet = new Set(filteredRows.map((r) => r["Lot Number"]).filter(Boolean));
+    const recentLotsCount = filteredRows.filter((r) => r._isRecent).length;
+    const supervisorsSet = new Set(filteredRows.map((r) => r["Packing Supervisor"]).filter(s => s && s !== "—"));
+
+    return {
+      totalRecords,
+      totalPCS,
+      uniqueLots: uniqueLotsSet.size,
+      recentLots: recentLotsCount,
+      supervisorsCount: supervisorsSet.size
+    };
+  }, [filteredRows]);
+
+  const handleSort = (key) => {
+    setSortConfig((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
     }));
   };
 
-  const resetFilters = () => {
-    setFilters({
-      lotNumber: '',
-      garmentType: '',
-      fabric: '',
-      style: '',
-      packingSupervisor: '',
-      startDate: '',
-      endDate: ''
-    });
+  const clearFilters = () => {
+    setFilterLot("");
+    setFilterSupervisor("");
+    setFilterGarment("");
+    setFilterBrand("");
+    setFilterFabric("");
+    setSearchTerm("");
+    setShowOnlyRecent(false);
+    setDateRangeFilter({ startDate: "", endDate: "", enabled: false });
+    setSortConfig({ key: "Packing Date", direction: "desc" });
+    setPage(1);
   };
 
-const exportToExcel = () => {
-  // Filter out empty rows before exporting
-  const exportData = filteredData
-    .filter(item => {
-      // Check if the row has any meaningful data
-      return (
-        (item.lotNumber && item.lotNumber.trim() !== '') ||
-        (item.garmentType && item.garmentType.trim() !== '') ||
-        (item.fabric && item.fabric.trim() !== '') ||
-        (item.style && item.style.trim() !== '') ||
-        (item.packingSupervisor && item.packingSupervisor.trim() !== '') ||
-        (item.packingDate && item.packingDate.trim() !== '') ||
-        item.totalPcs > 0
-      );
-    })
-    .map(item => ({
-      'Timestamp': item.timestamp || '',
-      'Lot Number': item.lotNumber || '',
-      'Garment Type': item.garmentType || '',
-      'Fabric': item.fabric || '',
-      'Style': item.style || '',
-      'Packing Supervisor': item.packingSupervisor || '',
-      'Packing Date': item.packingDate || '',
-      'Total Pcs': item.totalPcs || 0
-    }));
+  const handleRefresh = () => loadData("refresh");
 
-  // Check if there's data to export
-  if (exportData.length === 0) {
-    alert('No valid data to export. All rows appear to be empty.');
-    return;
-  }
+  const hasActiveFilters = Boolean(
+    filterLot ||
+    filterSupervisor ||
+    filterGarment ||
+    filterBrand ||
+    filterFabric ||
+    searchTerm ||
+    showOnlyRecent ||
+    (dateRangeFilter.enabled && (dateRangeFilter.startDate || dateRangeFilter.endDate))
+  );
 
-  const worksheet = XLSX.utils.json_to_sheet(exportData);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Issue To Packing');
-  XLSX.writeFile(workbook, `issue_to_packing_${new Date().toISOString().split('T')[0]}.xlsx`);
-};
-const exportToPDF = () => {
-  // Filter out empty rows for PDF export too
-  const pdfData = filteredData.filter(item => {
-    return (
-      (item.lotNumber && item.lotNumber.trim() !== '') ||
-      (item.garmentType && item.garmentType.trim() !== '') ||
-      (item.fabric && item.fabric.trim() !== '') ||
-      (item.style && item.style.trim() !== '') ||
-      (item.packingSupervisor && item.packingSupervisor.trim() !== '') ||
-      (item.packingDate && item.packingDate.trim() !== '') ||
-      item.totalPcs > 0
-    );
-  });
+  /* ---------- Export Excel via ExcelJS (Factory Suite Pro 3-Sheet Workbook) ---------- */
+  const handleExportExcel = async () => {
+    try {
+      if (filteredRows.length === 0) {
+        alert("No data available to export.");
+        return;
+      }
 
-  // Check if there's data to export
-  if (pdfData.length === 0) {
-    alert('No valid data to export. All rows appear to be empty.');
-    return;
-  }
+      const now = new Date();
+      const reportDateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-  const totalPcs = pdfData.reduce((sum, item) => sum + item.totalPcs, 0);
-  const uniqueSupervisors = new Set(pdfData.map(item => item.packingSupervisor)).size;
-  const uniqueGarmentTypes = new Set(pdfData.map(item => item.garmentType)).size;
+      const totalLots = filteredRows.length;
+      let totalQty = 0;
+      const garmentAnalysis = {};
+      const supervisorAnalysis = {};
+      const partyAnalysis = {};
+      const sectionAnalysis = {};
 
-  const printWindow = window.open('', '_blank');
-  
-  const content = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Issue to Packing Report</title>
-      <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-        }
-        
-        body {
-          font-family: 'Inter', sans-serif;
-          line-height: 1.4;
-          color: #333;
-          background: #ffffff;
-          min-height: 100vh;
-          padding: 40px 20px;
-        }
-        
-        .report-container {
-          max-width: 1100px;
-          margin: 0 auto;
-          background: white;
-          border: 1px solid #e5e7eb;
-          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-          position: relative;
-        }
-        
-        .report-header {
-          background: #ffffff;
-          padding: 40px 40px 20px 40px;
-          border-bottom: 3px solid #1e40af;
-          position: relative;
-        }
-        
-        .company-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-end;
-          margin-bottom: 30px;
-        }
-        
-        .company-info {
-          flex: 1;
-        }
-        
-        .company-name {
-          font-size: 28px;
-          font-weight: 700;
-          color: #1e293b;
-          margin-bottom: 5px;
-          letter-spacing: -0.5px;
-        }
-        
-        .company-tagline {
-          font-size: 14px;
-          color: #64748b;
-          font-weight: 400;
-        }
-        
-        .report-info {
-          text-align: right;
-        }
-        
-        .report-title {
-          font-size: 24px;
-          font-weight: 600;
-          color: #1e293b;
-          margin-bottom: 5px;
-        }
-        
-        .report-id {
-          font-size: 12px;
-          color: #64748b;
-          font-weight: 500;
-        }
-        
-        .report-meta {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-top: 25px;
-          padding: 20px 0;
-          border-top: 1px solid #e5e7eb;
-          border-bottom: 1px solid #e5e7eb;
-        }
-        
-        .meta-item {
-          text-align: center;
-          flex: 1;
-        }
-        
-        .meta-label {
-          font-size: 11px;
-          color: #64748b;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          font-weight: 600;
-          margin-bottom: 4px;
-        }
-        
-        .meta-value {
-          font-size: 14px;
-          color: #1e293b;
-          font-weight: 500;
-        }
-        
-        .section-header {
-          padding: 15px 40px;
-          background: #f8fafc;
-          border-bottom: 1px solid #e5e7eb;
-          font-size: 12px;
-          font-weight: 600;
-          color: #475569;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-        }
-        
-        .summary-section {
-          padding: 30px 40px;
-          background: #f8fafc;
-          border-bottom: 1px solid #e5e7eb;
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 20px;
-        }
-        
-        .summary-item {
-          text-align: center;
-        }
-        
-        .summary-value {
-          font-size: 24px;
-          font-weight: 700;
-          color: #1e40af;
-          margin-bottom: 4px;
-          line-height: 1;
-        }
-        
-        .summary-label {
-          font-size: 10px;
-          color: #64748b;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          font-weight: 600;
-        }
-        
-        .table-container {
-          padding: 0;
-          overflow: hidden;
-        }
-        
-        .data-table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 11px;
-          table-layout: fixed;
-          border: 1px solid #e5e7eb;
-        }
-        
-        .data-table thead {
-          background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
-        }
-        
-        .data-table th {
-          color: #ffffff;
-          font-weight: 600;
-          text-transform: uppercase;
-          font-size: 10px;
-          letter-spacing: 0.5px;
-          padding: 12px 8px;
-          text-align: left;
-          border-right: 1px solid rgba(255, 255, 255, 0.1);
-          border-bottom: 2px solid #1e3a8a;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        
-        .data-table th:nth-child(1) { width: 10%; }
-        .data-table th:nth-child(2) { width: 10%; }
-        .data-table th:nth-child(3) { width: 12%; }
-        .data-table th:nth-child(4) { width: 12%; }
-        .data-table th:nth-child(5) { width: 15%; }
-        .data-table th:nth-child(6) { width: 12%; }
-        .data-table th:nth-child(7) { width: 10%; }
-        .data-table th:nth-child(8) { width: 8%; }
-        
-        .data-table th:last-child {
-          border-right: none;
-          text-align: right;
-        }
-        
-        .data-table td {
-          padding: 10px 8px;
-          border-bottom: 1px solid #e5e7eb;
-          border-right: 1px solid #e5e7eb;
-          vertical-align: middle;
-          color: #334155;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        
-        .data-table td:last-child {
-          border-right: none;
-          text-align: right;
-          font-family: 'Courier New', monospace;
-          font-weight: 600;
-        }
-        
-        .data-table tbody tr:last-child td {
-          border-bottom: none;
-        }
-        
-        .data-table tbody tr:hover {
-          background-color: #f8fafc;
-        }
-        
-        .timestamp-cell {
-          font-size: 10px;
-          color: #64748b;
-        }
-        
-        .lot-number-cell {
-          font-weight: 600;
-          color: #1e40af;
-        }
-        
-        .recent-lot {
-          background: linear-gradient(90deg, rgba(16, 185, 129, 0.05) 0%, rgba(16, 185, 129, 0.02) 100%);
-          border-left: 3px solid #10b981;
-        }
-        
-        .recent-indicator {
-          display: inline-block;
-          width: 6px;
-          height: 6px;
-          background: #10b981;
-          border-radius: 50%;
-          margin-right: 4px;
-          vertical-align: middle;
-        }
-        
-        .supervisor-cell {
-          display: inline-block;
-          padding: 4px 10px;
-          background: #e0f2fe;
-          color: #0369a1;
-          border-radius: 12px;
-          font-size: 10px;
-          font-weight: 500;
-          white-space: nowrap;
-        }
-        
-        .pcs-cell {
-          text-align: right;
-          font-weight: 600;
-          font-family: 'Courier New', monospace;
-        }
-        
-        .total-row {
-          background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-          font-weight: 600;
-        }
-        
-        .total-row td {
-          border-top: 2px solid #cbd5e1;
-          padding: 12px 8px;
-          color: #1e293b;
-        }
-        
-        .total-row td:first-child {
-          text-align: right;
-          font-size: 11px;
-          padding-right: 20px;
-        }
-        
-        .total-row td:last-child {
-          font-size: 12px;
-          color: #1e40af;
-        }
-        
-        .signature-section {
-          margin-top: 40px;
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 30px;
-          padding-top: 30px;
-          border-top: 1px solid #e5e7eb;
-        }
-        
-        .signature-line {
-          border-top: 1px solid #cbd5e1;
-          margin-top: 30px;
-          padding-top: 8px;
-          font-size: 10px;
-          color: #64748b;
-          text-align: center;
-        }
-        
-        .page-info {
-          text-align: center;
-          margin-top: 30px;
-          font-size: 10px;
-          color: #94a3b8;
-        }
-        
-        .watermark {
-          position: fixed;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%) rotate(-45deg);
-          font-size: 80px;
-          opacity: 0.03;
-          color: #000;
-          pointer-events: none;
-          z-index: -1;
-          font-weight: 900;
-          white-space: nowrap;
-        }
-        
-        @media print {
-          body {
-            padding: 0;
-            background: white;
+      filteredRows.forEach(row => {
+        const qty = Number(row.PCS) || 0;
+        totalQty += qty;
+
+        const g = row["Garment Type"] || "Unspecified";
+        if (!garmentAnalysis[g]) garmentAnalysis[g] = { lots: 0, qty: 0 };
+        garmentAnalysis[g].lots += 1;
+        garmentAnalysis[g].qty += qty;
+
+        const sup = row["Packing Supervisor"] || "Unassigned";
+        if (!supervisorAnalysis[sup]) supervisorAnalysis[sup] = { lots: 0, qty: 0 };
+        supervisorAnalysis[sup].lots += 1;
+        supervisorAnalysis[sup].qty += qty;
+
+        const party = row["Party Name"] || "Unassigned";
+        if (!partyAnalysis[party]) partyAnalysis[party] = { lots: 0, qty: 0 };
+        partyAnalysis[party].lots += 1;
+        partyAnalysis[party].qty += qty;
+
+        const sec = row.Section || "Unassigned";
+        if (!sectionAnalysis[sec]) sectionAnalysis[sec] = { lots: 0, qty: 0 };
+        sectionAnalysis[sec].lots += 1;
+        sectionAnalysis[sec].qty += qty;
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = "Factory Suite Pro";
+      workbook.created = now;
+
+      // Styling Helpers
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'CBD5E1' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'CBD5E1' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      const headerBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: '0F172A' } },
+        bottom: { style: 'medium', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: '0F172A' } }
+      };
+
+      const totalBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'double', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      // ==========================================
+      // SHEET 1: ISSUE TO PACKING LOG
+      // ==========================================
+      const ws1 = workbook.addWorksheet("Issue to Packing Log", {
+        views: [{ showGridLines: true, state: 'frozen', xSplit: 0, ySplit: 5 }]
+      });
+
+      const cols1 = [
+        { header: "Sr. No", key: "sr", width: 8 },
+        { header: "Lot Number", key: "lot", width: 16 },
+        { header: "Garment Type", key: "garment", width: 18 },
+        { header: "Style", key: "style", width: 18 },
+        { header: "Fabric", key: "fabric", width: 22 },
+        { header: "Brand", key: "brand", width: 16 },
+        { header: "PCS", key: "pcs", width: 14 },
+        { header: "Section", key: "section", width: 14 },
+        { header: "Season", key: "season", width: 14 },
+        { header: "Party Name", key: "party", width: 20 },
+        { header: "Direct Stitching", key: "direct", width: 16 },
+        { header: "Packing Supervisor", key: "sup", width: 18 },
+        { header: "Packing Date", key: "date", width: 16 }
+      ];
+
+      const numCols1 = cols1.length;
+      ws1.columns = cols1;
+
+      // Row 1: Title Banner
+      const titleRow1 = ws1.getRow(1);
+      titleRow1.values = ["FACTORY SUITE PRO - ISSUE TO PACKING REPORT"];
+      ws1.mergeCells(1, 1, 1, numCols1);
+      titleRow1.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+      titleRow1.alignment = { vertical: "middle", horizontal: "center" };
+      titleRow1.height = 34;
+
+      // Row 2: Metadata Banner
+      const metaRow1 = ws1.getRow(2);
+      metaRow1.values = [`Exported on: ${reportDateStr}  |  Total Records: ${totalLots}  |  Total Pieces: ${totalQty.toLocaleString()}  |  Active Supervisors: ${Object.keys(supervisorAnalysis).length}  |  Garments: ${Object.keys(garmentAnalysis).length}`];
+      ws1.mergeCells(2, 1, 2, numCols1);
+      metaRow1.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E293B" } };
+      metaRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      metaRow1.alignment = { vertical: "middle", horizontal: "center" };
+      metaRow1.height = 22;
+
+      // Row 3: Blank Row
+      const blankRow3 = ws1.getRow(3);
+      blankRow3.values = [];
+      blankRow3.height = 6;
+
+      // Row 4: Blank Row
+      const blankRow4 = ws1.getRow(4);
+      blankRow4.values = [];
+      blankRow4.height = 6;
+
+      // Row 5: Table Headers Row
+      const headerRow1 = ws1.getRow(5);
+      headerRow1.values = cols1.map(c => c.header);
+      headerRow1.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      headerRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+      headerRow1.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      headerRow1.height = 28;
+      for (let c = 1; c <= numCols1; c++) {
+        headerRow1.getCell(c).border = headerBorder;
+      }
+
+      // Add Data Rows
+      let rIdx1 = 6;
+      filteredRows.forEach((row, index) => {
+        const rowValues = [
+          index + 1,
+          row["Lot Number"] || "—",
+          row["Garment Type"] || "—",
+          row["Style"] || "—",
+          row["Fabric"] || "—",
+          row["Brand"] || "—",
+          Number(row.PCS) || 0,
+          row["Section"] || "—",
+          row["Season"] || "—",
+          row["Party Name"] || "—",
+          row["Direct Stitching"] || "No",
+          row["Packing Supervisor"] || "—",
+          row["Packing Date"] || "—"
+        ];
+
+        const dataRow = ws1.getRow(rIdx1);
+        dataRow.values = rowValues;
+        dataRow.height = 22;
+
+        const isEven = index % 2 === 0;
+        const defaultBg = isEven ? "FFFFFFFF" : "FFF8FAFC";
+
+        for (let c = 1; c <= numCols1; c++) {
+          const cell = dataRow.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: defaultBg } };
+
+          // Lot No Bold
+          if (c === 2) {
+            cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF0F172A" } };
           }
-          
-          .report-container {
-            box-shadow: none;
-            border: none;
-            max-width: 100%;
-            margin: 0;
-            padding: 0;
-          }
-          
-          .data-table th {
-            -webkit-print-color-adjust: exact;
-            color-adjust: exact;
-          }
-          
-          .data-table thead {
-            display: table-header-group;
-          }
-          
-          .data-table {
-            font-size: 9px;
-          }
-          
-          .data-table th,
-          .data-table td {
-            padding: 8px 6px;
+          // PCS numeric format
+          if (c === 7) {
+            cell.numFmt = "#,##0";
+            cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF0F172A" } };
           }
         }
-      </style>
-    </head>
-    <body>
-      <div class="watermark">CONFIDENTIAL</div>
-      
-      <div class="report-container">
-        <div class="report-header">
-          <div class="company-header">
-            <div class="company-info">
-              <div class="company-name">PACKING ISSUE</div>
-              <div class="company-tagline">Issue to Packing Management System</div>
-            </div>
-            <div class="report-info">
-              <div class="report-title">Issue to Packing Report</div>
-              <div class="report-id">DOC-${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}</div>
-            </div>
-          </div>
-          
-          <div class="report-meta">
-            <div class="meta-item">
-              <div class="meta-label">Report Period</div>
-              <div class="meta-value">${filters.startDate || 'Start'} - ${filters.endDate || 'End'}</div>
-            </div>
-            <div class="meta-item">
-              <div class="meta-label">Generated On</div>
-              <div class="meta-value">${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</div>
-            </div>
-            <div class="meta-item">
-              <div class="meta-label">Generated At</div>
-              <div class="meta-value">${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div>
-            </div>
-            <div class="meta-item">
-              <div class="meta-label">Total Records</div>
-              <div class="meta-value">${pdfData.length}</div>
-            </div>
-          </div>
-        </div>
-        
-        <div class="section-header">
-          Executive Summary
-        </div>
-        
-        <div class="summary-section">
-          <div class="summary-item">
-            <div class="summary-value">${pdfData.length}</div>
-            <div class="summary-label">Total Lots</div>
-          </div>
-          <div class="summary-item">
-            <div class="summary-value">${totalPcs.toLocaleString()}</div>
-            <div class="summary-label">Total Pieces</div>
-          </div>
-          <div class="summary-item">
-            <div class="summary-value">${uniqueSupervisors}</div>
-            <div class="summary-label">Supervisors</div>
-          </div>
-          <div class="summary-item">
-            <div class="summary-value">${uniqueGarmentTypes}</div>
-            <div class="summary-label">Product Types</div>
-          </div>
-        </div>
-        
-        <div class="section-header">
-          Detailed Issue to Packing Records
-        </div>
-        
-        <div class="table-container">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>TIMESTAMP</th>
-                <th>LOT NUMBER</th>
-                <th>GARMENT TYPE</th>
-                <th>FABRIC</th>
-                <th>STYLE</th>
-                <th>SUPERVISOR</th>
-                <th>PACKING DATE</th>
-                <th>TOTAL PCS</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${pdfData.map((item, index) => `
-                <tr class="${item.isRecent ? 'recent-lot' : ''}">
-                  <td class="timestamp-cell">
-                    ${item.isRecent ? '<span class="recent-indicator"></span>' : ''}
-                    ${item.timestamp ? new Date(item.timestamp).toLocaleDateString('en-US', { 
-                      month: 'short', 
-                      day: 'numeric', 
-                      year: 'numeric' 
-                    }) : 'N/A'}
-                  </td>
-                  <td class="lot-number-cell">${item.lotNumber || 'N/A'}</td>
-                  <td>${item.garmentType || 'N/A'}</td>
-                  <td>${item.fabric || 'N/A'}</td>
-                  <td>${item.style || 'N/A'}</td>
-                  <td>
-                    <span class="supervisor-cell">${item.packingSupervisor || 'N/A'}</span>
-                  </td>
-                  <td>${item.packingDate || 'N/A'}</td>
-                  <td class="pcs-cell">${item.totalPcs ? item.totalPcs.toLocaleString() : '0'}</td>
-                </tr>
-              `).join('')}
-              
-              <tr class="total-row">
-                <td colspan="7" style="text-align: right; padding-right: 20px;">GRAND TOTAL</td>
-                <td class="pcs-cell">${totalPcs.toLocaleString()}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        
-        <div class="signature-section">
-          <div>
-            <div class="signature-line"></div>
-            <div style="text-align: center; font-size: 10px; color: #64748b;">Prepared By</div>
-            <div style="text-align: center; font-size: 9px; color: #94a3b8;">System Administrator</div>
-          </div>
-          
-          <div>
-            <div class="signature-line"></div>
-            <div style="text-align: center; font-size: 10px; color: #64748b;">Reviewed By</div>
-            <div style="text-align: center; font-size: 9px; color: #94a3b8;">Production Manager</div>
-          </div>
-          
-          <div>
-            <div class="signature-line"></div>
-            <div style="text-align: center; font-size: 10px; color: #64748b;">Approved By</div>
-            <div style="text-align: center; font-size: 9px; color: #94a3b8;">Plant Director</div>
-          </div>
-        </div>
-        
-        <div class="page-info">
-          Page 1 of 1 • Generated by Issue to Packing System • ${new Date().toLocaleString('en-US', { 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-          })}
-        </div>
-      </div>
-      
-      <script>
-        setTimeout(() => {
-          window.print();
-          setTimeout(() => {
-            window.close();
-          }, 500);
-        }, 1000);
-      </script>
-    </body>
-    </html>
-  `;
 
-  printWindow.document.write(content);
-  printWindow.document.close();
-};
+        rIdx1++;
+      });
 
-  // Enhanced styles with modern design
-  const styles = {
-    container: {
-      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-      padding: '20px',
-      maxWidth: '1900px',
-      margin: '0 auto',
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #ffffffff 0%, #ffffffff 100%)'
-    },
-    header: {
-      background: 'white',
-      padding: '30px',
-      borderRadius: '20px',
-      boxShadow: '0 10px 40px rgba(0,0,0,0.08)',
-      marginBottom: '30px',
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      borderLeft: '5px solid #3498db',
-      position: 'relative',
-      overflow: 'hidden'
-    },
-    headerContent: {
-      flex: 1
-    },
-    title: {
-      color: '#2c3e50',
-      fontSize: '32px',
-      margin: '0 0 10px 0',
-      fontWeight: '700',
-      letterSpacing: '-0.5px'
-    },
-    subtitle: {
-      color: '#7f8c8d',
-      fontSize: '14px',
-      margin: '0',
-      fontWeight: '400'
-    },
-    headerDecoration: {
-      position: 'absolute',
-      right: '-50px',
-      top: '-50px',
-      width: '200px',
-      height: '200px',
-      background: 'linear-gradient(135deg, rgba(52, 152, 219, 0.1) 0%, rgba(41, 128, 185, 0.05) 100%)',
-      borderRadius: '50%',
-      zIndex: '0'
-    },
-    actionButtons: {
-      display: 'flex',
-      gap: '12px',
-      flexWrap: 'wrap',
-      zIndex: '1'
-    },
-    button: {
-      padding: '12px 24px',
-      border: 'none',
-      borderRadius: '10px',
-      cursor: 'pointer',
-      fontWeight: '600',
-      fontSize: '14px',
-      transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      letterSpacing: '0.3px',
-      position: 'relative',
-      overflow: 'hidden'
-    },
-    buttonHover: {
-      transform: 'translateY(-2px)',
-      boxShadow: '0 5px 15px rgba(0,0,0,0.1)'
-    },
-    primaryButton: {
-      background: 'linear-gradient(135deg, #3498db 0%, #2980b9 100%)',
-      color: 'white'
-    },
-    successButton: {
-      background: 'linear-gradient(135deg, #27ae60 0%, #229954 100%)',
-      color: 'white'
-    },
-    dangerButton: {
-      background: 'linear-gradient(135deg, #e74c3c 0%, #c0392b 100%)',
-      color: 'white'
-    },
-    warningButton: {
-      background: 'linear-gradient(135deg, #f39c12 0%, #d68910 100%)',
-      color: 'white'
-    },
-    infoButton: {
-      background: 'linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%)',
-      color: 'white'
-    },
-    statsGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-      gap: '15px',
-      marginBottom: '30px'
-    },
-    statCard: {
-      background: 'white',
-      padding: '30px',
-      borderRadius: '15px',
-      boxShadow: '0 8px 25px rgba(0,0,0,0.06)',
-      textAlign: 'center',
-      borderTop: '4px solid',
-      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-      position: 'relative',
-      overflow: 'hidden'
-    },
-    recentLotsContainer: {
-      background: 'white',
-      padding: '30px',
-      borderRadius: '15px',
-      boxShadow: '0 8px 25px rgba(0,0,0,0.06)',
-      marginBottom: '30px',
-      borderTop: '4px solid #2ecc71'
-    },
-    recentLotsHeader: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: '25px',
-      paddingBottom: '15px',
-      borderBottom: '2px solid #ecf0f1'
-    },
-    recentLotsTitle: {
-      fontSize: '24px',
-      fontWeight: '700',
-      color: '#2c3e50',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '12px'
-    },
-    recentLotsBadge: {
-      background: 'linear-gradient(135deg, #2ecc71 0%, #27ae60 100%)',
-      color: 'white',
-      padding: '6px 16px',
-      borderRadius: '20px',
-      fontSize: '14px',
-      fontWeight: '700'
-    },
-    recentLotsTable: {
-      width: '100%',
-      borderCollapse: 'collapse',
-      border: '1px solid #e0e0e0',
-      borderRadius: '10px',
-      overflow: 'hidden'
-    },
-    recentTh: {
-      padding: '16px 20px',
-      textAlign: 'left',
-      fontWeight: '600',
-      fontSize: '13px',
-      color: '#ffffffff',
-      textTransform: 'uppercase',
-      letterSpacing: '0.5px',
-      borderRight: '1px solid #3498db',
-      borderBottom: '2px solid #2980b9',
-      background: 'linear-gradient(135deg, #3498db 0%, #2980b9 100%)'
-    },
-    recentTd: {
-      padding: '16px 20px',
-      borderBottom: '1px solid #e0e0e0',
-      borderRight: '1px solid #e0e0e0',
-      fontSize: '14px',
-      verticalAlign: 'middle'
-    },
-    emptyRecentLots: {
-      padding: '40px',
-      textAlign: 'center',
-      color: '#95a5a6',
-      border: '2px dashed #ecf0f1',
-      borderRadius: '10px'
-    },
-    filtersContainer: {
-      background: 'white',
-      padding: '30px',
-      borderRadius: '15px',
-      boxShadow: '0 8px 25px rgba(0,0,0,0.06)',
-      marginBottom: '40px'
-    },
-    filterTitle: {
-      fontSize: '20px',
-      fontWeight: '600',
-      color: '#2c3e50',
-      marginBottom: '25px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px'
-    },
-    filterGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-      gap: '25px',
-      marginBottom: '30px'
-    },
-    filterGroup: {
-      display: 'flex',
-      flexDirection: 'column'
-    },
-    filterLabel: {
-      marginBottom: '10px',
-      fontWeight: '600',
-      color: '#2c3e50',
-      fontSize: '14px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px'
-    },
-    filterSelect: {
-      padding: '14px',
-      border: '2px solid #e9ecef',
-      borderRadius: '10px',
-      fontSize: '14px',
-      background: '#f8f9fa',
-      transition: 'all 0.3s ease',
-      appearance: 'none',
-      backgroundImage: 'url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%237f8c8d\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3e%3cpolyline points=\'6 9 12 15 18 9\'%3e%3c/polyline%3e%3c/svg%3e")',
-      backgroundRepeat: 'no-repeat',
-      backgroundPosition: 'right 14px center',
-      backgroundSize: '16px',
-      paddingRight: '40px'
-    },
-    filterSelectFocus: {
-      outline: 'none',
-      borderColor: '#3498db',
-      background: 'white',
-      boxShadow: '0 0 0 3px rgba(52,152,219,0.1)'
-    },
-    filterActions: {
-      display: 'flex',
-      justifyContent: 'flex-end',
-      gap: '15px',
-      paddingTop: '25px',
-      borderTop: '1px solid #e9ecef'
-    },
-    tableContainer: {
-      background: 'white',
-      borderRadius: '15px',
-      boxShadow: '0 8px 25px rgba(0,0,0,0.06)',
-      overflow: 'hidden',
-      marginBottom: '40px',
-      border: '1px solid #e0e0e0'
-    },
-    tableHeader: {
-      padding: '25px',
-      background: '#f8f9fa',
-      borderBottom: '1px solid #e0e0e0'
-    },
-    tableTitle: {
-      fontSize: '20px',
-      fontWeight: '600',
-      color: '#2c3e50',
-      margin: '0'
-    },
-    table: {
-      width: '100%',
-      borderCollapse: 'collapse',
-      border: '1px solid #e0e0e0'
-    },
-    th: {
-      padding: '18px 20px',
-      textAlign: 'left',
-      fontWeight: '600',
-      fontSize: '13px',
-      color: '#ffffffff',
-      textTransform: 'uppercase',
-      letterSpacing: '0.5px',
-      borderRight: '1px solid #004080',
-      borderBottom: '2px solid #003366',
-      background: '#004080ff',
-      position: 'sticky',
-      top: 0,
-      zIndex: 10
-    },
-    td: {
-      padding: '18px 20px',
-      borderBottom: '1px solid #e0e0e0',
-      borderRight: '1px solid #e0e0e0',
-      fontSize: '14px',
-      verticalAlign: 'middle'
-    },
-    recentLotRow: {
-      background: 'linear-gradient(90deg, rgba(46, 204, 113, 0.1) 0%, rgba(39, 174, 96, 0.05) 100%)',
-      borderLeft: '3px solid #2ecc71',
-      position: 'relative'
-    },
-    recentBadge: {
-      display: 'inline-block',
-      padding: '3px 10px',
-      borderRadius: '20px',
-      fontSize: '11px',
-      fontWeight: '700',
-      background: 'linear-gradient(135deg, #2ecc71 0%, #27ae60 100%)',
-      color: 'white',
-      marginLeft: '10px',
-      textTransform: 'uppercase'
-    },
-    tableFooter: {
-      padding: '20px',
-      background: '#f8f9fa',
-      borderTop: '1px solid #e0e0e0',
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center'
-    },
-    loadingOverlay: {
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'rgba(255,255,255,0.9)',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'center',
-      alignItems: 'center',
-      zIndex: 1000
-    },
-    loadingSpinner: {
-      border: '4px solid #f3f3f3',
-      borderTop: '4px solid #3498db',
-      borderRadius: '50%',
-      width: '50px',
-      height: '50px',
-      animation: 'spin 1s linear infinite',
-      marginBottom: '20px'
-    },
-    errorAlert: {
-      background: 'linear-gradient(135deg, #ffcccc 0%, #ff9999 100%)',
-      padding: '30px',
-      borderRadius: '15px',
-      textAlign: 'center',
-      boxShadow: '0 5px 15px rgba(0,0,0,0.1)',
-      margin: '40px 0'
-    },
-    emptyState: {
-      padding: '60px 30px',
-      textAlign: 'center',
-      color: '#95a5a6'
+      // Total Row for Sheet 1
+      const totalRow1 = ws1.getRow(rIdx1);
+      const totalValues1 = new Array(numCols1).fill("");
+      totalValues1[0] = "TOTAL";
+      totalValues1[6] = totalQty;
+      totalValues1[numCols1 - 1] = `${totalLots} Lots`;
+      totalRow1.values = totalValues1;
+      totalRow1.height = 26;
+
+      for (let c = 1; c <= numCols1; c++) {
+        const cell = totalRow1.getCell(c);
+        cell.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FF0F172A" } };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        cell.border = totalBorder;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+        if (c === 7) cell.numFmt = "#,##0";
+      }
+
+      // ==========================================
+      // SHEET 2: PACKING SUMMARY & BREAKDOWNS
+      // ==========================================
+      const ws2 = workbook.addWorksheet("Packing Summary", {
+        views: [{ showGridLines: true }]
+      });
+
+      ws2.columns = [
+        { width: 32 },
+        { width: 18 },
+        { width: 18 },
+        { width: 22 }
+      ];
+
+      // Sheet 2 Title Banner
+      const titleRow2 = ws2.getRow(1);
+      titleRow2.values = ["FACTORY SUITE PRO - ISSUE TO PACKING BREAKDOWN"];
+      ws2.mergeCells(1, 1, 1, 4);
+      titleRow2.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleRow2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+      titleRow2.alignment = { vertical: "middle", horizontal: "center" };
+      titleRow2.height = 32;
+
+      let r2 = 3;
+
+      // Section 1: Garment Type Breakdown
+      const gTitle = ws2.getRow(r2);
+      gTitle.values = ["1. GARMENT TYPE BREAKDOWN"];
+      ws2.mergeCells(r2, 1, r2, 4);
+      gTitle.font = { name: "Segoe UI", size: 10.5, bold: true, color: { argb: "FFFFFFFF" } };
+      gTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+      gTitle.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      gTitle.height = 24;
+      r2++;
+
+      const gHeaders = ws2.getRow(r2);
+      gHeaders.values = ["Garment Type", "Total Lots", "Percentage (%)", "Total Quantity"];
+      gHeaders.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+      gHeaders.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF14B8A6" } };
+      gHeaders.alignment = { vertical: "middle", horizontal: "center" };
+      gHeaders.height = 24;
+      for (let c = 1; c <= 4; c++) gHeaders.getCell(c).border = headerBorder;
+      r2++;
+
+      const garmentArr = Object.entries(garmentAnalysis).map(([g, d]) => ({
+        name: g,
+        lots: d.lots,
+        pct: totalLots > 0 ? Math.round((d.lots / totalLots) * 100) : 0,
+        qty: d.qty
+      })).sort((a, b) => b.lots - a.lots);
+
+      garmentArr.forEach((g, idx) => {
+        const row = ws2.getRow(r2);
+        row.values = [g.name, g.lots, `${g.pct}%`, g.qty];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = "#,##0";
+        }
+        r2++;
+      });
+      r2 += 2;
+
+      // Section 2: Supervisor Production Breakdown
+      const sTitle = ws2.getRow(r2);
+      sTitle.values = ["2. PACKING SUPERVISOR BREAKDOWN"];
+      ws2.mergeCells(r2, 1, r2, 4);
+      sTitle.font = { name: "Segoe UI", size: 10.5, bold: true, color: { argb: "FFFFFFFF" } };
+      sTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4338CA" } };
+      sTitle.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      sTitle.height = 24;
+      r2++;
+
+      const sHeaders = ws2.getRow(r2);
+      sHeaders.values = ["Packing Supervisor", "Total Lots", "Percentage (%)", "Total Quantity"];
+      sHeaders.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+      sHeaders.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6366F1" } };
+      sHeaders.alignment = { vertical: "middle", horizontal: "center" };
+      sHeaders.height = 24;
+      for (let c = 1; c <= 4; c++) sHeaders.getCell(c).border = headerBorder;
+      r2++;
+
+      const supArr = Object.entries(supervisorAnalysis).map(([s, d]) => ({
+        name: s,
+        lots: d.lots,
+        pct: totalLots > 0 ? Math.round((d.lots / totalLots) * 100) : 0,
+        qty: d.qty
+      })).sort((a, b) => b.lots - a.lots);
+
+      supArr.forEach((s, idx) => {
+        const row = ws2.getRow(r2);
+        row.values = [s.name, s.lots, `${s.pct}%`, s.qty];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = "#,##0";
+        }
+        r2++;
+      });
+      r2 += 2;
+
+      // ==========================================
+      // SHEET 3: APPLIED FILTERS (AUDIT SHEET)
+      // ==========================================
+      const ws3 = workbook.addWorksheet("Applied Filters", {
+        views: [{ showGridLines: true }]
+      });
+      ws3.columns = [{ width: 28 }, { width: 65 }];
+
+      const fTitle = ws3.getRow(1);
+      fTitle.values = ["REPORT FILTERS & AUDIT PARAMETERS"];
+      ws3.mergeCells(1, 1, 1, 2);
+      fTitle.font = { name: "Segoe UI", size: 12, bold: true, color: { argb: "FFFFFFFF" } };
+      fTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF334155" } };
+      fTitle.alignment = { vertical: "middle", horizontal: "center" };
+      fTitle.height = 28;
+
+      const fHead = ws3.getRow(2);
+      fHead.values = ["Filter Parameter", "Selected Value / Criteria"];
+      fHead.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      fHead.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF475569" } };
+      fHead.alignment = { vertical: "middle", horizontal: "center" };
+      fHead.height = 24;
+      fHead.getCell(1).border = headerBorder;
+      fHead.getCell(2).border = headerBorder;
+
+      const filterAudit = [
+        ["Export Timestamp", reportDateStr],
+        ["Lot Filter", filterLot || "All"],
+        ["Packing Supervisor Filter", filterSupervisor || "All"],
+        ["Garment Filter", filterGarment || "All"],
+        ["Brand Filter", filterBrand || "All"],
+        ["Fabric Filter", filterFabric || "All"],
+        ["Date Range", dateRangeFilter.enabled ? `${dateRangeFilter.startDate || ""} to ${dateRangeFilter.endDate || ""}` : "All"],
+        ["Search Keyword", searchTerm || "None"],
+        ["Recent Lots Only", showOnlyRecent ? "Yes (Last 24h)" : "No"]
+      ];
+
+      filterAudit.forEach(([param, val], idx) => {
+        const row = ws3.getRow(idx + 3);
+        row.values = [param, val];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 2; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" }, bold: c === 1 };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+        }
+      });
+
+      const fileName = `Issue_To_Packing_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      saveAs(blob, `${fileName}.xlsx`);
+    } catch (err) {
+      console.error("Error exporting Excel:", err);
+      alert(`Failed to export Excel: ${err.message}`);
     }
   };
+
+  /* ---------- Direct PDF Export via jsPDF (Factory Suite Pro A3 Landscape) ---------- */
+  const handleExportPDF = () => {
+    try {
+      if (filteredRows.length === 0) {
+        alert("No data available to export.");
+        return;
+      }
+
+      const totalLots = filteredRows.length;
+      let totalQty = 0;
+      const garmentMap = {};
+      const supervisorMap = {};
+      const partyMap = {};
+      const sectionMap = {};
+
+      filteredRows.forEach(row => {
+        const qty = Number(row.PCS) || 0;
+        totalQty += qty;
+
+        const g = row["Garment Type"] || "Unspecified";
+        if (!garmentMap[g]) garmentMap[g] = { lots: 0, qty: 0 };
+        garmentMap[g].lots += 1;
+        garmentMap[g].qty += qty;
+
+        const s = row["Packing Supervisor"] || "Unassigned";
+        if (!supervisorMap[s]) supervisorMap[s] = { lots: 0, qty: 0 };
+        supervisorMap[s].lots += 1;
+        supervisorMap[s].qty += qty;
+
+        const p = row["Party Name"] || "Unassigned";
+        if (!partyMap[p]) partyMap[p] = { lots: 0, qty: 0 };
+        partyMap[p].lots += 1;
+        partyMap[p].qty += qty;
+
+        const sec = row.Section || "Unassigned";
+        if (!sectionMap[sec]) sectionMap[sec] = { lots: 0, qty: 0 };
+        sectionMap[sec].lots += 1;
+        sectionMap[sec].qty += qty;
+      });
+
+      const sortedGarments = Object.keys(garmentMap).map(name => ({
+        name,
+        lots: garmentMap[name].lots,
+        qty: garmentMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
+
+      const sortedSupervisors = Object.keys(supervisorMap).map(name => ({
+        name,
+        lots: supervisorMap[name].lots,
+        qty: supervisorMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
+
+      const sortedParties = Object.keys(partyMap).map(name => ({
+        name,
+        lots: partyMap[name].lots,
+        qty: partyMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
+
+      const sortedSections = Object.keys(sectionMap).map(name => ({
+        name,
+        lots: sectionMap[name].lots,
+        qty: sectionMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
+
+      // Create PDF in A3 Landscape
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "pt",
+        format: "a3"
+      });
+
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+
+      // 1. Top Header Banner
+      doc.setFillColor(15, 118, 110); // Dark Teal #0F766E
+      doc.rect(15, 12, pageW - 30, 48, 'F');
+
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text("FACTORY SUITE PRO - ISSUE TO PACKING REPORT", pageW / 2, 30, { align: 'center' });
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(204, 251, 241);
+      const subText = `Total Lots: ${totalLots}   |   Total PCS: ${totalQty.toLocaleString()} Pcs   |   Supervisors: ${sortedSupervisors.length}   |   Parties: ${sortedParties.length}   |   Garments: ${sortedGarments.length}`;
+      doc.text(subText, pageW / 2, 48, { align: 'center' });
+
+      // 2. Filter Banner
+      doc.setFillColor(241, 245, 249);
+      doc.rect(15, 63, pageW - 30, 16, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(0, 0, 0);
+      const filterSummary = `Filters: Lot: ${filterLot || 'All'} | Supervisor: ${filterSupervisor || 'All'} | Garment: ${filterGarment || 'All'} | Brand: ${filterBrand || 'All'} | Fabric: ${filterFabric || 'All'} | Date Range: ${dateRangeFilter.enabled ? `${dateRangeFilter.startDate || ''} to ${dateRangeFilter.endDate || ''}` : 'All'} | Search: ${searchTerm || 'None'}`;
+      doc.text(filterSummary, pageW / 2, 74, { align: 'center' });
+
+      // 3. Main Data Table
+      const tableColumns = [
+        '#',
+        'Lot Number',
+        'Garment Type',
+        'Style',
+        'Fabric',
+        'Brand',
+        'PCS',
+        'Section',
+        'Season',
+        'Party Name',
+        'Direct Stitching',
+        'Packing Supervisor',
+        'Packing Date'
+      ];
+
+      const tableBody = filteredRows.map((row, idx) => {
+        const lotNo = (row["Lot Number"] || "").toString().trim();
+        const isRecent = row._isRecent;
+        const lotDisplay = isRecent ? `* ${lotNo}` : (lotNo || "—");
+
+        return [
+          (idx + 1).toString(),
+          lotDisplay,
+          row["Garment Type"] || "—",
+          row["Style"] || "—",
+          row["Fabric"] || "—",
+          row["Brand"] || "—",
+          (Number(row.PCS) || 0).toLocaleString(),
+          row["Section"] || "—",
+          row["Season"] || "—",
+          row["Party Name"] || "—",
+          row["Direct Stitching"] || "No",
+          row["Packing Supervisor"] || "—",
+          row["Packing Date"] || "—"
+        ];
+      });
+
+      // Total Row
+      tableBody.push([
+        '',
+        `TOTAL (${totalLots})`,
+        '',
+        '',
+        '',
+        '',
+        totalQty.toLocaleString(),
+        '',
+        '',
+        `${sortedParties.length} Parties`,
+        '',
+        `${sortedSupervisors.length} Supervisors`,
+        ''
+      ]);
+
+      const columnStyles = {
+        0: { cellWidth: 35, halign: 'center' },
+        1: { cellWidth: 85, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: 105, halign: 'center' },
+        3: { cellWidth: 110, halign: 'center' },
+        4: { cellWidth: 115, halign: 'center' },
+        5: { cellWidth: 85, halign: 'center' },
+        6: { cellWidth: 70, halign: 'center', fontStyle: 'bold' },
+        7: { cellWidth: 75, halign: 'center' },
+        8: { cellWidth: 75, halign: 'center' },
+        9: { cellWidth: 105, halign: 'center' },
+        10: { cellWidth: 75, halign: 'center' },
+        11: { cellWidth: 100, halign: 'center' },
+        12: { cellWidth: 85, halign: 'center' }
+      };
+
+      autoTable(doc, {
+        head: [tableColumns],
+        body: tableBody,
+        startY: 85,
+        tableWidth: pageW - 30,
+        margin: { top: 85, right: 15, bottom: 25, left: 15 },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0], // Pure black text
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+          fontStyle: 'normal',
+          minCellHeight: 14,
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          lineColor: [0, 0, 0],
+          lineWidth: 0.5,
+          halign: 'center',
+          fontSize: 9,
+          valign: 'middle',
+          cellPadding: { top: 5, right: 2, bottom: 5, left: 2 },
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+        columnStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0]; // Pure black
+
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
+
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [226, 232, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.halign = 'center';
+            }
+          }
+        }
+      });
+
+      // --- 4-COLUMN SIDE-BY-SIDE EXECUTIVE SUMMARY ---
+      const gBody = sortedGarments.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      gBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const supBody = sortedSupervisors.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      supBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const pBody = sortedParties.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      pBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const sBody = sortedSections.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      sBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const maxRows = Math.max(gBody.length, supBody.length, pBody.length, sBody.length);
+      const approxSummaryHeight = 55 + (maxRows * 18);
+
+      let summaryStartY = doc.lastAutoTable.finalY + 22;
+      const neededSpace = approxSummaryHeight + 35;
+      if (summaryStartY + neededSpace > pageH - 30) {
+        doc.addPage();
+        summaryStartY = 40;
+      } else {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.8);
+        doc.line(15, summaryStartY - 8, pageW - 15, summaryStartY - 8);
+      }
+
+      // Title & KPI Subtitle
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("EXECUTIVE SUMMARY & PACKING ISSUE BREAKDOWN", pageW / 2, summaryStartY + 4, { align: 'center' });
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(0, 0, 0);
+      const summarySub = `Total Lots: ${totalLots}   |   Total Quantity: ${totalQty.toLocaleString()} Pcs   |   Supervisors: ${sortedSupervisors.length}   |   Garments: ${sortedGarments.length}   |   Parties: ${sortedParties.length}`;
+      doc.text(summarySub, pageW / 2, summaryStartY + 16, { align: 'center' });
+
+      const sectionTitleY = summaryStartY + 30;
+      const tableStartY = sectionTitleY + 6;
+
+      const colWidth = 278;
+      const gap = 16;
+      const col1X = 15;
+      const col2X = col1X + colWidth + gap;
+      const col3X = col2X + colWidth + gap;
+      const col4X = col3X + colWidth + gap;
+
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("1. GARMENT BREAKDOWN", col1X, sectionTitleY);
+      doc.text("2. PACKING SUPERVISOR BREAKDOWN", col2X, sectionTitleY);
+      doc.text("3. PARTY BREAKDOWN", col3X, sectionTitleY);
+      doc.text("4. SECTION BREAKDOWN", col4X, sectionTitleY);
+
+      const summaryColStyles = {
+        0: { cellWidth: 110, halign: 'center' },
+        1: { cellWidth: 45, halign: 'center' },
+        2: { cellWidth: 68, halign: 'center' },
+        3: { cellWidth: 55, halign: 'center' },
+      };
+
+      // Col 1: Garments
+      autoTable(doc, {
+        head: [['Garment Type', 'Lots', 'Total Qty', 'Share %']],
+        body: gBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col1X, right: pageW - (col1X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === gBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Col 2: Supervisors
+      autoTable(doc, {
+        head: [['Packing Supervisor', 'Lots', 'Total Qty', 'Share %']],
+        body: supBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col2X, right: pageW - (col2X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [67, 56, 202], // Indigo
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === supBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Col 3: Parties
+      autoTable(doc, {
+        head: [['Party Name', 'Lots', 'Total Qty', 'Share %']],
+        body: pBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col3X, right: pageW - (col3X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [30, 64, 175], // Royal Blue
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === pBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Col 4: Sections
+      autoTable(doc, {
+        head: [['Section', 'Lots', 'Total Qty', 'Share %']],
+        body: sBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col4X, right: pageW - (col4X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [180, 83, 9], // Amber
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === sBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      const fileName = `Issue_To_Packing_${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(fileName);
+    } catch (err) {
+      console.error("Error generating PDF:", err);
+      alert(`Failed to generate PDF: ${err.message}`);
+    }
+  };
+
+  /* ---------- Pagination ---------- */
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredRows.slice(start, start + pageSize);
+  }, [filteredRows, page, pageSize]);
 
   return (
-    <div style={styles.container}>
-      {/* Loading Overlay */}
-      {loading && (
-        <div style={styles.loadingOverlay}>
-          <div style={styles.loadingSpinner}></div>
-          <div style={{ fontSize: '18px', color: '#2c3e50', fontWeight: '600' }}>
-            Loading Issue to Packing Data...
-          </div>
-          <div style={{ fontSize: '14px', color: '#7f8c8d', marginTop: '10px' }}>
-            Fetching data from Google Sheets
-          </div>
-        </div>
-      )}
-
-      {/* Header */}
-      <div style={styles.header}>
-        <div style={styles.headerContent}>
-          <h1 style={styles.title}>📦 Issue to Packing Dashboard</h1>
-          <p style={styles.subtitle}>
-            Monitor and manage all packing activities • Real-time data from Google Sheets
-          </p>
-        </div>
-        <div style={styles.headerDecoration}></div>
-        <div style={styles.actionButtons}>
+    <div style={{ minHeight: "100vh", backgroundColor: "#f8fafc", color: "#0f172a", fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
+      {/* Top Navbar */}
+      <header style={{
+        background: "#ffffff",
+        borderBottom: "1px solid #e2e8f0",
+        padding: "12px 28px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+        position: "sticky",
+        top: 0,
+        zIndex: 50
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
           <button
-            style={{ ...styles.button, ...styles.infoButton }}
-            onClick={() => window.history.back()}
-            onMouseEnter={(e) => Object.assign(e.target.style, styles.buttonHover)}
-            onMouseLeave={(e) => {
-              e.target.style.transform = 'translateY(0)';
-              e.target.style.boxShadow = 'none';
+            onClick={handleGoBack}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              background: "#f1f5f9",
+              border: "1.5px solid #cbd5e1",
+              color: "#1e293b",
+              padding: "7px 14px",
+              borderRadius: "8px",
+              fontSize: "0.82rem",
+              fontWeight: 800,
+              cursor: "pointer",
+              transition: "all 0.15s ease"
             }}
+            title="Go back to previous page"
           >
             ← Back
           </button>
-          <button
-            style={{ ...styles.button, ...styles.primaryButton }}
-            onClick={fetchData}
-            disabled={loading}
-            onMouseEnter={(e) => Object.assign(e.target.style, styles.buttonHover)}
-            onMouseLeave={(e) => {
-              e.target.style.transform = 'translateY(0)';
-              e.target.style.boxShadow = 'none';
-            }}
-          >
-            🔄 Refresh
-          </button>
-          <button
-            style={{ ...styles.button, ...styles.successButton }}
-            onClick={exportToExcel}
-            disabled={loading || filteredData.length === 0}
-            onMouseEnter={(e) => Object.assign(e.target.style, styles.buttonHover)}
-            onMouseLeave={(e) => {
-              e.target.style.transform = 'translateY(0)';
-              e.target.style.boxShadow = 'none';
-            }}
-          >
-            📊 Export Excel
-          </button>
-          <button
-            style={{ ...styles.button, ...styles.dangerButton }}
-            onClick={exportToPDF}
-            disabled={loading || filteredData.length === 0}
-            onMouseEnter={(e) => Object.assign(e.target.style, styles.buttonHover)}
-            onMouseLeave={(e) => {
-              e.target.style.transform = 'translateY(0)';
-              e.target.style.boxShadow = 'none';
-            }}
-          >
-            📄 Export PDF
-          </button>
-        </div>
-      </div>
-
-      {/* Recently Issued Lots Section */}
-      <div style={styles.recentLotsContainer}>
-        <div style={styles.recentLotsHeader}>
-          <div style={styles.recentLotsTitle}>
-            <span>🚀 Recently Issued Lots (Last 24 Hours)</span>
-            <span style={styles.recentLotsBadge}>
-              {recentLots.length} Lots
-            </span>
-          </div>
-          <div style={{ fontSize: '14px', color: '#7f8c8d' }}>
-            Total Pieces: {recentLots.reduce((sum, item) => sum + item.totalPcs, 0).toLocaleString()}
-          </div>
+          <Link to="/dashboard" style={{ display: "flex", alignItems: "center", gap: "10px", textDecoration: "none" }}>
+            <span style={{ fontSize: "1.6rem" }}>📦</span>
+            <div>
+              <div style={{ fontSize: "1.05rem", fontWeight: 900, color: "#0f172a", letterSpacing: "-0.3px", display: "flex", alignItems: "center", gap: "6px" }}>
+                Factory Suite Pro <span style={{ background: "#dcfce7", color: "#15803d", fontSize: "0.68rem", fontWeight: 800, padding: "2px 6px", borderRadius: "4px" }}>LIVE</span>
+              </div>
+              <div style={{ fontSize: "0.72rem", color: "#64748b", fontWeight: 600 }}>Issue to Packing Command Center</div>
+            </div>
+          </Link>
         </div>
 
-        {recentLots.length === 0 ? (
-          <div style={styles.emptyRecentLots}>
-            <div style={{ fontSize: '64px', marginBottom: '20px', opacity: '0.3' }}>⏰</div>
-            <div style={{ fontSize: '18px', fontWeight: '600', marginBottom: '10px' }}>
-              No recently issued lots in the last 24 hours
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <Link to="/dashboard" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "#0f766e",
+            color: "#ffffff",
+            padding: "7px 14px",
+            borderRadius: "8px",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            textDecoration: "none"
+          }}>
+            🏢 Dashboard
+          </Link>
+          <Link to="/lot-logs" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "#f1f5f9",
+            color: "#334155",
+            padding: "7px 14px",
+            borderRadius: "8px",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            textDecoration: "none"
+          }}>
+            📋 Lot Logs
+          </Link>
+          <Link to="/production-flowchart" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "#f1f5f9",
+            color: "#334155",
+            padding: "7px 14px",
+            borderRadius: "8px",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            textDecoration: "none"
+          }}>
+            🗺️ Flow Poster
+          </Link>
+          <Link to="/lot-timeline" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "#f1f5f9",
+            color: "#334155",
+            padding: "7px 14px",
+            borderRadius: "8px",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            textDecoration: "none"
+          }}>
+            🚚 Lot Tracker
+          </Link>
+          {currentUser && (
+            <button
+              onClick={handleLogout}
+              style={{
+                background: "#fee2e2",
+                border: "1px solid #fca5a5",
+                color: "#dc2626",
+                padding: "7px 14px",
+                borderRadius: "8px",
+                fontSize: "0.82rem",
+                fontWeight: 700,
+                cursor: "pointer"
+              }}
+            >
+              🚪 Logout
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* Main Container */}
+      <main style={{ padding: "24px 32px 60px 32px", maxWidth: "100%", boxSizing: "border-box" }}>
+        {/* Header Banner */}
+        <div style={{
+          background: "linear-gradient(135deg, #0f766e 0%, #0d9488 40%, #14b8a6 100%)",
+          borderRadius: "20px",
+          padding: "26px 32px",
+          marginBottom: "24px",
+          border: "1px solid rgba(255, 255, 255, 0.12)",
+          boxShadow: "0 16px 32px -10px rgba(15, 118, 110, 0.3)",
+          color: "#ffffff",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "20px"
+        }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: "1.85rem", fontWeight: 900, letterSpacing: "-0.5px", display: "flex", alignItems: "center", gap: "10px" }}>
+              <span>📦</span> ISSUE TO PACKING DASHBOARD
+            </h1>
+            <p style={{ margin: "6px 0 0 0", color: "#ccfbf1", fontSize: "0.92rem", fontWeight: 500 }}>
+              Live stitching-to-packing floor transfers, brand assignments & supervisor logs
+            </p>
+            {lastUpdated && (
+              <div style={{ color: "#99f6e4", fontSize: "0.76rem", marginTop: "6px", fontWeight: 600 }}>
+                Synced: {lastUpdated}
+              </div>
+            )}
+          </div>
+
+          {/* KPI Stat Cards */}
+          <div style={{ display: "flex", gap: "14px", flexWrap: "wrap" }}>
+            <div style={{
+              background: "rgba(255, 255, 255, 0.12)",
+              backdropFilter: "blur(10px)",
+              padding: "10px 18px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255, 255, 255, 0.2)",
+              textAlign: "center",
+              minWidth: "100px"
+            }}>
+              <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#ffffff", lineHeight: 1.1 }}>
+                {analytics.totalRecords.toLocaleString()}
+              </div>
+              <div style={{ fontSize: "0.68rem", color: "#ccfbf1", fontWeight: 800, textTransform: "uppercase", marginTop: "2px" }}>
+                Total Records
+              </div>
             </div>
-            <div style={{ fontSize: '14px', color: '#95a5a6' }}>
-              New lots issued within 24 hours will appear here
+
+            {/* <div style={{
+              background: "rgba(255, 255, 255, 0.12)",
+              backdropFilter: "blur(10px)",
+              padding: "10px 18px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255, 255, 255, 0.2)",
+              textAlign: "center",
+              minWidth: "100px"
+            }}>
+              <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#fef08a", lineHeight: 1.1 }}>
+                {analytics.totalPCS.toLocaleString()}
+              </div>
+              <div style={{ fontSize: "0.68rem", color: "#ccfbf1", fontWeight: 800, textTransform: "uppercase", marginTop: "2px" }}>
+                Total Pieces
+              </div>
+            </div> */}
+
+            <div style={{
+              background: "rgba(255, 255, 255, 0.12)",
+              backdropFilter: "blur(10px)",
+              padding: "10px 18px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255, 255, 255, 0.2)",
+              textAlign: "center",
+              minWidth: "100px"
+            }}>
+              <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#ffffff", lineHeight: 1.1 }}>
+                {analytics.uniqueLots}
+              </div>
+              <div style={{ fontSize: "0.68rem", color: "#ccfbf1", fontWeight: 800, textTransform: "uppercase", marginTop: "2px" }}>
+                Active Lots
+              </div>
+            </div>
+
+            <div style={{
+              background: "rgba(255, 255, 255, 0.12)",
+              backdropFilter: "blur(10px)",
+              padding: "10px 18px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255, 255, 255, 0.2)",
+              textAlign: "center",
+              minWidth: "100px"
+            }}>
+              <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#ffffff", lineHeight: 1.1 }}>
+                {analytics.supervisorsCount}
+              </div>
+              <div style={{ fontSize: "0.68rem", color: "#ccfbf1", fontWeight: 800, textTransform: "uppercase", marginTop: "2px" }}>
+                Supervisors
+              </div>
             </div>
           </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={styles.recentLotsTable}>
+        </div>
+
+        {/* Toolbar & Filters */}
+        <div style={{
+          background: "#ffffff",
+          borderRadius: "18px",
+          padding: "20px 24px",
+          marginBottom: "24px",
+          border: "1px solid #e2e8f0",
+          boxShadow: "0 8px 24px rgba(0, 0, 0, 0.03)"
+        }}>
+          {/* Search Box */}
+          <div style={{ position: "relative", marginBottom: "16px" }}>
+            <span style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: "#64748b", fontSize: "16px" }}>🔍</span>
+            <input
+              type="text"
+              placeholder="Search across lot numbers, garment types, styles, fabrics, brands, packing supervisors..."
+              value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
+              style={{
+                width: "100%",
+                padding: "11px 16px 11px 44px",
+                border: "1.5px solid #cbd5e1",
+                borderRadius: "10px",
+                fontSize: "0.88rem",
+                fontWeight: 600,
+                color: "#0f172a",
+                boxSizing: "border-box",
+                outline: "none"
+              }}
+            />
+          </div>
+
+          {/* Filter Dropdowns Grid */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "14px",
+            marginBottom: "16px"
+          }}>
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Lot Number
+              </label>
+              <select
+                value={filterLot}
+                onChange={(e) => { setFilterLot(e.target.value); setPage(1); }}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
+              >
+                <option value="">All Lot Numbers ({uniqueLots.length})</option>
+                {uniqueLots.map((lot) => (
+                  <option key={lot} value={lot}>{lot}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Packing Supervisor
+              </label>
+              <select
+                value={filterSupervisor}
+                onChange={(e) => { setFilterSupervisor(e.target.value); setPage(1); }}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
+              >
+                <option value="">All Supervisors ({uniqueSupervisors.length})</option>
+                {uniqueSupervisors.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Garment Type
+              </label>
+              <select
+                value={filterGarment}
+                onChange={(e) => { setFilterGarment(e.target.value); setPage(1); }}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
+              >
+                <option value="">All Garments ({uniqueGarments.length})</option>
+                {uniqueGarments.map((g) => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Brand
+              </label>
+              <select
+                value={filterBrand}
+                onChange={(e) => { setFilterBrand(e.target.value); setPage(1); }}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
+              >
+                <option value="">All Brands ({uniqueBrands.length})</option>
+                {uniqueBrands.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Fabric
+              </label>
+              <select
+                value={filterFabric}
+                onChange={(e) => { setFilterFabric(e.target.value); setPage(1); }}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
+              >
+                <option value="">All Fabrics ({uniqueFabrics.length})</option>
+                {uniqueFabrics.map((f) => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Action Buttons & Export Controls */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", borderTop: "1px solid #f1f5f9", paddingTop: "14px" }}>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                onClick={handleExportExcel}
+                style={{
+                  background: "#059669",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "9px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.84rem",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
+              >
+                📊 Export Excel (.xlsx)
+              </button>
+
+              <button
+                onClick={handleExportPDF}
+                style={{
+                  background: "#dc2626",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "9px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.84rem",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
+              >
+                📄 PDF Report (.pdf)
+              </button>
+
+              <button
+                onClick={handleRefresh}
+                style={{
+                  background: "#0f766e",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "9px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.84rem",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
+              >
+                🔄 {refreshing ? "Refreshing..." : "Refresh Live"}
+              </button>
+
+              <button
+                onClick={handleGoBack}
+                style={{
+                  background: "#334155",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "9px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.84rem",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
+                title="Go back to previous page"
+              >
+                ← Back
+              </button>
+
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  style={{
+                    background: "#f1f5f9",
+                    color: "#475569",
+                    border: "1px solid #cbd5e1",
+                    padding: "9px 16px",
+                    borderRadius: "8px",
+                    fontSize: "0.84rem",
+                    fontWeight: 800,
+                    cursor: "pointer"
+                  }}
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+
+            <div style={{ fontSize: "0.84rem", color: "#64748b", fontWeight: 700 }}>
+              Showing {filteredRows.length === 0 ? 0 : (page - 1) * pageSize + 1} - {Math.min(page * pageSize, filteredRows.length)} of {filteredRows.length} lots
+            </div>
+          </div>
+        </div>
+
+        {/* Data Table */}
+        <div style={{
+          background: "#ffffff",
+          borderRadius: "18px",
+          border: "1px solid #e2e8f0",
+          boxShadow: "0 8px 24px rgba(0, 0, 0, 0.03)",
+          overflow: "hidden"
+        }}>
+          <div style={{ overflowX: "auto", width: "100%" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "center", fontSize: "0.84rem" }}>
               <thead>
-                <tr>
-                  <th style={styles.recentTh}>Timestamp</th>
-                  <th style={styles.recentTh}>Lot Number</th>
-                  <th style={styles.recentTh}>Garment Type</th>
-                  <th style={styles.recentTh}>Fabric</th>
-                  <th style={styles.recentTh}>Style</th>
-                  <th style={styles.recentTh}>Packing Supervisor</th>
-                  <th style={styles.recentTh}>Packing Date</th>
-                  <th style={{...styles.recentTh, borderRight: 'none'}}>Total Pcs</th>
+                <tr style={{ background: "#0f766e", color: "#ffffff" }}>
+                  {DISPLAY_HEADERS.map((h) => (
+                    <th
+                      key={h}
+                      onClick={() => handleSort(h)}
+                      style={{
+                        padding: "12px 10px",
+                        fontWeight: 800,
+                        fontSize: "0.78rem",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.5px",
+                        borderRight: "1px solid rgba(255, 255, 255, 0.1)",
+                        cursor: "pointer",
+                        userSelect: "none",
+                        whiteSpace: "nowrap"
+                      }}
+                    >
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                        <span>{COLUMN_ICONS[h]}</span>
+                        <span>{h}</span>
+                        {sortConfig.key === h && (
+                          <span style={{ color: "#fef08a" }}>{sortConfig.direction === "asc" ? "▲" : "▼"}</span>
+                        )}
+                      </div>
+                    </th>
+                  ))}
                 </tr>
               </thead>
+
               <tbody>
-                {recentLots.map((item, index) => (
-                  <tr
-                    key={`recent-${index}`}
-                    style={{
-                      backgroundColor: index % 2 === 0 ? '#f8fff9' : '#f0f9f2',
-                      transition: 'background-color 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#e8f8ee'}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = index % 2 === 0 ? '#f8fff9' : '#f0f9f2';
-                    }}
-                  >
-                    <td style={styles.recentTd}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{
-                          width: '8px',
-                          height: '8px',
-                          background: '#2ecc71',
-                          borderRadius: '50%',
-                          animation: 'pulse 1.5s infinite'
-                        }}></div>
-                        {item.timestamp}
-                      </div>
-                    </td>
-                    <td style={styles.recentTd}>
-                      <strong style={{ color: '#2c3e50' }}>{item.lotNumber}</strong>
-                    </td>
-                    <td style={styles.recentTd}>{item.garmentType}</td>
-                    <td style={styles.recentTd}>{item.fabric}</td>
-                    <td style={styles.recentTd}>{item.style}</td>
-                    <td style={styles.recentTd}>
-                      <span style={{
-                        ...styles.button,
-                        padding: '6px 15px',
-                        background: 'linear-gradient(135deg, #e8f6ef 0%, #d1f2eb 100%)',
-                        color: '#27ae60',
-                        border: '1px solid #a3e4d7',
-                        fontSize: '12px',
-                        fontWeight: '600'
-                      }}>
-                        {item.packingSupervisor}
-                      </span>
-                    </td>
-                    <td style={styles.recentTd}>{item.packingDate}</td>
-                    <td style={{...styles.recentTd, borderRight: 'none'}}>
-                      <span style={{
-                        ...styles.button,
-                        padding: '6px 15px',
-                        background: 'linear-gradient(135deg, #d5f4e6 0%, #c8f7dc 100%)',
-                        color: '#229954',
-                        border: '1px solid #82e5aa',
-                        fontSize: '12px',
-                        fontWeight: '700'
-                      }}>
-                        {item.totalPcs.toLocaleString()}
-                      </span>
+                {loading ? (
+                  <tr>
+                    <td colSpan={DISPLAY_HEADERS.length} style={{ padding: "60px 20px", textAlign: "center" }}>
+                      <div style={{ fontSize: "2rem", marginBottom: "8px" }}>⏳</div>
+                      <div style={{ fontSize: "1rem", fontWeight: 800, color: "#0f766e" }}>{loadingMessage}</div>
+                      <div style={{ fontSize: "0.82rem", color: "#64748b" }}>Progress: {loadingProgress}%</div>
                     </td>
                   </tr>
-                ))}
+                ) : pagedRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={DISPLAY_HEADERS.length} style={{ padding: "60px 20px", textAlign: "center" }}>
+                      <div style={{ fontSize: "2.5rem", marginBottom: "8px" }}>📭</div>
+                      <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#0f172a" }}>No Issue to Packing Records Found</div>
+                      <p style={{ color: "#64748b", margin: "4px 0 14px 0" }}>Try clearing some filters or searching for another lot number.</p>
+                      {hasActiveFilters && (
+                        <button
+                          onClick={clearFilters}
+                          style={{
+                            background: "#0f766e",
+                            color: "#ffffff",
+                            border: "none",
+                            padding: "8px 18px",
+                            borderRadius: "8px",
+                            fontSize: "0.84rem",
+                            fontWeight: 700,
+                            cursor: "pointer"
+                          }}
+                        >
+                          Clear all filters
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ) : (
+                  pagedRows.map((row, idx) => {
+                    const serialNumber = (page - 1) * pageSize + idx + 1;
+                    const isEven = idx % 2 === 0;
+
+                    return (
+                      <tr
+                        key={`${row["Lot Number"]}-${idx}-${row.timestamp}`}
+                        style={{
+                          background: row._isRecent ? "#f0fdf4" : (isEven ? "#ffffff" : "#f8fafc"),
+                          borderBottom: "1px solid #e2e8f0",
+                          transition: "background-color 0.15s"
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f1f5f9"}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = row._isRecent ? "#f0fdf4" : (isEven ? "#ffffff" : "#f8fafc")}
+                      >
+                        {/* 1. Sr. No */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, color: "#64748b", borderRight: "1px solid #f1f5f9" }}>
+                          {serialNumber}
+                        </td>
+
+                        {/* 2. Lot Number */}
+                        <td style={{ padding: "10px 8px", fontWeight: 800, color: "#0f172a", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                            <span>{row["Lot Number"]}</span>
+                            {row._isRecent && (
+                              <span style={{
+                                background: "#dcfce7",
+                                color: "#15803d",
+                                border: "1px solid #86efac",
+                                fontSize: "0.65rem",
+                                fontWeight: 900,
+                                padding: "1px 5px",
+                                borderRadius: "4px"
+                              }}>
+                                NEW
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* 3. Garment Type */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#334155", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Garment Type"] || "—"}
+                        </td>
+
+                        {/* 4. Style */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#334155", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Style"] || "—"}
+                        </td>
+
+                        {/* 5. Fabric */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#334155", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Fabric"] || "—"}
+                        </td>
+
+                        {/* 6. Brand */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, color: "#0f172a", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Brand"] || "—"}
+                        </td>
+
+                        {/* 7. PCS */}
+                        <td style={{ padding: "10px 8px", fontWeight: 800, color: "#0f172a", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {(Number(row.PCS) || 0).toLocaleString()}
+                        </td>
+
+                        {/* 8. Section */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#475569", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Section"] || "—"}
+                        </td>
+
+                        {/* 9. Season */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#475569", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Season"] || "—"}
+                        </td>
+
+                        {/* 10. Party Name */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, color: "#0f172a", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Party Name"] || "—"}
+                        </td>
+
+                        {/* 11. Direct Stitching */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          <span style={{
+                            padding: "3px 8px",
+                            borderRadius: "6px",
+                            fontSize: "0.75rem",
+                            background: String(row["Direct Stitching"]).toLowerCase() === "yes" ? "#dbeafe" : "#f1f5f9",
+                            color: String(row["Direct Stitching"]).toLowerCase() === "yes" ? "#1d4ed8" : "#64748b",
+                            border: String(row["Direct Stitching"]).toLowerCase() === "yes" ? "1px solid #bfdbfe" : "1px solid #e2e8f0"
+                          }}>
+                            {row["Direct Stitching"] || "No"}
+                          </span>
+                        </td>
+
+                        {/* 12. Packing Supervisor */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, color: "#0f766e", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          <span style={{
+                            padding: "3px 10px",
+                            background: "#ccfbf1",
+                            color: "#0f766e",
+                            borderRadius: "12px",
+                            fontSize: "0.78rem"
+                          }}>
+                            {row["Packing Supervisor"] || "—"}
+                          </span>
+                        </td>
+
+                        {/* 13. Packing Date */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#0f172a", whiteSpace: "nowrap" }}>
+                          {row["Packing Date"] || "—"}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
-        )}
-      </div>
 
-      {/* Filters Section */}
-      <div style={styles.filtersContainer}>
-        <div style={styles.filterTitle}>
-          <span>🔍 Filter Data</span>
-          <div style={{ fontSize: '14px', color: '#7f8c8d', fontWeight: 'normal', marginLeft: '10px' }}>
-            Use dropdowns to filter records
-          </div>
-        </div>
-        
-        <div style={styles.filterGrid}>
-          <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>
-              <span>📦 Lot Number</span>
-            </label>
-            <select
-              name="lotNumber"
-              value={filters.lotNumber}
-              onChange={handleFilterChange}
-              style={styles.filterSelect}
-              onFocus={(e) => Object.assign(e.target.style, styles.filterSelectFocus)}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#e9ecef';
-                e.target.style.background = '#f8f9fa';
-                e.target.style.boxShadow = 'none';
-              }}
-            >
-              <option value="">All Lot Numbers</option>
-              {dropdownOptions.lotNumbers.map((lot, index) => (
-                <option key={index} value={lot}>{lot}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>
-              <span>👕 Garment Type</span>
-            </label>
-            <select
-              name="garmentType"
-              value={filters.garmentType}
-              onChange={handleFilterChange}
-              style={styles.filterSelect}
-              onFocus={(e) => Object.assign(e.target.style, styles.filterSelectFocus)}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#e9ecef';
-                e.target.style.background = '#f8f9fa';
-                e.target.style.boxShadow = 'none';
-              }}
-            >
-              <option value="">All Garment Types</option>
-              {dropdownOptions.garmentTypes.map((type, index) => (
-                <option key={index} value={type}>{type}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>
-              <span>🧵 Fabric</span>
-            </label>
-            <select
-              name="fabric"
-              value={filters.fabric}
-              onChange={handleFilterChange}
-              style={styles.filterSelect}
-              onFocus={(e) => Object.assign(e.target.style, styles.filterSelectFocus)}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#e9ecef';
-                e.target.style.background = '#f8f9fa';
-                e.target.style.boxShadow = 'none';
-              }}
-            >
-              <option value="">All Fabrics</option>
-              {dropdownOptions.fabrics.map((fabric, index) => (
-                <option key={index} value={fabric}>{fabric}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>
-              <span>👤 Packing Supervisor</span>
-            </label>
-            <select
-              name="packingSupervisor"
-              value={filters.packingSupervisor}
-              onChange={handleFilterChange}
-              style={styles.filterSelect}
-              onFocus={(e) => Object.assign(e.target.style, styles.filterSelectFocus)}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#e9ecef';
-                e.target.style.background = '#f8f9fa';
-                e.target.style.boxShadow = 'none';
-              }}
-            >
-              <option value="">All Supervisors</option>
-              {dropdownOptions.packingSupervisors.map((supervisor, index) => (
-                <option key={index} value={supervisor}>{supervisor}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>
-              <span>📅 Start Date</span>
-            </label>
-            <input
-              type="date"
-              name="startDate"
-              value={filters.startDate}
-              onChange={handleFilterChange}
-              style={{ ...styles.filterSelect, backgroundImage: 'none' }}
-              onFocus={(e) => Object.assign(e.target.style, styles.filterSelectFocus)}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#e9ecef';
-                e.target.style.background = '#f8f9fa';
-                e.target.style.boxShadow = 'none';
-              }}
-            />
-          </div>
-          
-          <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>
-              <span>📅 End Date</span>
-            </label>
-            <input
-              type="date"
-              name="endDate"
-              value={filters.endDate}
-              onChange={handleFilterChange}
-              style={{ ...styles.filterSelect, backgroundImage: 'none' }}
-              onFocus={(e) => Object.assign(e.target.style, styles.filterSelectFocus)}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#e9ecef';
-                e.target.style.background = '#f8f9fa';
-                e.target.style.boxShadow = 'none';
-              }}
-            />
-          </div>
-        </div>
-        
-        <div style={styles.filterActions}>
-          <button
-            style={{ ...styles.button, ...styles.warningButton }}
-            onClick={resetFilters}
-            onMouseEnter={(e) => Object.assign(e.target.style, styles.buttonHover)}
-            onMouseLeave={(e) => {
-              e.target.style.transform = 'translateY(0)';
-              e.target.style.boxShadow = 'none';
-            }}
-          >
-            🗑️ Clear All Filters
-          </button>
-        </div>
-      </div>
+          {/* Pagination Footer */}
+          <div style={{
+            padding: "16px 24px",
+            background: "#f8fafc",
+            borderTop: "1px solid #e2e8f0",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "12px"
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "0.82rem", color: "#64748b", fontWeight: 600 }}>Rows per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                style={{ padding: "5px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 700 }}
+              >
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
 
-      {/* Error Display */}
-      {error && (
-        <div style={styles.errorAlert}>
-          <div style={{ fontSize: '24px', marginBottom: '15px' }}>⚠️</div>
-          <div style={{ fontSize: '18px', fontWeight: '600', marginBottom: '10px', color: '#c0392b' }}>
-            {error}
-          </div>
-          <button
-            style={{ ...styles.button, ...styles.primaryButton, marginTop: '15px' }}
-            onClick={fetchData}
-          >
-            Try Again
-          </button>
-        </div>
-      )}
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <button
+                onClick={() => setPage(1)}
+                disabled={page === 1}
+                style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: page === 1 ? "#f1f5f9" : "#ffffff", cursor: page === 1 ? "not-allowed" : "pointer", fontWeight: 700, fontSize: "0.8rem" }}
+              >
+                « First
+              </button>
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: page === 1 ? "#f1f5f9" : "#ffffff", cursor: page === 1 ? "not-allowed" : "pointer", fontWeight: 700, fontSize: "0.8rem" }}
+              >
+                ‹ Prev
+              </button>
 
-      {/* Main Data Table */}
-      <div style={styles.tableContainer}>
-        <div style={styles.tableHeader}>
-          <h3 style={styles.tableTitle}>📋 All Issue to Packing Records</h3>
-          <div style={{ fontSize: '14px', color: '#7f8c8d', marginTop: '5px' }}>
-            Showing {filteredData.length} of {data.length} records • {stats.totalPcs.toLocaleString()} total pieces
+              <span style={{ padding: "6px 14px", fontSize: "0.84rem", fontWeight: 800, color: "#0f766e" }}>
+                Page {page} of {totalPages}
+              </span>
+
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: page === totalPages ? "#f1f5f9" : "#ffffff", cursor: page === totalPages ? "not-allowed" : "pointer", fontWeight: 700, fontSize: "0.8rem" }}
+              >
+                Next ›
+              </button>
+              <button
+                onClick={() => setPage(totalPages)}
+                disabled={page === totalPages}
+                style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: page === totalPages ? "#f1f5f9" : "#ffffff", cursor: page === totalPages ? "not-allowed" : "pointer", fontWeight: 700, fontSize: "0.8rem" }}
+              >
+                Last »
+              </button>
+            </div>
           </div>
         </div>
-        
-        {filteredData.length === 0 && !loading && !error ? (
-          <div style={styles.emptyState}>
-            <div style={{ fontSize: '64px', marginBottom: '20px', opacity: '0.3' }}>📭</div>
-            <div style={{ fontSize: '18px', fontWeight: '600', marginBottom: '10px' }}>
-              No records found matching your filters
-            </div>
-            <div style={{ fontSize: '14px', color: '#95a5a6', marginBottom: '20px' }}>
-              Try adjusting your filters or check the data source
-            </div>
-            <button
-              style={{ ...styles.button, ...styles.infoButton }}
-              onClick={resetFilters}
-            >
-              Reset All Filters
-            </button>
-          </div>
-        ) : (
-          <>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>Timestamp</th>
-                    <th style={styles.th}>Lot Number</th>
-                    <th style={styles.th}>Garment Type</th>
-                    <th style={styles.th}>Fabric</th>
-                    <th style={styles.th}>Style</th>
-                    <th style={styles.th}>Packing Supervisor</th>
-                    <th style={styles.th}>Packing Date</th>
-                    <th style={{...styles.th, borderRight: 'none'}}>Total Pcs</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredData.map((item, index) => (
-                    <tr
-                      key={index}
-                      style={item.isRecent ? {
-                        ...styles.recentLotRow,
-                        backgroundColor: index % 2 === 0 ? '#f8fff9' : '#f0f9f2'
-                      } : {
-                        backgroundColor: index % 2 === 0 ? '#f8f9fa' : 'white'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#e8f4fc'}
-                      onMouseLeave={(e) => {
-                        if (item.isRecent) {
-                          e.currentTarget.style.backgroundColor = index % 2 === 0 ? '#f8fff9' : '#f0f9f2';
-                        } else {
-                          e.currentTarget.style.backgroundColor = index % 2 === 0 ? '#f8f9fa' : 'white';
-                        }
-                      }}
-                    >
-                      <td style={styles.td}>{item.timestamp}</td>
-                      <td style={styles.td}>
-                        <strong style={{ color: '#2c3e50' }}>{item.lotNumber}</strong>
-                        {item.isRecent && <span style={styles.recentBadge}>RECENT</span>}
-                      </td>
-                      <td style={styles.td}>{item.garmentType}</td>
-                      <td style={styles.td}>{item.fabric}</td>
-                      <td style={styles.td}>{item.style}</td>
-                      <td style={styles.td}>
-                        <span style={{
-                          ...styles.button,
-                          padding: '6px 15px',
-                          background: 'linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)',
-                          color: '#1565c0',
-                          border: '1px solid #90caf9',
-                          fontSize: '12px',
-                          fontWeight: '600'
-                        }}>
-                          {item.packingSupervisor}
-                        </span>
-                      </td>
-                      <td style={styles.td}>{item.packingDate}</td>
-                      <td style={{...styles.td, borderRight: 'none'}}>
-                        <span style={{
-                          ...styles.button,
-                          padding: '6px 15px',
-                          background: item.totalPcs > 500 
-                            ? 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)'
-                            : item.totalPcs > 300
-                            ? 'linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%)'
-                            : 'linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%)',
-                          color: item.totalPcs > 500 ? '#2e7d32' : 
-                                item.totalPcs > 300 ? '#f57c00' : '#c62828',
-                          border: item.totalPcs > 500 ? '1px solid #a5d6a7' : 
-                                 item.totalPcs > 300 ? '1px solid #ffcc80' : '1px solid #ef9a9a',
-                          fontSize: '12px',
-                          fontWeight: '700'
-                        }}>
-                          {item.totalPcs.toLocaleString()}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            
-            <div style={styles.tableFooter}>
-              <div style={{ fontSize: '14px', color: '#6c757d' }}>
-                Showing {filteredData.length} records • {stats.totalPcs.toLocaleString()} total pieces
-              </div>
-              <div style={{ fontSize: '14px', color: '#2c3e50', fontWeight: '600' }}>
-                Recent Lots: {recentLots.length}
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      <style>
-        {`
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-          
-          @keyframes pulse {
-            0% { transform: scale(0.95); opacity: 0.7; }
-            50% { transform: scale(1.05); opacity: 1; }
-            100% { transform: scale(0.95); opacity: 0.7; }
-          }
-        `}
-      </style>
+      </main>
     </div>
   );
-};
-
-export default IssueToPacking;
+}

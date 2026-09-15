@@ -6,7 +6,11 @@ export const REMARKS_SPREADSHEET_ID =
 
 export const SHEET_TABS = {
   EMB: 'EMB REMARKS',
-  PRINT: 'PRINT REMARKS'
+  PRINT: 'PRINT REMARKS',
+  PACKING: 'PACKING REMARKS',
+  PACKING_ALLOTED: 'PACKING ALLOTED REMARKS',
+  PENDING_STITCHING: 'PENDING STITCHING REMARKS',
+  CUTTING: 'CUTTING REMARKS'
 };
 
 export const WEBHOOK_URL =
@@ -14,17 +18,27 @@ export const WEBHOOK_URL =
   'https://script.google.com/macros/s/AKfycbyMDwX4P8mUmpkodGdoHQQvFMqW4z0LWvqeWFByh4pAF3GFDXrlLpGV9M7dHqHLB-bZ/exec';
 
 /**
- * Fetch remarks 100% directly from Google Spreadsheet '1ZAAVyKqAqQkBvwFv19pu1WT3g227XJ8ZpM_JSb_nMd8'.
- * NO LOCALSTORAGE. Returns pure Google Sheet data keyed by Lot Number.
+ * Fetch remarks directly from Google Spreadsheet and fallback to localStorage cache.
+ * Returns pure remark data keyed by Lot Number.
  */
 export const fetchRemarksForTab = async (tabType) => {
-  const tabName = tabType === 'PRINT' ? SHEET_TABS.PRINT : SHEET_TABS.EMB;
-  const sheetMap = {};
+  const tabName = SHEET_TABS[tabType] || tabType || 'PACKING REMARKS';
+  const cacheKey = `fs_remarks_${tabType || 'PACKING'}`;
+  let sheetMap = {};
+
+  // Try loading from localStorage cache first for instant render
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      sheetMap = JSON.parse(cached) || {};
+    }
+  } catch (e) {}
 
   try {
     const res = await fetchSheetDataFromBackend(REMARKS_SPREADSHEET_ID, `${tabName}!A:H`);
     if (res && res.ok && Array.isArray(res.values) && res.values.length > 1) {
       const [headers, ...rows] = res.values;
+      const freshMap = {};
 
       rows.forEach((row) => {
         const lotNumber = String(row[0] || '').trim();
@@ -47,8 +61,13 @@ export const fetchRemarksForTab = async (tabType) => {
           history = [{ text: latestRemark, timestamp: updatedAt || new Date().toLocaleString() }];
         }
 
-        sheetMap[lotNumber] = history;
+        freshMap[lotNumber] = history;
       });
+
+      sheetMap = { ...sheetMap, ...freshMap };
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(sheetMap));
+      } catch (e) {}
     }
   } catch (err) {
     console.warn(`Could not fetch remarks sheet data for ${tabName}:`, err.message);
@@ -83,7 +102,8 @@ export const saveRemarkForLot = async ({
     minute: '2-digit'
   });
 
-  const tabName = tabType === 'PRINT' ? SHEET_TABS.PRINT : SHEET_TABS.EMB;
+  const tabName = SHEET_TABS[tabType] || tabType || 'PACKING REMARKS';
+  const cacheKey = `fs_remarks_${tabType || 'PACKING'}`;
 
   // 1. Fetch current Google Sheet history for this lot
   const currentSheetMap = await fetchRemarksForTab(tabType);
@@ -91,6 +111,12 @@ export const saveRemarkForLot = async ({
 
   // Append new remark to single lot history array
   const updatedHistory = [...existingHistory, { text: cleanText, timestamp: nowStr }];
+
+  // Immediately update local cache
+  try {
+    const updatedMap = { ...currentSheetMap, [cleanLot]: updatedHistory };
+    localStorage.setItem(cacheKey, JSON.stringify(updatedMap));
+  } catch (e) {}
 
   const payload = {
     spreadsheetId: REMARKS_SPREADSHEET_ID,

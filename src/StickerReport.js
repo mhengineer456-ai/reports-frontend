@@ -86,20 +86,20 @@ const HEADERS = () => {
   return [
     'Sr.No',
     'Lot Number',
-    'Fabric',
     'Garment Type',
     'Style',
+    'Fabric',
     'BRAND',
-    'PARTY NAME',
-    'Supervisor',
-    'Season',
+    'Total PCS',
     'M/W/K',
+    'Season',
+    'PARTY NAME',
     'Direct Stitching',
+    'Supervisor',
     'Date of Issue',
     'Stitching Days',
     'Emb/Print Date',
     'WIP Status',
-    'Total PCS',
     'Completion Date',
     'Status',
     'Sticker' // 19th column
@@ -1367,35 +1367,31 @@ const downloadExcel = useCallback(async () => {
 const worksheetData = [
   HEADERS(), // Use the dynamic HEADERS function
   ...exportData.map((item, index) => {
-    const rowData = [
-      index + 1,
-      item.lotNumber || '',
-      item.fabric || '',
-      item.garmentType || '',
-      item.style || '',
-      item.brand || '',
-      item.partyName || '',
-      item.supervisor || '',
-      item.season || '',
-      item.mwk || '',
-      item.directStitching || '',
-      formatDateToDDMMYY(item.dateOfIssue), // Date of Issue
-      calculateStitchingDays(item.dateOfIssue),
-      getEmbPrintDate(item.challanHistory),
-    ];
-    
     // WIP Status - Check if completed to show "Done"
     const isCompleted = isLotCompleted(item.completedStatus);
     const wipValue = isCompleted ? 'Done' : getLatestWipRemarks(item.wipStatus, false);
-    rowData.push(wipValue);
     
-    // Add remaining columns
-    rowData.push(
+    const rowData = [
+      index + 1,
+      item.lotNumber || '',
+      item.garmentType || '',
+      item.style || '',
+      item.fabric || '',
+      item.brand || '',
       item.totalPCS || 0,
+      item.mwk || '',
+      item.season || '',
+      item.partyName || '',
+      item.directStitching || '',
+      item.supervisor || '',
+      formatDateToDDMMYY(item.dateOfIssue), // Date of Issue
+      calculateStitchingDays(item.dateOfIssue),
+      getEmbPrintDate(item.challanHistory),
+      wipValue,
       getCompletionDateFormatted(item.completedStatus) || '',
       isLotCompleted(item.completedStatus) ? 'Completed' : 'Pending',
-      item.sticker || '' // ADDED: Sticker value
-    );
+      item.sticker || '' // Sticker value
+    ];
     
     return rowData;
   })
@@ -1803,44 +1799,42 @@ const downloadPDF = useCallback(async () => {
 const PDF_HEADERS = [
   'Sr',
   'Lot No',
-  'Fabric',
   'Garment',
   'Style',
+  'Fabric',
   'Brand',
-  'Party',
-  'Supervisor',
-  'Season',
+  'Total PCS',
   'M/W/K',
+  'Season',
+  'Party',
   'Direct',
+  'Supervisor',
   'Issue Date',
   'Days',
   'Emb/Print',
   'WIP Status',
-  'Total PCS',
   'Complete Date',
   'Lot Status',
-  'Sticker'  // ADDED: Sticker column
+  'Sticker'  // Sticker column
 ];
-    // Optimized column widths for better fit
-   // Optimized column widths for better fit
-// Optimized column widths for better fit
+
 const columnWidths = {
   0: 9,    // Sr
   1: 18,   // Lot No
-  2: 29,   // Fabric
-  3: 30,   // Garment
-  4: 32,   // Style
+  2: 30,   // Garment
+  3: 32,   // Style
+  4: 29,   // Fabric
   5: 32,   // Brand
-  6: 16,   // Party
-  7: 30,   // Supervisor
+  6: 25,   // Total PCS
+  7: 12,   // M/W/K
   8: 9,    // Season
-  9: 12,   // M/W/K
+  9: 16,   // Party
   10: 12,  // Direct
-  11: 20,  // Issue Date
-  12: 15,  // Days
-  13: 20,  // Emb/Print
-  14: 30,  // WIP Status - REDUCED from 50 to 30
-  15: 25,  // Total PCS
+  11: 30,  // Supervisor
+  12: 20,  // Issue Date
+  13: 15,  // Days
+  14: 20,  // Emb/Print
+  15: 30,  // WIP Status
   16: 25,  // Complete Date
   17: 20,  // Lot Status
   18: 20   // Sticker
@@ -1862,9 +1856,6 @@ const columnWidths = {
     ];
 
     // Prepare table body with color coding
-    // Prepare table body with color coding
-// Prepare table body with color coding
-// Prepare table body with color coding
 const body = exportData.map((item, rowIndex) => {
   const stitchingDays = calculateStitchingDays(item.dateOfIssue);
   const stitchingDaysColor = getStitchingDaysColor(stitchingDays);
@@ -1943,7 +1934,7 @@ const body = exportData.map((item, rowIndex) => {
   
   // Build row cells
   const rowCells = [
-    // Sr.No
+    // 0. Sr.No
     {
       content: (rowIndex + 1).toString(),
       styles: {
@@ -1956,7 +1947,7 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
     
-    // Lot No
+    // 1. Lot No
     {
       content: item.lotNumber || 'N/A',
       styles: {
@@ -1970,9 +1961,9 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
 
-    // Fabric
+    // 2. Garment
     {
-      content: item.fabric || 'N/A',
+      content: item.garmentType || 'N/A',
       styles: {
         cellWidth: columnWidths[2],
         fontSize: 11,
@@ -1982,9 +1973,9 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
 
-    // Garment
+    // 3. Style
     {
-      content: item.garmentType || 'N/A',
+      content: item.style || 'N/A',
       styles: {
         cellWidth: columnWidths[3],
         fontSize: 11,
@@ -1994,9 +1985,9 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
 
-    // Style
+    // 4. Fabric
     {
-      content: item.style || 'N/A',
+      content: item.fabric || 'N/A',
       styles: {
         cellWidth: columnWidths[4],
         fontSize: 11,
@@ -2006,7 +1997,7 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
 
-    // Brand
+    // 5. Brand
     {
       content: item.brand || 'N/A',
       styles: {
@@ -2017,36 +2008,40 @@ const body = exportData.map((item, rowIndex) => {
         cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
       }
     },
-    
-    // Party
+
+    // 6. Total PCS
     {
-      content: abbreviatedParty,
+      content: totalPCS > 0 ? totalPCS.toLocaleString() : 'N/A',
       styles: {
         cellWidth: columnWidths[6],
-        fontSize: 10,
+        fontSize: 11,
         halign: 'center',
         fontStyle: 'bold',
         fillColor: rowBgColor,
-        textColor: partyColor,
+        textColor: pcsColor,
         cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
       }
     },
     
-    // Supervisor
+    // 7. M/W/K - abbreviated
     {
-      content: truncateText(item.supervisor || 'N/A', 15),
+      content: abbreviateMWKForPDF(item.mwk),
       styles: {
         cellWidth: columnWidths[7],
         fontSize: 12,
         halign: 'center',
         fontStyle: 'bold',
         fillColor: rowBgColor,
-        textColor: [59, 130, 246],
+        textColor: abbreviateMWKForPDF(item.mwk) === 'M' ? [59, 130, 246] :  // Blue for MENS
+                   abbreviateMWKForPDF(item.mwk) === 'W' ? [239, 68, 68] :   // Red for WOMENS
+                   abbreviateMWKForPDF(item.mwk) === 'K' ? [16, 185, 129] :  // Green for KIDS
+                   abbreviateMWKForPDF(item.mwk) === 'G' ? [168, 85, 247] :  // Purple for GIRLS
+                   [100, 100, 100],                                           // Gray for others
         cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
       }
     },
-    
-    // Season
+
+    // 8. Season
     {
       content: abbreviatedSeason,
       styles: {
@@ -2062,26 +2057,22 @@ const body = exportData.map((item, rowIndex) => {
         cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
       }
     },
-    
-    // M/W/K - abbreviated
+
+    // 9. Party
     {
-      content: abbreviateMWKForPDF(item.mwk),
+      content: abbreviatedParty,
       styles: {
         cellWidth: columnWidths[9],
-        fontSize: 12,
+        fontSize: 10,
         halign: 'center',
         fontStyle: 'bold',
         fillColor: rowBgColor,
-        textColor: abbreviateMWKForPDF(item.mwk) === 'M' ? [59, 130, 246] :  // Blue for MENS
-                   abbreviateMWKForPDF(item.mwk) === 'W' ? [239, 68, 68] :   // Red for WOMENS
-                   abbreviateMWKForPDF(item.mwk) === 'K' ? [16, 185, 129] :  // Green for KIDS
-                   abbreviateMWKForPDF(item.mwk) === 'G' ? [168, 85, 247] :  // Purple for GIRLS
-                   [100, 100, 100],                                           // Gray for others
+        textColor: partyColor,
         cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
       }
     },
-    
-    // Direct
+
+    // 10. Direct
     {
       content: truncateText(item.directStitching || 'N/A', 8),
       styles: {
@@ -2092,12 +2083,26 @@ const body = exportData.map((item, rowIndex) => {
         cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
       }
     },
-    
-    // Issue Date
+
+    // 11. Supervisor
+    {
+      content: truncateText(item.supervisor || 'N/A', 15),
+      styles: {
+        cellWidth: columnWidths[11],
+        fontSize: 12,
+        halign: 'center',
+        fontStyle: 'bold',
+        fillColor: rowBgColor,
+        textColor: [59, 130, 246],
+        cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
+      }
+    },
+
+    // 12. Issue Date
     {
       content: truncateText(issueDate, 12),
       styles: {
-        cellWidth: columnWidths[11],
+        cellWidth: columnWidths[12],
         fontSize: 11,
         halign: 'center',
         fillColor: rowBgColor,
@@ -2107,11 +2112,11 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
     
-    // Days
+    // 13. Days
     {
       content: stitchingDays.toString(),
       styles: {
-        cellWidth: columnWidths[12],
+        cellWidth: columnWidths[13],
         fontSize: 11,
         halign: 'center',
         fontStyle: 'bold',
@@ -2121,11 +2126,11 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
     
-    // Emb/Print - formatted date
+    // 14. Emb/Print - formatted date
     {
       content: truncateText(formattedEmbPrintDate, 14),
       styles: {
-        cellWidth: columnWidths[13],
+        cellWidth: columnWidths[14],
         fontSize: 11,
         halign: 'center',
         fillColor: rowBgColor,
@@ -2135,11 +2140,11 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
     
-    // WIP Status
+    // 15. WIP Status
     {
       content: wipDisplayValue || 'N/A',
       styles: {
-        cellWidth: columnWidths[14],
+        cellWidth: columnWidths[15],
         fontSize: 10,
         halign: 'center',
         fillColor: rowBgColor,
@@ -2148,22 +2153,8 @@ const body = exportData.map((item, rowIndex) => {
         cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
       }
     },
-
-    // Total PCS
-    {
-      content: totalPCS > 0 ? totalPCS.toLocaleString() : 'N/A',
-      styles: {
-        cellWidth: columnWidths[15],
-        fontSize: 11,
-        halign: 'center',
-        fontStyle: 'bold',
-        fillColor: rowBgColor,
-        textColor: pcsColor,
-        cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
-      }
-    },
     
-    // Complete Date - formatted date
+    // 16. Complete Date - formatted date
     {
       content: truncateText(formattedCompletionDate, 14),
       styles: {
@@ -2177,7 +2168,7 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
     
-    // Lot Status
+    // 17. Lot Status
     {
       content: truncateText(lotStatus, 10),
       styles: {
@@ -2191,7 +2182,7 @@ const body = exportData.map((item, rowIndex) => {
       }
     },
     
-    // ADDED: Sticker column
+    // 18. Sticker column
     {
       content: truncateText(item.sticker || 'N/A', 15, 'sticker'),
       styles: {
@@ -3275,17 +3266,15 @@ PDF_HEADERS.forEach((_, index) => {
         <td className="text-center">
           <span className="lot-number">{item.lotNumber || 'N/A'}</span>
         </td>
-        <td className="text-center">{item.fabric || 'N/A'}</td>
         <td className="text-center">{item.garmentType || 'N/A'}</td>
         <td className="text-center">{item.style || 'N/A'}</td>
+        <td className="text-center">{item.fabric || 'N/A'}</td>
         <td className="text-center">{item.brand || 'N/A'}</td>
-        <td className="text-center">{item.partyName || 'N/A'}</td>
-        <td className="text-center">
-          <span className="supervisor-name" style={{ color: '#3b82f6', fontWeight: 'bold' }}>
-            {item.supervisor || 'N/A'}
+        <td className="text-center font-semibold">
+          <span className="total-pcs">
+            {item.totalPCS > 0 ? item.totalPCS.toLocaleString() : 'N/A'}
           </span>
         </td>
-        <td className="text-center">{item.season || 'N/A'}</td>
         <td className="text-center">
           <span className="mwk-abbreviation" style={{
             fontWeight: 'bold',
@@ -3297,7 +3286,14 @@ PDF_HEADERS.forEach((_, index) => {
             {abbreviateMWK(item.mwk)}
           </span>
         </td>
+        <td className="text-center">{item.season || 'N/A'}</td>
+        <td className="text-center">{item.partyName || 'N/A'}</td>
         <td className="text-center">{item.directStitching || 'N/A'}</td>
+        <td className="text-center">
+          <span className="supervisor-name" style={{ color: '#3b82f6', fontWeight: 'bold' }}>
+            {item.supervisor || 'N/A'}
+          </span>
+        </td>
         
         {/* Date of Issue */}
         <td className="text-center">
@@ -3330,12 +3326,6 @@ PDF_HEADERS.forEach((_, index) => {
             fontWeight: isCompleted ? 'bold' : '500'
           }}>
             {isCompleted ? 'Done' : getLatestWipRemarks(item.wipStatus, false)}
-          </span>
-        </td>
-        
-        <td className="text-center font-semibold">
-          <span className="total-pcs">
-            {item.totalPCS > 0 ? item.totalPCS.toLocaleString() : 'N/A'}
           </span>
         </td>
         <td className="text-center">

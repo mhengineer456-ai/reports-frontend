@@ -775,20 +775,21 @@ const PackingCompleted = () => {
       const rows = displayData.map((item, idx) => ({
         '#': idx + 1,
         'Lot Number': item.lotNumber,
-        'Party Name': item.partyName,
-        'Fabric': item.fabric,
-        'Brand': item.brand,
         'Garment Type': item.garmentType,
         'Style': item.style,
+        'Fabric': item.fabric,
+        'Brand': item.brand,
+        'Total PCS': item.totalPcs,
+        'M/W/K': item.mwk,
+        'Season': item.season,
+        'Party Name': item.partyName,
+        'Direct Stitching': item.directStitching || '-',
         'Packing Supervisor': item.supervisor,
         'Date of Issue': item.dateOfIssue,
-        'Total PCS': item.totalPcs,
         'Packing Complete Date': item.packingCompleteDate,
         'Aging (Days)': item.agingDays !== null ? `${item.agingDays} Days` : '-',
         'Source': item.completionSource,
-        'Barcode ID': item.barcodeId,
-        'M/W/K': item.mwk,
-        'Season': item.season
+        'Barcode ID': item.barcodeId
       }));
 
       const ws = XLSX.utils.json_to_sheet(rows);
@@ -818,28 +819,31 @@ const PackingCompleted = () => {
       const tableData = displayData.map((item, idx) => [
         idx + 1,
         item.lotNumber,
-        item.partyName,
+        item.garmentType,
+        item.style,
         item.fabric,
         item.brand,
-        item.style,
+        item.totalPcs,
+        item.mwk,
+        item.season,
+        item.partyName,
+        item.directStitching || '-',
         item.supervisor,
         item.dateOfIssue,
-        item.totalPcs,
         item.packingCompleteDate,
         item.agingDays !== null ? `${item.agingDays} d` : '-',
         item.completionSource
       ]);
 
       autoTable(doc, {
-        head: [['#', 'Lot No', 'Party', 'Fabric', 'Brand', 'Style', 'Supervisor', 'Issue Date', 'PCS', 'Comp Date', 'Aging', 'Source']],
+        head: [['#', 'Lot No', 'Garment', 'Style', 'Fabric', 'Brand', 'PCS', 'M/W/K', 'Season', 'Party', 'Direct', 'Supervisor', 'Issue Date', 'Comp Date', 'Aging', 'Source']],
         body: tableData,
         startY: 26,
         styles: { fontSize: 7.5, cellPadding: 2, halign: 'center' },
         headStyles: { fillColor: [30, 58, 138], textColor: [255, 255, 255], fontStyle: 'bold' },
         columnStyles: {
           1: { halign: 'left', fontStyle: 'bold' },
-          2: { halign: 'left' },
-          4: { halign: 'left' }
+          9: { halign: 'left' }
         }
       });
 
@@ -1080,20 +1084,21 @@ const PackingCompleted = () => {
                 <th style={{ textAlign: 'center', width: '50px' }}>#</th>
                 <th style={{ textAlign: 'center', width: '70px' }}>IMAGE</th>
                 <th>LOT NUMBER</th>
-                <th>PARTY NAME</th>
-                <th>FABRIC</th>
-                <th>BRAND</th>
                 <th>GARMENT TYPE</th>
                 <th>STYLE</th>
+                <th>FABRIC</th>
+                <th>BRAND</th>
+                <th style={{ textAlign: 'center' }}>TOTAL PCS</th>
+                <th style={{ textAlign: 'center' }}>M/W/K</th>
+                <th style={{ textAlign: 'center' }}>SEASON</th>
+                <th>PARTY NAME</th>
+                <th>DIRECT STITCHING</th>
                 <th>SUPERVISOR</th>
                 <th style={{ textAlign: 'center' }}>DATE OF ISSUE</th>
-                <th style={{ textAlign: 'center' }}>TOTAL PCS</th>
                 <th style={{ textAlign: 'center', background: '#1d4ed8' }}>PACKING COMPLETE DATE</th>
                 <th style={{ textAlign: 'center', background: '#2563eb' }}>AGING</th>
                 <th style={{ textAlign: 'center' }}>BARCODE ID</th>
                 <th style={{ textAlign: 'center' }}>SOURCE</th>
-                <th style={{ textAlign: 'center' }}>M/W/K</th>
-                <th style={{ textAlign: 'center' }}>SEASON</th>
               </tr>
             </thead>
             <tbody>
@@ -1123,16 +1128,19 @@ const PackingCompleted = () => {
                         {item.lotNumber}
                       </span>
                     </td>
-                    <td style={{ fontWeight: '600', color: '#1e293b' }}>{item.partyName}</td>
-                    <td style={{ color: '#334155' }}>{item.fabric}</td>
-                    <td style={{ fontWeight: '700', color: '#0f172a' }}>{item.brand}</td>
                     <td style={{ color: '#475569' }}>{item.garmentType}</td>
                     <td style={{ color: '#475569' }}>{item.style}</td>
-                    <td style={{ fontWeight: '600', color: '#1e40af' }}>{item.supervisor}</td>
-                    <td style={{ textAlign: 'center', color: '#475569' }}>{item.dateOfIssue}</td>
+                    <td style={{ color: '#334155' }}>{item.fabric}</td>
+                    <td style={{ fontWeight: '700', color: '#0f172a' }}>{item.brand}</td>
                     <td style={{ textAlign: 'center', fontWeight: '700', color: '#0f172a' }}>
                       {item.totalPcs}
                     </td>
+                    <td style={{ textAlign: 'center' }}>{item.mwk || '—'}</td>
+                    <td style={{ textAlign: 'center' }}>{item.season || '—'}</td>
+                    <td style={{ fontWeight: '600', color: '#1e293b' }}>{item.partyName}</td>
+                    <td>{item.directStitching || '—'}</td>
+                    <td style={{ fontWeight: '600', color: '#1e40af' }}>{item.supervisor}</td>
+                    <td style={{ textAlign: 'center', color: '#475569' }}>{item.dateOfIssue}</td>
                     <td style={{ textAlign: 'center' }}>
                       <span style={{ background: '#dbeafe', color: '#1d4ed8', padding: '5px 12px', borderRadius: '12px', fontWeight: '800', fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '4px', border: '1px solid #bfdbfe' }}>
                         ✓ {item.packingCompleteDate}
@@ -1149,8 +1157,6 @@ const PackingCompleted = () => {
                         {item.completionSource}
                       </span>
                     </td>
-                    <td style={{ textAlign: 'center', color: '#64748b' }}>{item.mwk}</td>
-                    <td style={{ textAlign: 'center', color: '#64748b' }}>{item.season}</td>
                   </tr>
                 );
               })}

@@ -1,49 +1,69 @@
-// src/components/DailyStitchingIssue.jsx
+// src/DailyStitchingIssue.js
 import React, { useEffect, useMemo, useState, useRef } from "react";
+import { Link, useHistory } from "react-router-dom";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
+import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend } from "./config";
+import { getCurrentUser, logoutUser } from "./auth";
 
 /**
- * Enhanced Daily Stitching Issue Tracker
- * - Smooth user experience with optimized rendering
- * - Unique classnames to prevent CSS conflicts
- * - Progressive loading with better feedback
- * - Date Range Filter for export functionality
- * - Includes Brand field from Index sheet
+ * Factory Suite Pro - Daily Stitching Issue Tracker
+ * Full Executive Standard:
+ * - Perfectly aligned 13-column interactive data grid
+ * - Parallel data sync from Index, JobOrder, Cutting matrix, and Historical Stitching Issues
+ * - Comprehensive 3-Sheet Excel Export (.xlsx) via ExcelJS
+ * - Direct A3 Landscape PDF Export (.pdf) with Pure Black Text & 4-Column Executive Summary
+ * - Top Brand Bar with Navigation Links & Live Filter Audit
  */
 
 // ====== CONFIG ======
-const API_KEY = "AIzaSyAomDFBkOySlIxKWSKGHe6ATv9gvaBr7uk";
-const BUDGET_SHEET_ID = "1Hj3JeJEKB43aYYWv8gk2UhdU6BWuEQfCg5pBlTdBMNA";
+const API_KEY = GOOGLE_API_KEY;
+const BUDGET_SHEET_ID = SPREADSHEET_IDS.MAIN;
+const JOB_SHEET_ID = SPREADSHEET_IDS.JOBORDER;
 const INDEX_SHEET_NAME = "Index";
 const CUTTING_SHEET_NAME = "Cutting";
 const OLD_SHEET_ID = "18FzakygM7DVD29IRbpe68pDeCFQhFLj7t4C-XQ1MWWc";
 const OLD_SHEET_NAME = "Stitching_Issues";
 
 // Ranges
-const INDEX_RANGE = `${INDEX_SHEET_NAME}!A:O`;
-const CUTTING_BIG_RANGE = `${CUTTING_SHEET_NAME}!A1:ZZ200000`;
+const INDEX_RANGE = `${INDEX_SHEET_NAME}!A:AG`;
+const CUTTING_BIG_RANGE = `${CUTTING_SHEET_NAME}!A1:ZZ400000`;
 const OLD_SHEET_RANGE = `${OLD_SHEET_NAME}!A:Q`;
+const JOB_RANGE = "JobOrder!A:AZ";
 
-// Display columns
+// Display columns (13 canonical columns)
 const DISPLAY_HEADERS = [
   "Sr. No",
   "Lot Number",
-  "Fabric",
   "Garment Type",
+  "Style",
+  "Fabric",
   "Brand",
+  "PCS",
+  "Section",
+  "Season",
+  "Party Name",
+  "Direct Stitching",
   "Supervisor",
   "Date of Issue",
-  "PCS",
 ];
 
 const COLUMN_ICONS = {
   "Sr. No": "#️⃣",
   "Lot Number": "🏷️",
-  "Fabric": "🧵",
   "Garment Type": "👕",
+  "Style": "🎨",
+  "Fabric": "🧵",
   "Brand": "🏢",
+  "PCS": "🔢",
+  "Section": "👥",
+  "Season": "🍂",
+  "Party Name": "🤝",
+  "Direct Stitching": "⚡",
   "Supervisor": "👨‍💼",
   "Date of Issue": "📅",
-  "PCS": "🔢",
 };
 
 // Recent lot threshold (24 hours)
@@ -59,7 +79,7 @@ const normalizeKey = (s = "") => {
 function formatDisplayDate(d) {
   if (!d) return "";
   const parsed = new Date(d);
-  if (isNaN(parsed)) return String(d);
+  if (isNaN(parsed.getTime())) return String(d);
   return parsed.toLocaleDateString("en-GB", {
     day: "2-digit",
     month: "short",
@@ -70,45 +90,38 @@ function formatDisplayDate(d) {
 // Parse date string to Date object
 const parseDateString = (dateStr) => {
   if (!dateStr) return null;
+  const str = String(dateStr).trim();
 
-  // Try different date formats
-  const formats = [
-    // ISO format
-    () => new Date(dateStr),
-    // DD/MM/YYYY
-    () => {
-      const parts = dateStr.split('/');
-      if (parts.length === 3) {
-        return new Date(parts[2], parts[1] - 1, parts[0]);
-      }
-      return null;
-    },
-    // MM/DD/YYYY
-    () => {
-      const parts = dateStr.split('/');
-      if (parts.length === 3) {
-        return new Date(parts[2], parts[0] - 1, parts[1]);
-      }
-      return null;
-    },
-    // DD-MM-YYYY
-    () => {
-      const parts = dateStr.split('-');
-      if (parts.length === 3 && parts[2].length === 4) {
-        return new Date(parts[2], parts[1] - 1, parts[0]);
-      }
-      return null;
-    },
-  ];
+  // Try direct date parsing
+  const d1 = new Date(str);
+  if (!isNaN(d1.getTime()) && str.includes("-") && str.length >= 8) {
+    return d1;
+  }
 
-  for (const format of formats) {
-    try {
-      const date = format();
-      if (date && !isNaN(date.getTime())) {
-        return date;
-      }
-    } catch (e) {
-      // Continue to next format
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmy = str.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})/);
+  if (dmy) {
+    const day = parseInt(dmy[1], 10);
+    const month = parseInt(dmy[2], 10) - 1;
+    const year = parseInt(dmy[3], 10);
+    const d = new Date(year, month, day);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // DD MMM YYYY (e.g. 15 Sep 2026 or 15 Sept 2026)
+  const monthMap = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11
+  };
+  const dMonthY = str.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if (dMonthY) {
+    const day = parseInt(dMonthY[1], 10);
+    const mKey = dMonthY[2].toLowerCase().slice(0, 4);
+    const mIdx = monthMap[mKey] ?? monthMap[mKey.slice(0, 3)];
+    if (mIdx !== undefined) {
+      const year = parseInt(dMonthY[3], 10);
+      const d = new Date(year, mIdx, day);
+      if (!isNaN(d.getTime())) return d;
     }
   }
 
@@ -117,122 +130,20 @@ const parseDateString = (dateStr) => {
 
 const clean = (v) => (v == null ? "" : String(v).trim());
 
-// Supervisor normalization
-const SUPERVISOR_ALIASES = {};
 const titleCase = (s) =>
-  s
+  String(s || "")
     .split(/\s+/)
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
 
 const normalizeSupervisor = (sRaw) => {
-  const s = clean(sRaw).toLowerCase();
-  if (!s) return { display: "", key: "" };
-  const key = s;
-  const aliasDisplay = SUPERVISOR_ALIASES[s];
-  const display = aliasDisplay ? aliasDisplay : titleCase(s);
+  const s = clean(sRaw);
+  if (!s) return { display: "—", key: "" };
+  const key = norm(s);
+  const display = titleCase(s);
   return { display, key };
 };
-
-/* ---------- Data Fetching ---------- */
-const dataCache = {
-  timestamp: null,
-  data: null
-};
-
-async function fetchSheet({ sheetId, range, apiKey, signal }, { retries = 3, baseDelayMs = 400 } = {}) {
-  const cacheKey = `${sheetId}-${range}`;
-
-  // Check cache first (5 minute cache)
-  if (dataCache[cacheKey] && Date.now() - dataCache.timestamp < 300000) {
-    return dataCache[cacheKey];
-  }
-
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(
-    range
-  )}?key=${apiKey}`;
-
-  let attempt = 0;
-  while (attempt <= retries) {
-    try {
-      const res = await fetch(url, { signal });
-      if (res.ok) {
-        const data = await res.json();
-        dataCache[cacheKey] = data;
-        dataCache.timestamp = Date.now();
-        return data;
-      }
-
-      const text = await res.text();
-      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
-        await new Promise((r) => setTimeout(r, delay));
-        attempt++;
-        continue;
-      }
-      throw new Error(`Sheets API error: ${res.status} ${text}`);
-    } catch (error) {
-      if (error.name === 'AbortError') throw error;
-      if (attempt < retries) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
-        await new Promise((r) => setTimeout(r, delay));
-        attempt++;
-        continue;
-      }
-      throw error;
-    }
-  }
-}
-
-/* ---------- Index Sheet Parser ---------- */
-function parseIndexRow(header, row) {
-  const hmap = {};
-  header.forEach((h, i) => (hmap[normalizeKey(h)] = i));
-
-  const get = (key) => {
-    const i = hmap[key];
-    return i == null || i < 0 ? "" : row[i] ?? "";
-  };
-
-  const lot = String(
-    get("lotnumber") ||
-    get("lot number") ||
-    get("lotno") ||
-    get("lot")
-  ).trim();
-
-  const supervisor = get("supervisor");
-  const dateOfIssue = get("dateofissue");
-
-  if (!lot || !supervisor || !dateOfIssue) return null;
-
-  const startRow = parseInt(get("startrow") || "0", 10);
-  const numRows = parseInt(get("numrows") || "0", 10);
-  const fabric = get("fabric");
-  const garmentType = get("garmenttype") || get("garment");
-  const style = get("style");
-  const brand = get("brand");
-
-  const sizes = String(get("sizes") || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  return {
-    lot,
-    startRow,
-    numRows,
-    fabric,
-    garmentType,
-    style,
-    sizes,
-    supervisor,
-    dateOfIssue,
-    brand,
-    sourceType: "Index"
-  };
-}
 
 /* ---------- Cutting Matrix PCS Calculation ---------- */
 function sliceCuttingMatrix(bigValues, startRow, numRows) {
@@ -317,102 +228,30 @@ function calculateTotalPCS(windowValues, sizes = []) {
 
     if (!shadeKey || shadeKey === "total" || shadeKey === "totals" || shadeKey === "grandtotal") continue;
 
-    let rowTotal = 0;
-
     sizeColIndices.forEach((c) => {
       const raw = row[c];
       if (raw != null && raw !== "") {
         const n = parseFloat(String(raw).replace(/,/g, ""));
         if (!isNaN(n) && n > 0) {
-          rowTotal += n;
+          totalQty += n;
         }
       }
     });
-
-    totalQty += rowTotal;
   }
 
   return totalQty;
 }
 
-/* ---------- Old Stitching Issues Parser - AGGREGATED ---------- */
-function parseOldStitchingRows(header, allRows) {
-  const hmap = {};
-  header.forEach((h, i) => (hmap[normalizeKey(h)] = i));
-
-  const get = (row, key) => {
-    const i = hmap[key];
-    return i == null || i < 0 ? "" : row[i] ?? "";
-  };
-
-  const aggregationMap = new Map();
-
-  for (let i = 1; i < allRows.length; i++) {
-    const row = allRows[i];
-
-    const dateOfIssue = get(row, "dateofissue") || get(row, "timestamp");
-    const lotNumber = get(row, "lotnumber") || get(row, "lot no");
-    const supervisor = get(row, "supervisor");
-    const fabric = get(row, "fabric");
-    const garmentType = get(row, "garmenttype") || get(row, "garment");
-    const pcs = get(row, "pcs");
-    const brand = get(row, "brand");
-
-    if (!lotNumber || !supervisor || !dateOfIssue) continue;
-
-    const { display: supDisplay, key: supKey } = normalizeSupervisor(supervisor);
-
-    const aggKey = `${clean(lotNumber)}|${supKey}|${clean(dateOfIssue)}`;
-
-    if (!aggregationMap.has(aggKey)) {
-      aggregationMap.set(aggKey, {
-        "Date of Issue": formatDisplayDate(dateOfIssue),
-        _rawDateOfIssue: dateOfIssue,
-        _parsedDate: parseDateString(dateOfIssue),
-        "Lot Number": clean(lotNumber),
-        "Supervisor": supDisplay,
-        _supKey: supKey,
-        "Fabric": clean(fabric),
-        "Garment Type": clean(garmentType),
-        "Brand": clean(brand),
-        "PCS": Number(pcs) || 0,
-        "Source Type": "Old Lot"
-      });
-    } else {
-      const existing = aggregationMap.get(aggKey);
-      existing.PCS += Number(pcs) || 0;
-    }
-  }
-
-  return Array.from(aggregationMap.values()).map(row => ({
-    ...row,
-    "PCS": String(row.PCS)
-  }));
-}
-
-/* ---------- Loading Indicator Component ---------- */
-const LoadingIndicator = ({ message = "Loading...", progress = null }) => {
-  return (
-    <div className="daily-stitching-loader" role="status" aria-live="polite">
-      <div className="daily-stitching-spinner" />
-      <div className="daily-stitching-loader-text">{message}</div>
-      {progress !== null && (
-        <div className="daily-stitching-loader-progress">
-          <div className="daily-stitching-progress-bar">
-            <div
-              className="daily-stitching-progress-fill"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <div className="daily-stitching-progress-text">{progress}%</div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 /* ---------- Main Component ---------- */
 export default function DailyStitchingIssue() {
+  const history = useHistory();
+  const currentUser = getCurrentUser();
+
+  const handleLogout = () => {
+    logoutUser();
+    history.push("/");
+  };
+
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -426,6 +265,7 @@ export default function DailyStitchingIssue() {
   const [filterSupervisor, setFilterSupervisor] = useState("");
   const [filterIssueDate, setFilterIssueDate] = useState("");
   const [filterBrand, setFilterBrand] = useState("");
+  const [filterGarment, setFilterGarment] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [showOnlyRecent, setShowOnlyRecent] = useState(false);
 
@@ -440,7 +280,7 @@ export default function DailyStitchingIssue() {
     key: "Date of Issue",
     direction: "desc",
   });
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(1);
 
   const abortRef = useRef(null);
@@ -462,92 +302,185 @@ export default function DailyStitchingIssue() {
     abortRef.current = ctrl;
 
     try {
-      // 1. Fetch Index data
-      setLoadingMessage("Fetching index data...");
-      setLoadingProgress(10);
-      const idxRes = await fetchSheet(
-        {
-          sheetId: BUDGET_SHEET_ID,
-          range: INDEX_RANGE,
-          apiKey: API_KEY,
-          signal: ctrl.signal
-        }
-      );
-      setLoadingProgress(30);
-      const idxValues = idxRes.values || [];
-      const idxHeader = idxValues[0] || [];
-      const indexMap = new Map();
+      // 1. Fetch Index, JobOrder, Cutting, and Old Stitching in parallel
+      setLoadingMessage("Fetching production sheets...");
+      setLoadingProgress(15);
 
-      for (let i = 1; i < idxValues.length; i++) {
-        const entry = parseIndexRow(idxHeader, idxValues[i]);
-        if (entry) {
-          indexMap.set(entry.lot, entry);
+      const [idxRes, jobRes, cuttingRes, oldRes] = await Promise.all([
+        fetchSheetDataFromBackend(BUDGET_SHEET_ID, INDEX_RANGE),
+        fetchSheetDataFromBackend(JOB_SHEET_ID, JOB_RANGE),
+        fetchSheetDataFromBackend(BUDGET_SHEET_ID, CUTTING_BIG_RANGE),
+        fetchSheetDataFromBackend(OLD_SHEET_ID, OLD_SHEET_RANGE)
+      ]);
+
+      setLoadingProgress(50);
+      setLoadingMessage("Processing Job Orders & Index maps...");
+
+      // Parse JobOrder Sheet for authoritative master metadata
+      const jobMap = new Map();
+      const jobValues = jobRes?.values || [];
+      if (jobValues.length > 0) {
+        const jHeader = (jobValues[0] || []).map(h => normalizeKey(String(h || "")));
+        const getJ = (row, key) => {
+          const idx = jHeader.indexOf(key);
+          return idx !== -1 ? (row[idx] ?? "") : "";
+        };
+
+        for (let i = 1; i < jobValues.length; i++) {
+          const row = jobValues[i] || [];
+          const lot = clean(getJ(row, "lotno") || getJ(row, "lotnumber") || getJ(row, "lot"));
+          if (!lot) continue;
+
+          jobMap.set(norm(lot), {
+            lot,
+            garmentType: clean(getJ(row, "garmenttype") || getJ(row, "garment")),
+            style: clean(getJ(row, "style")),
+            fabric: clean(getJ(row, "fabric")),
+            brand: clean(getJ(row, "brand")),
+            section: clean(getJ(row, "section") || getJ(row, "mwk")),
+            season: clean(getJ(row, "season")),
+            partyName: clean(getJ(row, "partyname") || getJ(row, "party")),
+            directStitching: clean(getJ(row, "directstitching") || getJ(row, "direct")),
+            jobOrderNo: clean(getJ(row, "joborderno") || getJ(row, "joborder")),
+            date: clean(getJ(row, "date") || getJ(row, "podate"))
+          });
         }
       }
 
-      // 2. Fetch Cutting data for PCS calculation
-      setLoadingMessage("Fetching cutting data...");
-      setLoadingProgress(50);
-      const cuttingRes = await fetchSheet(
-        {
-          sheetId: BUDGET_SHEET_ID,
-          range: CUTTING_BIG_RANGE,
-          apiKey: API_KEY,
-          signal: ctrl.signal
-        }
-      );
       setLoadingProgress(70);
-      const bigCuttingValues = cuttingRes.values || [];
+      setLoadingMessage("Calculating cutting quantities & index issues...");
 
-      // 3. Process Index rows with PCS from cutting matrix
-      setLoadingMessage("Processing index rows...");
+      // Parse Index Sheet
+      const idxValues = idxRes?.values || [];
+      const idxHeader = (idxValues[0] || []).map(h => normalizeKey(String(h || "")));
+      const getIdx = (row, key) => {
+        const idx = idxHeader.indexOf(key);
+        return idx !== -1 ? (row[idx] ?? "") : "";
+      };
+
+      const bigCuttingValues = cuttingRes?.values || [];
       const indexRows = [];
-      for (const [lot, indexData] of indexMap) {
-        const window = sliceCuttingMatrix(bigCuttingValues, indexData.startRow, indexData.numRows);
-        const totalPCS = calculateTotalPCS(window, indexData.sizes);
-        const { display: supDisplay, key: supKey } = normalizeSupervisor(indexData.supervisor);
-        const displayDate = indexData.dateOfIssue;
-        const parsedDate = parseDateString(displayDate);
+
+      for (let i = 1; i < idxValues.length; i++) {
+        const row = idxValues[i] || [];
+        const lot = clean(getIdx(row, "lotnumber") || getIdx(row, "lotno") || getIdx(row, "lot"));
+        const supervisor = clean(getIdx(row, "supervisor"));
+        const dateOfIssue = clean(getIdx(row, "dateofissue") || getIdx(row, "date"));
+
+        if (!lot || !supervisor || !dateOfIssue) continue;
+
+        const startRow = parseInt(getIdx(row, "startrow") || "0", 10);
+        const numRows = parseInt(getIdx(row, "numrows") || "0", 10);
+        const sizes = String(getIdx(row, "sizes") || "").split(",").map(s => s.trim()).filter(Boolean);
+
+        const window = sliceCuttingMatrix(bigCuttingValues, startRow, numRows);
+        const totalPCS = calculateTotalPCS(window, sizes);
+
+        const jInfo = jobMap.get(norm(lot)) || {};
+        const { display: supDisplay, key: supKey } = normalizeSupervisor(supervisor);
+        const parsedDate = parseDateString(dateOfIssue);
+
+        const garmentType = jInfo.garmentType || clean(getIdx(row, "garmenttype") || getIdx(row, "garment"));
+        const style = jInfo.style || clean(getIdx(row, "style"));
+        const fabric = jInfo.fabric || clean(getIdx(row, "fabric"));
+        const brand = jInfo.brand || clean(getIdx(row, "brand"));
+        const section = jInfo.section || clean(getIdx(row, "section") || getIdx(row, "mwk"));
+        const season = jInfo.season || clean(getIdx(row, "season"));
+        let partyName = jInfo.partyName || clean(getIdx(row, "partyname") || getIdx(row, "party"));
+        if (partyName.toLowerCase().includes("mohit")) partyName = "MH (Mohit Hosiery)";
+        const directStitching = jInfo.directStitching || clean(getIdx(row, "directstitching") || getIdx(row, "direct"));
 
         indexRows.push({
-          "Date of Issue": formatDisplayDate(displayDate),
-          _rawDateOfIssue: displayDate,
+          "Date of Issue": formatDisplayDate(dateOfIssue),
+          _rawDateOfIssue: dateOfIssue,
           _parsedDate: parsedDate,
-          "Lot Number": clean(lot),
+          "Lot Number": lot,
+          "Garment Type": garmentType || "—",
+          "Style": style || "—",
+          "Fabric": fabric || "—",
+          "Brand": brand || "—",
+          "PCS": totalPCS > 0 ? totalPCS : 0,
+          "Section": section || "—",
+          "Season": season || "—",
+          "Party Name": partyName || "—",
+          "Direct Stitching": directStitching ? (directStitching.toLowerCase() === "yes" ? "Yes" : "No") : "No",
           "Supervisor": supDisplay,
           _supKey: supKey,
-          "Fabric": clean(indexData.fabric),
-          "Garment Type": clean(indexData.garmentType),
-          "Brand": clean(indexData.brand),
-          "PCS": totalPCS > 0 ? String(totalPCS) : "",
           "Source Type": "Index",
           _isRecent: Date.now() - (parsedDate ? parsedDate.getTime() : Date.now()) < RECENT_THRESHOLD_MS
         });
       }
 
-      // 4. Fetch and aggregate Old Stitching Issues data
-      setLoadingMessage("Fetching old stitching issues...");
       setLoadingProgress(85);
-      const oldRes = await fetchSheet(
-        {
-          sheetId: OLD_SHEET_ID,
-          range: OLD_SHEET_RANGE,
-          apiKey: API_KEY,
-          signal: ctrl.signal
-        }
-      );
-      setLoadingProgress(95);
-      const oldValues = oldRes.values || [];
-      const oldHeader = oldValues[0] || [];
-      const oldRows = parseOldStitchingRows(oldHeader, oldValues).map(row => ({
-        ...row,
-        _isRecent: Date.now() - (row._parsedDate ? row._parsedDate.getTime() : Date.now()) < RECENT_THRESHOLD_MS
-      }));
+      setLoadingMessage("Processing historical stitching logs...");
 
-      // 5. Combine both data sources
-      setLoadingMessage("Finalizing data...");
-      const allRows = [...indexRows, ...oldRows];
-      setRows(allRows);
+      // Parse Old Stitching Issues Sheet (Aggregated)
+      const oldValues = oldRes?.values || [];
+      const oldHeader = (oldValues[0] || []).map(h => normalizeKey(String(h || "")));
+      const getOld = (row, key) => {
+        const idx = oldHeader.indexOf(key);
+        return idx !== -1 ? (row[idx] ?? "") : "";
+      };
+
+      const aggregationMap = new Map();
+
+      for (let i = 1; i < oldValues.length; i++) {
+        const row = oldValues[i] || [];
+        const dateOfIssue = clean(getOld(row, "dateofissue") || getOld(row, "timestamp") || getOld(row, "date"));
+        const lotNumber = clean(getOld(row, "lotnumber") || getOld(row, "lotno") || getOld(row, "lot"));
+        const supervisor = clean(getOld(row, "supervisor"));
+        const fabric = clean(getOld(row, "fabric"));
+        const garmentType = clean(getOld(row, "garmenttype") || getOld(row, "garment"));
+        const pcs = parseFloat(String(getOld(row, "pcs") || "0").replace(/,/g, "")) || 0;
+        const brand = clean(getOld(row, "brand"));
+        const style = clean(getOld(row, "style"));
+        const section = clean(getOld(row, "section") || getOld(row, "mwk"));
+        const season = clean(getOld(row, "season"));
+        const partyName = clean(getOld(row, "partyname") || getOld(row, "party"));
+        const directStitching = clean(getOld(row, "directstitching") || getOld(row, "direct"));
+
+        if (!lotNumber || !supervisor || !dateOfIssue) continue;
+
+        const { display: supDisplay, key: supKey } = normalizeSupervisor(supervisor);
+        const aggKey = `${norm(lotNumber)}|${supKey}|${norm(dateOfIssue)}`;
+
+        const jInfo = jobMap.get(norm(lotNumber)) || {};
+
+        if (!aggregationMap.has(aggKey)) {
+          const parsedDate = parseDateString(dateOfIssue);
+          let pDisplay = jInfo.partyName || partyName || "—";
+          if (pDisplay.toLowerCase().includes("mohit")) pDisplay = "MH (Mohit Hosiery)";
+
+          aggregationMap.set(aggKey, {
+            "Date of Issue": formatDisplayDate(dateOfIssue),
+            _rawDateOfIssue: dateOfIssue,
+            _parsedDate: parsedDate,
+            "Lot Number": lotNumber,
+            "Garment Type": jInfo.garmentType || garmentType || "—",
+            "Style": jInfo.style || style || "—",
+            "Fabric": jInfo.fabric || fabric || "—",
+            "Brand": jInfo.brand || brand || "—",
+            "PCS": pcs,
+            "Section": jInfo.section || section || "—",
+            "Season": jInfo.season || season || "—",
+            "Party Name": pDisplay,
+            "Direct Stitching": (jInfo.directStitching || directStitching) ? (String(jInfo.directStitching || directStitching).toLowerCase() === "yes" ? "Yes" : "No") : "No",
+            "Supervisor": supDisplay,
+            _supKey: supKey,
+            "Source Type": "Old Lot",
+            _isRecent: Date.now() - (parsedDate ? parsedDate.getTime() : Date.now()) < RECENT_THRESHOLD_MS
+          });
+        } else {
+          const existing = aggregationMap.get(aggKey);
+          existing.PCS += pcs;
+        }
+      }
+
+      const oldRows = Array.from(aggregationMap.values());
+
+      // Combine both datasets
+      const combined = [...indexRows, ...oldRows];
+      setRows(combined);
       setLastUpdated(new Date().toLocaleString());
       setLoadingProgress(100);
 
@@ -563,7 +496,7 @@ export default function DailyStitchingIssue() {
         setTimeout(() => {
           setLoading(false);
           setLoadingProgress(0);
-        }, 500);
+        }, 300);
       } else {
         setRefreshing(false);
       }
@@ -579,15 +512,44 @@ export default function DailyStitchingIssue() {
     };
   }, []);
 
+  /* ---------- Filter Options ---------- */
+  const uniqueLots = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Lot Number"]).filter(Boolean))).sort();
+  }, [rows]);
+
+  const uniqueSupervisors = useMemo(() => {
+    const map = new Map();
+    rows.forEach((r) => {
+      if (r._supKey && r.Supervisor && r.Supervisor !== "—") {
+        map.set(r._supKey, r.Supervisor);
+      }
+    });
+    return Array.from(map.entries())
+      .map(([key, label]) => ({ key, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [rows]);
+
+  const uniqueIssueDates = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Date of Issue"]).filter(Boolean))).sort();
+  }, [rows]);
+
+  const uniqueBrands = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Brand"]).filter(b => b && b !== "—"))).sort();
+  }, [rows]);
+
+  const uniqueGarments = useMemo(() => {
+    return Array.from(new Set(rows.map((r) => r["Garment Type"]).filter(g => g && g !== "—"))).sort();
+  }, [rows]);
+
   /* ---------- Enhanced Filtering with Date Range ---------- */
   const filteredRows = useMemo(() => {
     let filtered = rows;
 
-    // Apply filters
     if (filterLot) filtered = filtered.filter((r) => r["Lot Number"] === filterLot);
     if (filterSupervisor) filtered = filtered.filter((r) => r._supKey === filterSupervisor);
     if (filterIssueDate) filtered = filtered.filter((r) => r["Date of Issue"] === filterIssueDate);
     if (filterBrand) filtered = filtered.filter((r) => r["Brand"] === filterBrand);
+    if (filterGarment) filtered = filtered.filter((r) => r["Garment Type"] === filterGarment);
     if (showOnlyRecent) filtered = filtered.filter((r) => r._isRecent);
 
     // Apply date range filter
@@ -598,7 +560,7 @@ export default function DailyStitchingIssue() {
 
         const rowTime = rowDate.getTime();
         const startTime = dateRangeFilter.startDate ? new Date(dateRangeFilter.startDate).getTime() : null;
-        const endTime = dateRangeFilter.endDate ? new Date(dateRangeFilter.endDate).getTime() + 86400000 : null; // Add 1 day to include end date
+        const endTime = dateRangeFilter.endDate ? new Date(dateRangeFilter.endDate).getTime() + 86400000 : null;
 
         if (startTime && rowTime < startTime) return false;
         if (endTime && rowTime >= endTime) return false;
@@ -607,9 +569,9 @@ export default function DailyStitchingIssue() {
       });
     }
 
-    // Apply search
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase();
+    // Apply search across all canonical columns
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase().trim();
       filtered = filtered.filter((r) =>
         DISPLAY_HEADERS.some((h) => String(r[h] ?? "").toLowerCase().includes(term))
       );
@@ -620,288 +582,922 @@ export default function DailyStitchingIssue() {
       const { key, direction } = sortConfig;
       filtered = [...filtered].sort((a, b) => {
         if (key === "Date of Issue") {
-          const da = a._parsedDate;
-          const db = b._parsedDate;
-          const av = da ? da.getTime() : 0;
-          const bv = db ? db.getTime() : 0;
-          if (av < bv) return direction === "asc" ? -1 : 1;
-          if (av > bv) return direction === "asc" ? 1 : -1;
+          const da = a._parsedDate ? a._parsedDate.getTime() : 0;
+          const db = b._parsedDate ? b._parsedDate.getTime() : 0;
+          if (da < db) return direction === "asc" ? -1 : 1;
+          if (da > db) return direction === "asc" ? 1 : -1;
           return 0;
         }
-        if (key === "Supervisor") {
-          const av = a._supKey || "";
-          const bv = b._supKey || "";
-          if (av < bv) return direction === "asc" ? -1 : 1;
-          if (av > bv) return direction === "asc" ? 1 : -1;
+
+        if (key === "PCS") {
+          const va = Number(a.PCS) || 0;
+          const vb = Number(b.PCS) || 0;
+          if (va < vb) return direction === "asc" ? -1 : 1;
+          if (va > vb) return direction === "asc" ? 1 : -1;
           return 0;
         }
-        if (key === "Brand") {
-          const av = String(a[key] ?? "").toLowerCase();
-          const bv = String(b[key] ?? "").toLowerCase();
-          if (av < bv) return direction === "asc" ? -1 : 1;
-          if (av > bv) return direction === "asc" ? 1 : -1;
-          return 0;
-        }
-        const av = String(a[key] ?? "");
-        const bv = String(b[key] ?? "");
-        if (av < bv) return direction === "asc" ? -1 : 1;
-        if (av > bv) return direction === "asc" ? 1 : -1;
+
+        const va = String(a[key] ?? "").toLowerCase();
+        const vb = String(b[key] ?? "").toLowerCase();
+        if (va < vb) return direction === "asc" ? -1 : 1;
+        if (va > vb) return direction === "asc" ? 1 : -1;
         return 0;
       });
     }
 
     return filtered;
-  }, [rows, filterLot, filterSupervisor, filterIssueDate, filterBrand, searchTerm, sortConfig, showOnlyRecent, dateRangeFilter]);
+  }, [rows, filterLot, filterSupervisor, filterIssueDate, filterBrand, filterGarment, showOnlyRecent, dateRangeFilter, searchTerm, sortConfig]);
 
   /* ---------- Analytics ---------- */
   const analytics = useMemo(() => {
-    const recentLots = rows.filter(r => r._isRecent).length;
-    const totalPCS = rows.reduce((sum, row) => sum + (parseInt(row.PCS) || 0), 0);
-    const uniqueLots = new Set(rows.map(r => r["Lot Number"]).filter(Boolean)).size;
-    const uniqueSupervisors = new Set(rows.map(r => r._supKey).filter(Boolean)).size;
-    const uniqueBrands = new Set(rows.map(r => r["Brand"]).filter(Boolean)).size;
+    const totalRecords = filteredRows.length;
+    const totalPCS = filteredRows.reduce((sum, r) => sum + (Number(r.PCS) || 0), 0);
+    const uniqueLotsSet = new Set(filteredRows.map((r) => r["Lot Number"]).filter(Boolean));
+    const recentLotsCount = filteredRows.filter((r) => r._isRecent).length;
+    const supervisorsSet = new Set(filteredRows.map((r) => r.Supervisor).filter(s => s && s !== "—"));
 
     return {
-      recentLots,
+      totalRecords,
       totalPCS,
-      uniqueLots,
-      uniqueSupervisors,
-      uniqueBrands,
-      totalRecords: rows.length
+      uniqueLots: uniqueLotsSet.size,
+      recentLots: recentLotsCount,
+      supervisorsCount: supervisorsSet.size
     };
-  }, [rows]);
-
-  /* ---------- Calculate Totals ---------- */
-  const totalPCS = useMemo(() => {
-    return rows.reduce((sum, row) => {
-      const pcsValue = parseInt(row.PCS) || 0;
-      return sum + pcsValue;
-    }, 0);
-  }, [rows]);
-
-  const filteredTotalPCS = useMemo(() => {
-    return filteredRows.reduce((sum, row) => {
-      const pcsValue = parseInt(row.PCS) || 0;
-      return sum + pcsValue;
-    }, 0);
   }, [filteredRows]);
 
-  /* ---------- Filter Options ---------- */
-  const uniqueLots = useMemo(() => {
-    const s = new Set(rows.map((r) => r["Lot Number"]).filter(Boolean));
-    return Array.from(s).sort((a, b) =>
-      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
-    );
-  }, [rows]);
-
-  const uniqueSupervisors = useMemo(() => {
-    const map = new Map();
-    for (const r of rows) {
-      if (r._supKey) {
-        if (!map.has(r._supKey)) map.set(r._supKey, r.Supervisor || "");
-      }
-    }
-    return Array.from(map.entries())
-      .map(([key, label]) => ({ key, label }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [rows]);
-
-  const uniqueIssueDates = useMemo(() => {
-    const s = new Set(rows.map((r) => r["Date of Issue"]).filter(Boolean));
-    return Array.from(s).sort((a, b) => {
-      const da = new Date(a);
-      const db = new Date(b);
-      if (isNaN(da) || isNaN(db)) return b.localeCompare(a);
-      return db - da;
-    });
-  }, [rows]);
-
-  const uniqueBrands = useMemo(() => {
-    const s = new Set(rows.map((r) => r["Brand"]).filter(Boolean));
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [rows]);
-
-  /* ---------- Date Range Functions ---------- */
-  const handleDateRangeChange = (field, value) => {
-    setDateRangeFilter(prev => ({
-      ...prev,
-      [field]: value
-    }));
-    setPage(1);
-  };
-
-  const toggleDateRangeFilter = () => {
-    setDateRangeFilter(prev => ({
-      ...prev,
-      enabled: !prev.enabled,
-      startDate: !prev.enabled ? "" : prev.startDate,
-      endDate: !prev.enabled ? "" : prev.endDate
-    }));
-    setPage(1);
-  };
-
-  const clearDateRangeFilter = () => {
-    setDateRangeFilter({
-      startDate: "",
-      endDate: "",
-      enabled: false
-    });
-    setPage(1);
-  };
-
-  const getDateRangeLabel = () => {
-    if (!dateRangeFilter.enabled) return "No date range";
-    if (dateRangeFilter.startDate && dateRangeFilter.endDate) {
-      return `${formatDisplayDate(dateRangeFilter.startDate)} to ${formatDisplayDate(dateRangeFilter.endDate)}`;
-    } else if (dateRangeFilter.startDate) {
-      return `From ${formatDisplayDate(dateRangeFilter.startDate)}`;
-    } else if (dateRangeFilter.endDate) {
-      return `Until ${formatDisplayDate(dateRangeFilter.endDate)}`;
-    }
-    return "Custom date range";
-  };
-
-  /* ---------- Event Handlers ---------- */
   const handleSort = (key) => {
-    let direction = "asc";
-    if (sortConfig.key === key && sortConfig.direction === "asc") {
-      direction = "desc";
-    } else if (sortConfig.key !== key) {
-      direction = key === "Date of Issue" ? "desc" : "asc";
-    }
-    setSortConfig({ key, direction });
-    setPage(1);
+    setSortConfig((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
+    }));
   };
-
-  const hasActiveFilters = filterLot || filterSupervisor || filterIssueDate || filterBrand || searchTerm || showOnlyRecent ||
-    (dateRangeFilter.enabled && (dateRangeFilter.startDate || dateRangeFilter.endDate));
 
   const clearFilters = () => {
     setFilterLot("");
     setFilterSupervisor("");
     setFilterIssueDate("");
     setFilterBrand("");
+    setFilterGarment("");
     setSearchTerm("");
     setShowOnlyRecent(false);
-    clearDateRangeFilter();
+    setDateRangeFilter({ startDate: "", endDate: "", enabled: false });
     setSortConfig({ key: "Date of Issue", direction: "desc" });
     setPage(1);
   };
 
   const handleRefresh = () => loadData("refresh");
 
-  const goBack = () => {
+  const handleGoBack = () => {
     try {
       if (window.history.length > 1) {
-        window.history.back();
+        history.goBack();
         return;
       }
     } catch { }
-    window.location.href = "/";
+    history.push("/dashboard");
   };
 
-  /* ---------- Export Functions with Date Range ---------- */
-  const downloadExcel = (data, filename = "stitching-issues") => {
-    // Remove "Sr. No" from headers for export since it's dynamic
-    const exportHeaders = DISPLAY_HEADERS.filter(h => h !== "Sr. No");
-    const headers = exportHeaders.join(",");
-    const rows = data
-      .map((row, index) =>
-        exportHeaders.map((header) => {
-          const value = row[header] || "";
-          const escaped = String(value).replace(/"/g, '""');
-          return escaped.includes(",") ? `"${escaped}"` : escaped;
-        }).join(",")
-      )
-      .join("\n");
+  const hasActiveFilters = Boolean(
+    filterLot ||
+    filterSupervisor ||
+    filterIssueDate ||
+    filterBrand ||
+    filterGarment ||
+    searchTerm ||
+    showOnlyRecent ||
+    (dateRangeFilter.enabled && (dateRangeFilter.startDate || dateRangeFilter.endDate))
+  );
 
-    let dateRangeInfo = "";
-    if (dateRangeFilter.enabled && (dateRangeFilter.startDate || dateRangeFilter.endDate)) {
-      dateRangeInfo = `Date Range: ${getDateRangeLabel()}\n`;
+  /* ---------- Export Excel via ExcelJS (Factory Suite Pro 3-Sheet Workbook) ---------- */
+  const handleExportExcel = async () => {
+    try {
+      if (filteredRows.length === 0) {
+        alert("No data available to export.");
+        return;
+      }
+
+      const now = new Date();
+      const reportDateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      const totalLots = filteredRows.length;
+      let totalQty = 0;
+      const garmentAnalysis = {};
+      const supervisorAnalysis = {};
+      const partyAnalysis = {};
+      const sectionAnalysis = {};
+
+      filteredRows.forEach(row => {
+        const qty = Number(row.PCS) || 0;
+        totalQty += qty;
+
+        const g = row["Garment Type"] || "Unspecified";
+        if (!garmentAnalysis[g]) garmentAnalysis[g] = { lots: 0, qty: 0 };
+        garmentAnalysis[g].lots += 1;
+        garmentAnalysis[g].qty += qty;
+
+        const sup = row.Supervisor || "Unassigned";
+        if (!supervisorAnalysis[sup]) supervisorAnalysis[sup] = { lots: 0, qty: 0 };
+        supervisorAnalysis[sup].lots += 1;
+        supervisorAnalysis[sup].qty += qty;
+
+        const party = row["Party Name"] || "Unassigned";
+        if (!partyAnalysis[party]) partyAnalysis[party] = { lots: 0, qty: 0 };
+        partyAnalysis[party].lots += 1;
+        partyAnalysis[party].qty += qty;
+
+        const sec = row.Section || "Unassigned";
+        if (!sectionAnalysis[sec]) sectionAnalysis[sec] = { lots: 0, qty: 0 };
+        sectionAnalysis[sec].lots += 1;
+        sectionAnalysis[sec].qty += qty;
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = "Factory Suite Pro";
+      workbook.created = now;
+
+      // Styling Helpers
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'CBD5E1' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'CBD5E1' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      const headerBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: '0F172A' } },
+        bottom: { style: 'medium', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: '0F172A' } }
+      };
+
+      const totalBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'double', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      // ==========================================
+      // SHEET 1: DAILY STITCHING ISSUE LOG
+      // ==========================================
+      const ws1 = workbook.addWorksheet("Stitching Issue Log", {
+        views: [{ showGridLines: true, state: 'frozen', xSplit: 0, ySplit: 5 }]
+      });
+
+      const cols1 = [
+        { header: "Sr. No", key: "sr", width: 8 },
+        { header: "Lot Number", key: "lot", width: 16 },
+        { header: "Garment Type", key: "garment", width: 18 },
+        { header: "Style", key: "style", width: 18 },
+        { header: "Fabric", key: "fabric", width: 22 },
+        { header: "Brand", key: "brand", width: 16 },
+        { header: "PCS", key: "pcs", width: 14 },
+        { header: "Section", key: "section", width: 14 },
+        { header: "Season", key: "season", width: 14 },
+        { header: "Party Name", key: "party", width: 20 },
+        { header: "Direct Stitching", key: "direct", width: 16 },
+        { header: "Supervisor", key: "sup", width: 18 },
+        { header: "Date of Issue", key: "date", width: 16 }
+      ];
+
+      const numCols1 = cols1.length;
+      ws1.columns = cols1;
+
+      // Row 1: Title Banner
+      const titleRow1 = ws1.getRow(1);
+      titleRow1.values = ["FACTORY SUITE PRO - DAILY STITCHING ISSUE REPORT"];
+      ws1.mergeCells(1, 1, 1, numCols1);
+      titleRow1.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E1B4B" } };
+      titleRow1.alignment = { vertical: "middle", horizontal: "center" };
+      titleRow1.height = 34;
+
+      // Row 2: Metadata Banner
+      const metaRow1 = ws1.getRow(2);
+      metaRow1.values = [`Exported on: ${reportDateStr}  |  Total Records: ${totalLots}  |  Total PCS: ${totalQty.toLocaleString()}  |  Active Supervisors: ${Object.keys(supervisorAnalysis).length}  |  Garments: ${Object.keys(garmentAnalysis).length}`];
+      ws1.mergeCells(2, 1, 2, numCols1);
+      metaRow1.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E293B" } };
+      metaRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      metaRow1.alignment = { vertical: "middle", horizontal: "center" };
+      metaRow1.height = 22;
+
+      // Row 3: Blank Row
+      const blankRow3 = ws1.getRow(3);
+      blankRow3.values = [];
+      blankRow3.height = 6;
+
+      // Row 4: Blank Row
+      const blankRow4 = ws1.getRow(4);
+      blankRow4.values = [];
+      blankRow4.height = 6;
+
+      // Row 5: Table Headers Row
+      const headerRow1 = ws1.getRow(5);
+      headerRow1.values = cols1.map(c => c.header);
+      headerRow1.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      headerRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF312E81" } };
+      headerRow1.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      headerRow1.height = 28;
+      for (let c = 1; c <= numCols1; c++) {
+        headerRow1.getCell(c).border = headerBorder;
+      }
+
+      // Add Data Rows
+      let rIdx1 = 6;
+      filteredRows.forEach((row, index) => {
+        const rowValues = [
+          index + 1,
+          row["Lot Number"] || "—",
+          row["Garment Type"] || "—",
+          row["Style"] || "—",
+          row["Fabric"] || "—",
+          row["Brand"] || "—",
+          Number(row.PCS) || 0,
+          row["Section"] || "—",
+          row["Season"] || "—",
+          row["Party Name"] || "—",
+          row["Direct Stitching"] || "No",
+          row.Supervisor || "—",
+          row["Date of Issue"] || "—"
+        ];
+
+        const dataRow = ws1.getRow(rIdx1);
+        dataRow.values = rowValues;
+        dataRow.height = 22;
+
+        const isEven = index % 2 === 0;
+        const defaultBg = isEven ? "FFFFFFFF" : "FFF8FAFC";
+
+        for (let c = 1; c <= numCols1; c++) {
+          const cell = dataRow.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: defaultBg } };
+
+          // Lot No Bold
+          if (c === 2) {
+            cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF0F172A" } };
+          }
+          // PCS numeric format
+          if (c === 7) {
+            cell.numFmt = "#,##0";
+            cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF0F172A" } };
+          }
+        }
+
+        rIdx1++;
+      });
+
+      // Total Row for Sheet 1
+      const totalRow1 = ws1.getRow(rIdx1);
+      const totalValues1 = new Array(numCols1).fill("");
+      totalValues1[0] = "TOTAL";
+      totalValues1[6] = totalQty;
+      totalValues1[numCols1 - 1] = `${totalLots} Lots`;
+      totalRow1.values = totalValues1;
+      totalRow1.height = 26;
+
+      for (let c = 1; c <= numCols1; c++) {
+        const cell = totalRow1.getCell(c);
+        cell.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FF0F172A" } };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        cell.border = totalBorder;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+        if (c === 7) cell.numFmt = "#,##0";
+      }
+
+      // ==========================================
+      // SHEET 2: PRODUCTION SUMMARY & BREAKDOWNS
+      // ==========================================
+      const ws2 = workbook.addWorksheet("Issue Summary", {
+        views: [{ showGridLines: true }]
+      });
+
+      ws2.columns = [
+        { width: 32 },
+        { width: 18 },
+        { width: 18 },
+        { width: 22 }
+      ];
+
+      // Sheet 2 Title Banner
+      const titleRow2 = ws2.getRow(1);
+      titleRow2.values = ["FACTORY SUITE PRO - DAILY STITCHING ISSUE BREAKDOWN"];
+      ws2.mergeCells(1, 1, 1, 4);
+      titleRow2.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleRow2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E1B4B" } };
+      titleRow2.alignment = { vertical: "middle", horizontal: "center" };
+      titleRow2.height = 32;
+
+      let r2 = 3;
+
+      // Section 1: Garment Type Breakdown
+      const gTitle = ws2.getRow(r2);
+      gTitle.values = ["1. GARMENT TYPE BREAKDOWN"];
+      ws2.mergeCells(r2, 1, r2, 4);
+      gTitle.font = { name: "Segoe UI", size: 10.5, bold: true, color: { argb: "FFFFFFFF" } };
+      gTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+      gTitle.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      gTitle.height = 24;
+      r2++;
+
+      const gHeaders = ws2.getRow(r2);
+      gHeaders.values = ["Garment Type", "Total Lots", "Percentage (%)", "Total Quantity"];
+      gHeaders.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+      gHeaders.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF14B8A6" } };
+      gHeaders.alignment = { vertical: "middle", horizontal: "center" };
+      gHeaders.height = 24;
+      for (let c = 1; c <= 4; c++) gHeaders.getCell(c).border = headerBorder;
+      r2++;
+
+      const garmentArr = Object.entries(garmentAnalysis).map(([g, d]) => ({
+        name: g,
+        lots: d.lots,
+        pct: totalLots > 0 ? Math.round((d.lots / totalLots) * 100) : 0,
+        qty: d.qty
+      })).sort((a, b) => b.lots - a.lots);
+
+      garmentArr.forEach((g, idx) => {
+        const row = ws2.getRow(r2);
+        row.values = [g.name, g.lots, `${g.pct}%`, g.qty];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = "#,##0";
+        }
+        r2++;
+      });
+      r2 += 2;
+
+      // Section 2: Supervisor Production Breakdown
+      const sTitle = ws2.getRow(r2);
+      sTitle.values = ["2. SUPERVISOR PRODUCTION BREAKDOWN"];
+      ws2.mergeCells(r2, 1, r2, 4);
+      sTitle.font = { name: "Segoe UI", size: 10.5, bold: true, color: { argb: "FFFFFFFF" } };
+      sTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4338CA" } };
+      sTitle.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      sTitle.height = 24;
+      r2++;
+
+      const sHeaders = ws2.getRow(r2);
+      sHeaders.values = ["Supervisor", "Total Lots", "Percentage (%)", "Total Quantity"];
+      sHeaders.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+      sHeaders.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6366F1" } };
+      sHeaders.alignment = { vertical: "middle", horizontal: "center" };
+      sHeaders.height = 24;
+      for (let c = 1; c <= 4; c++) sHeaders.getCell(c).border = headerBorder;
+      r2++;
+
+      const supArr = Object.entries(supervisorAnalysis).map(([s, d]) => ({
+        name: s,
+        lots: d.lots,
+        pct: totalLots > 0 ? Math.round((d.lots / totalLots) * 100) : 0,
+        qty: d.qty
+      })).sort((a, b) => b.lots - a.lots);
+
+      supArr.forEach((s, idx) => {
+        const row = ws2.getRow(r2);
+        row.values = [s.name, s.lots, `${s.pct}%`, s.qty];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = "#,##0";
+        }
+        r2++;
+      });
+      r2 += 2;
+
+      // ==========================================
+      // SHEET 3: APPLIED FILTERS (AUDIT SHEET)
+      // ==========================================
+      const ws3 = workbook.addWorksheet("Applied Filters", {
+        views: [{ showGridLines: true }]
+      });
+      ws3.columns = [{ width: 28 }, { width: 65 }];
+
+      const fTitle = ws3.getRow(1);
+      fTitle.values = ["REPORT FILTERS & AUDIT PARAMETERS"];
+      ws3.mergeCells(1, 1, 1, 2);
+      fTitle.font = { name: "Segoe UI", size: 12, bold: true, color: { argb: "FFFFFFFF" } };
+      fTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF334155" } };
+      fTitle.alignment = { vertical: "middle", horizontal: "center" };
+      fTitle.height = 28;
+
+      const fHead = ws3.getRow(2);
+      fHead.values = ["Filter Parameter", "Selected Value / Criteria"];
+      fHead.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      fHead.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF475569" } };
+      fHead.alignment = { vertical: "middle", horizontal: "center" };
+      fHead.height = 24;
+      fHead.getCell(1).border = headerBorder;
+      fHead.getCell(2).border = headerBorder;
+
+      const filterAudit = [
+        ["Export Timestamp", reportDateStr],
+        ["Lot Filter", filterLot || "All"],
+        ["Supervisor Filter", filterSupervisor || "All"],
+        ["Issue Date Filter", filterIssueDate || "All"],
+        ["Brand Filter", filterBrand || "All"],
+        ["Garment Filter", filterGarment || "All"],
+        ["Date Range", dateRangeFilter.enabled ? `${dateRangeFilter.startDate || ""} to ${dateRangeFilter.endDate || ""}` : "All"],
+        ["Search Keyword", searchTerm || "None"],
+        ["Recent Lots Only", showOnlyRecent ? "Yes (Last 24h)" : "No"]
+      ];
+
+      filterAudit.forEach(([param, val], idx) => {
+        const row = ws3.getRow(idx + 3);
+        row.values = [param, val];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 2; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" }, bold: c === 1 };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+        }
+      });
+
+      const fileName = `Daily_Stitching_Issues_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      saveAs(blob, `${fileName}.xlsx`);
+    } catch (err) {
+      console.error("Error exporting Excel:", err);
+      alert(`Failed to export Excel: ${err.message}`);
     }
-
-    const csvContent = `${dateRangeInfo}${headers}\n${rows}`;
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute(
-      "download",
-      `${filename}-${new Date().toISOString().split("T")[0]}.csv`
-    );
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
-  const downloadPDF = (data, filename = "stitching-issues") => {
-    const printWindow = window.open("", "_blank");
-    const currentDate = new Date().toLocaleDateString();
-    const totalPCS = data.reduce((sum, row) => sum + (parseInt(row.PCS) || 0), 0);
+  /* ---------- Direct PDF Export via jsPDF (Factory Suite Pro A3 Landscape) ---------- */
+  const handleExportPDF = () => {
+    try {
+      if (filteredRows.length === 0) {
+        alert("No data available to export.");
+        return;
+      }
 
-    // Date range info for PDF
-    let dateRangeHtml = "";
-    if (dateRangeFilter.enabled && (dateRangeFilter.startDate || dateRangeFilter.endDate)) {
-      dateRangeHtml = `<p style="font-size: 12px; color: #6b7280; margin: 2px 0;">Date Range: ${getDateRangeLabel()}</p>`;
+      const totalLots = filteredRows.length;
+      let totalQty = 0;
+      const garmentMap = {};
+      const supervisorMap = {};
+      const partyMap = {};
+      const sectionMap = {};
+
+      filteredRows.forEach(row => {
+        const qty = Number(row.PCS) || 0;
+        totalQty += qty;
+
+        const g = row["Garment Type"] || "Unspecified";
+        if (!garmentMap[g]) garmentMap[g] = { lots: 0, qty: 0 };
+        garmentMap[g].lots += 1;
+        garmentMap[g].qty += qty;
+
+        const s = row.Supervisor || "Unassigned";
+        if (!supervisorMap[s]) supervisorMap[s] = { lots: 0, qty: 0 };
+        supervisorMap[s].lots += 1;
+        supervisorMap[s].qty += qty;
+
+        const p = row["Party Name"] || "Unassigned";
+        if (!partyMap[p]) partyMap[p] = { lots: 0, qty: 0 };
+        partyMap[p].lots += 1;
+        partyMap[p].qty += qty;
+
+        const sec = row.Section || "Unassigned";
+        if (!sectionMap[sec]) sectionMap[sec] = { lots: 0, qty: 0 };
+        sectionMap[sec].lots += 1;
+        sectionMap[sec].qty += qty;
+      });
+
+      const sortedGarments = Object.keys(garmentMap).map(name => ({
+        name,
+        lots: garmentMap[name].lots,
+        qty: garmentMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
+
+      const sortedSupervisors = Object.keys(supervisorMap).map(name => ({
+        name,
+        lots: supervisorMap[name].lots,
+        qty: supervisorMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
+
+      const sortedParties = Object.keys(partyMap).map(name => ({
+        name,
+        lots: partyMap[name].lots,
+        qty: partyMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
+
+      const sortedSections = Object.keys(sectionMap).map(name => ({
+        name,
+        lots: sectionMap[name].lots,
+        qty: sectionMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
+
+      // Create PDF in A3 Landscape
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "pt",
+        format: "a3"
+      });
+
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+
+      // 1. Top Header Banner
+      doc.setFillColor(30, 27, 75); // Dark Indigo #1E1B4B
+      doc.rect(15, 12, pageW - 30, 48, 'F');
+
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text("FACTORY SUITE PRO - DAILY STITCHING ISSUE REPORT", pageW / 2, 30, { align: 'center' });
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(199, 210, 254);
+      const subText = `Total Lots: ${totalLots}   |   Total PCS: ${totalQty.toLocaleString()} Pcs   |   Supervisors: ${sortedSupervisors.length}   |   Parties: ${sortedParties.length}   |   Garments: ${sortedGarments.length}`;
+      doc.text(subText, pageW / 2, 48, { align: 'center' });
+
+      // 2. Filter Banner
+      doc.setFillColor(241, 245, 249);
+      doc.rect(15, 63, pageW - 30, 16, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(0, 0, 0);
+      const filterSummary = `Filters: Lot: ${filterLot || 'All'} | Supervisor: ${filterSupervisor || 'All'} | Issue Date: ${filterIssueDate || 'All'} | Brand: ${filterBrand || 'All'} | Garment: ${filterGarment || 'All'} | Date Range: ${dateRangeFilter.enabled ? `${dateRangeFilter.startDate || ''} to ${dateRangeFilter.endDate || ''}` : 'All'} | Search: ${searchTerm || 'None'}`;
+      doc.text(filterSummary, pageW / 2, 74, { align: 'center' });
+
+      // 3. Main Data Table
+      const tableColumns = [
+        '#',
+        'Lot Number',
+        'Garment Type',
+        'Style',
+        'Fabric',
+        'Brand',
+        'PCS',
+        'Section',
+        'Season',
+        'Party Name',
+        'Direct Stitching',
+        'Supervisor',
+        'Date of Issue'
+      ];
+
+      const tableBody = filteredRows.map((row, idx) => {
+        const lotNo = (row["Lot Number"] || "").toString().trim();
+        const isRecent = row._isRecent;
+        const lotDisplay = isRecent ? `* ${lotNo}` : (lotNo || "—");
+
+        return [
+          (idx + 1).toString(),
+          lotDisplay,
+          row["Garment Type"] || "—",
+          row["Style"] || "—",
+          row["Fabric"] || "—",
+          row["Brand"] || "—",
+          (Number(row.PCS) || 0).toLocaleString(),
+          row["Section"] || "—",
+          row["Season"] || "—",
+          row["Party Name"] || "—",
+          row["Direct Stitching"] || "No",
+          row.Supervisor || "—",
+          row["Date of Issue"] || "—"
+        ];
+      });
+
+      // Total Row
+      tableBody.push([
+        '',
+        `TOTAL (${totalLots})`,
+        '',
+        '',
+        '',
+        '',
+        totalQty.toLocaleString(),
+        '',
+        '',
+        `${sortedParties.length} Parties`,
+        '',
+        `${sortedSupervisors.length} Supervisors`,
+        ''
+      ]);
+
+      const columnStyles = {
+        0: { cellWidth: 35, halign: 'center' },
+        1: { cellWidth: 85, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: 105, halign: 'center' },
+        3: { cellWidth: 110, halign: 'center' },
+        4: { cellWidth: 115, halign: 'center' },
+        5: { cellWidth: 85, halign: 'center' },
+        6: { cellWidth: 70, halign: 'center', fontStyle: 'bold' },
+        7: { cellWidth: 75, halign: 'center' },
+        8: { cellWidth: 75, halign: 'center' },
+        9: { cellWidth: 105, halign: 'center' },
+        10: { cellWidth: 75, halign: 'center' },
+        11: { cellWidth: 100, halign: 'center' },
+        12: { cellWidth: 85, halign: 'center' }
+      };
+
+      autoTable(doc, {
+        head: [tableColumns],
+        body: tableBody,
+        startY: 85,
+        tableWidth: pageW - 30,
+        margin: { top: 85, right: 15, bottom: 25, left: 15 },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0], // Pure black text
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+          fontStyle: 'normal',
+          minCellHeight: 14,
+        },
+        headStyles: {
+          fillColor: [30, 27, 75],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          lineColor: [0, 0, 0],
+          lineWidth: 0.5,
+          halign: 'center',
+          fontSize: 9,
+          valign: 'middle',
+          cellPadding: { top: 5, right: 2, bottom: 5, left: 2 },
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+        columnStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0]; // Pure black
+
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
+
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [226, 232, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.halign = 'center';
+            }
+          }
+        }
+      });
+
+      // --- 4-COLUMN SIDE-BY-SIDE EXECUTIVE SUMMARY ---
+      const gBody = sortedGarments.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      gBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const supBody = sortedSupervisors.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      supBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const pBody = sortedParties.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      pBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const sBody = sortedSections.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      sBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const maxRows = Math.max(gBody.length, supBody.length, pBody.length, sBody.length);
+      const approxSummaryHeight = 55 + (maxRows * 18);
+
+      let summaryStartY = doc.lastAutoTable.finalY + 22;
+      const neededSpace = approxSummaryHeight + 35;
+      if (summaryStartY + neededSpace > pageH - 30) {
+        doc.addPage();
+        summaryStartY = 40;
+      } else {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.8);
+        doc.line(15, summaryStartY - 8, pageW - 15, summaryStartY - 8);
+      }
+
+      // Title & KPI Subtitle
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("EXECUTIVE SUMMARY & STITCHING ISSUE BREAKDOWN", pageW / 2, summaryStartY + 4, { align: 'center' });
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(0, 0, 0);
+      const summarySub = `Total Lots: ${totalLots}   |   Total Quantity: ${totalQty.toLocaleString()} Pcs   |   Supervisors: ${sortedSupervisors.length}   |   Garments: ${sortedGarments.length}   |   Parties: ${sortedParties.length}`;
+      doc.text(summarySub, pageW / 2, summaryStartY + 16, { align: 'center' });
+
+      const sectionTitleY = summaryStartY + 30;
+      const tableStartY = sectionTitleY + 6;
+
+      const colWidth = 278;
+      const gap = 16;
+      const col1X = 15;
+      const col2X = col1X + colWidth + gap;
+      const col3X = col2X + colWidth + gap;
+      const col4X = col3X + colWidth + gap;
+
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("1. GARMENT BREAKDOWN", col1X, sectionTitleY);
+      doc.text("2. SUPERVISOR BREAKDOWN", col2X, sectionTitleY);
+      doc.text("3. PARTY BREAKDOWN", col3X, sectionTitleY);
+      doc.text("4. SECTION BREAKDOWN", col4X, sectionTitleY);
+
+      const summaryColStyles = {
+        0: { cellWidth: 110, halign: 'center' },
+        1: { cellWidth: 45, halign: 'center' },
+        2: { cellWidth: 68, halign: 'center' },
+        3: { cellWidth: 55, halign: 'center' },
+      };
+
+      // Col 1: Garments
+      autoTable(doc, {
+        head: [['Garment Type', 'Lots', 'Total Qty', 'Share %']],
+        body: gBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col1X, right: pageW - (col1X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === gBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Col 2: Supervisors
+      autoTable(doc, {
+        head: [['Supervisor', 'Lots', 'Total Qty', 'Share %']],
+        body: supBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col2X, right: pageW - (col2X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [67, 56, 202], // Indigo
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === supBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Col 3: Parties
+      autoTable(doc, {
+        head: [['Party Name', 'Lots', 'Total Qty', 'Share %']],
+        body: pBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col3X, right: pageW - (col3X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [30, 64, 175], // Royal Blue
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === pBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      // Col 4: Sections
+      autoTable(doc, {
+        head: [['Section', 'Lots', 'Total Qty', 'Share %']],
+        body: sBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col4X, right: pageW - (col4X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [180, 83, 9], // Amber
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === sBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+
+      const fileName = `Daily_Stitching_Issues_${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(fileName);
+    } catch (err) {
+      console.error("Error generating PDF:", err);
+      alert(`Failed to generate PDF: ${err.message}`);
     }
-
-    // Remove "Sr. No" from headers for PDF export
-    const pdfHeaders = DISPLAY_HEADERS.filter(h => h !== "Sr. No");
-
-    const tableContent = `
-    <html>
-      <head>
-        <title>${filename}</title>
-        <style>
-          body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; margin: 20px; color:#111; }
-          .daily-stitching-header { text-align: left; margin-bottom: 16px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
-          .daily-stitching-title { font-size: 20px; font-weight: 700; margin: 0; }
-          .daily-stitching-subtitle { font-size: 12px; color: #6b7280; margin: 4px 0; }
-          .daily-stitching-date { font-size: 12px; color: #6b7280; }
-          .daily-stitching-total-pcs { font-size: 14px; color: #059669; font-weight: 600; margin: 8px 0; }
-          .daily-stitching-table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12px; }
-          .daily-stitching-th, .daily-stitching-td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
-          .daily-stitching-th { background:#f8fafc; font-weight: 600; }
-          .daily-stitching-tr:nth-child(even){ background:#fcfcfd; }
-          .daily-stitching-tr-recent { background: #f0f9ff !important; border-left: 3px solid #3b82f6; }
-          @media print { body { margin: 0; } .daily-stitching-no-print { display: none; } }
-        </style>
-      </head>
-      <body>
-        <div class="daily-stitching-header">
-          <h1 class="daily-stitching-title">Daily Stitching Issue Report</h1>
-          <p class="daily-stitching-subtitle">Quality Control Tracking</p>
-          <p class="daily-stitching-date">Generated on: ${currentDate} • Total Records: ${data.length}</p>
-          ${dateRangeHtml}
-          <p class="daily-stitching-total-pcs">Total PCS: ${totalPCS.toLocaleString()}</p>
-        </div>
-        <table class="daily-stitching-table">
-          <thead>
-            <tr>
-              ${pdfHeaders.map((header) => `<th class="daily-stitching-th">${header}</th>`).join("")}
-            </tr>
-          </thead>
-          <tbody>
-            ${data
-        .map(
-          (row) => `
-              <tr class="daily-stitching-tr ${row._isRecent ? 'daily-stitching-tr-recent' : ''}">
-                ${pdfHeaders.map((header) => `<td class="daily-stitching-td">${row[header] || "-"}</td>`).join("")}
-              </tr>
-            `
-        )
-        .join("")}
-          </tbody>
-        </table>
-        <div class="daily-stitching-no-print" style="margin-top: 16px;">
-          <button onclick="window.print()" style="padding: 8px 12px; border:1px solid #e5e7eb; background:#fff; border-radius:6px; cursor:pointer;">Print / Save as PDF</button>
-          <button onclick="window.close()" style="padding: 8px 12px; margin-left:8px; border:1px solid #e5e7eb; background:#fff; border-radius:6px; cursor:pointer;">Close</button>
-        </div>
-      </body>
-    </html>`;
-    printWindow.document.write(tableContent);
-    printWindow.document.close();
   };
 
   /* ---------- Pagination ---------- */
@@ -912,891 +1508,633 @@ export default function DailyStitchingIssue() {
   }, [filteredRows, page, pageSize]);
 
   return (
-    <div className="daily-stitching-container">
-      <style>{`
-        .daily-stitching-container {
-          min-height: 100vh;
-          background-color: #f8fafc;
-          background-image: 
-            radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.08) 0px, transparent 50%), 
-            radial-gradient(at 100% 0%, rgba(236, 72, 153, 0.06) 0px, transparent 50%), 
-            radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.06) 0px, transparent 50%);
-          font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
-          color: #0f172a;
-          padding: 24px 32px;
-        }
-
-        .daily-stitching-main {
-          max-width: 100%;
-          margin: 0 auto;
-        }
-
-        .daily-stitching-header {
-          background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 100%);
-          border-radius: 24px;
-          padding: 32px 36px;
-          margin-bottom: 28px;
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          box-shadow: 0 20px 40px -15px rgba(30, 27, 75, 0.25);
-          position: relative;
-          overflow: hidden;
-        }
-
-        .daily-stitching-header-content {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 24px;
-          position: relative;
-          z-index: 1;
-        }
-
-        .daily-stitching-header-left {
-          flex: 1;
-        }
-
-        .daily-stitching-title {
-          margin: 0 0 6px 0;
-          font-size: 2rem;
-          font-weight: 800;
-          color: #ffffff;
-          letter-spacing: -0.02em;
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .daily-stitching-subtitle {
-          margin: 0;
-          font-size: 0.95rem;
-          color: #c7d2fe;
-          font-weight: 500;
-        }
-
-        .daily-stitching-stats {
-          display: flex;
-          gap: 16px;
-        }
-
-        .daily-stitching-stat {
-          text-align: center;
-          padding: 14px 22px;
-          background: rgba(255, 255, 255, 0.12);
-          backdrop-filter: blur(12px);
-          -webkit-backdrop-filter: blur(12px);
-          border-radius: 18px;
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          min-width: 120px;
-          box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
-          transition: all 0.2s ease;
-        }
-
-        .daily-stitching-stat:hover {
-          transform: translateY(-2px);
-          background: rgba(255, 255, 255, 0.18);
-        }
-
-        .daily-stitching-stat-value {
-          display: block;
-          font-size: 1.8rem;
-          font-weight: 800;
-          margin-bottom: 2px;
-          color: white;
-          line-height: 1.1;
-        }
-
-        .daily-stitching-stat-label {
-          font-size: 0.72rem;
-          color: #e0e7ff;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          font-weight: 700;
-        }
-
-        .daily-stitching-toolbar {
-          background: #ffffff;
-          border-radius: 20px;
-          padding: 24px 28px;
-          margin-bottom: 28px;
-          border: 1px solid #e2e8f0;
-          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.03);
-        }
-
-        .daily-stitching-search {
-          position: relative;
-          margin-bottom: 20px;
-        }
-
-        .daily-stitching-search-icon {
-          position: absolute;
-          left: 14px;
-          top: 50%;
-          transform: translateY(-50%);
-          color: #64748b;
-          font-size: 16px;
-        }
-
-        .daily-stitching-search-input {
-          padding: 12px 14px 12px 46px;
-          border: 1.5px solid #cbd5e1;
-          border-radius: 12px;
-          background: #ffffff;
-          color: #0f172a;
-          font-size: 0.9rem;
-          font-weight: 600;
-          width: 100%;
-          box-sizing: border-box;
-          transition: all 0.2s ease;
-        }
-
-        .daily-stitching-search-input:focus {
-          outline: none;
-          border-color: #6366f1;
-          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-        }
-
-        .daily-stitching-filters {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-          gap: 18px;
-          margin-bottom: 20px;
-        }
-
-        .daily-stitching-filter-group {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-
-        .daily-stitching-filter-label {
-          font-size: 0.82rem;
-          color: #475569;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
-        }
-
-        .daily-stitching-filter-select, .daily-stitching-date-input {
-          padding: 10px 14px;
-          border: 1.5px solid #cbd5e1;
-          border-radius: 12px;
-          background: #ffffff;
-          color: #0f172a;
-          font-size: 0.88rem;
-          font-weight: 600;
-          transition: all 0.2s ease;
-          width: 100%;
-          box-sizing: border-box;
-        }
-
-        .daily-stitching-filter-select:focus, .daily-stitching-date-input:focus {
-          outline: none;
-          border-color: #6366f1;
-          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-        }
-
-        .daily-stitching-date-range-group {
-          grid-column: span 2;
-          background: #f8fafc;
-          border-radius: 16px;
-          padding: 18px;
-          border: 1.5px solid #e2e8f0;
-        }
-
-        .daily-stitching-controls {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 16px;
-          flex-wrap: wrap;
-        }
-
-        .daily-stitching-buttons {
-          display: flex;
-          gap: 12px;
-          flex-wrap: wrap;
-        }
-
-        .daily-stitching-btn {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          padding: 10px 20px;
-          border: none;
-          border-radius: 12px;
-          font-size: 0.88rem;
-          font-weight: 700;
-          cursor: pointer;
-          transition: all 0.2s ease;
-        }
-
-        .daily-stitching-btn:hover:not(:disabled) {
-          transform: translateY(-2px);
-        }
-
-        .daily-stitching-btn-excel {
-          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-          color: #ffffff;
-          box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
-        }
-
-        .daily-stitching-btn-pdf {
-          background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-          color: #ffffff;
-          box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
-        }
-
-        .daily-stitching-btn-refresh {
-          background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%);
-          color: #ffffff;
-          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
-        }
-
-        .daily-stitching-btn-back {
-          background: #0f172a;
-          color: #ffffff;
-          box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
-        }
-
-        .daily-stitching-btn-clear {
-          background: #f1f5f9;
-          color: #475569;
-          border: 1px solid #cbd5e1;
-        }
-
-        .daily-stitching-table-container {
-          background: #ffffff;
-          border-radius: 24px;
-          border: 1px solid #e2e8f0;
-          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.03);
-          overflow: hidden;
-          margin-bottom: 24px;
-        }
-
-        .daily-stitching-table-wrapper {
-          overflow-x: auto;
-          max-height: 70vh;
-        }
-
-        .daily-stitching-table {
-          width: 100%;
-          border-collapse: separate;
-          border-spacing: 0;
-          font-size: 0.88rem;
-        }
-
-        .daily-stitching-thead {
-          position: sticky;
-          top: 0;
-          z-index: 20;
-          background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
-        }
-
-        .daily-stitching-th {
-          padding: 16px 14px;
-          text-align: center;
-          font-weight: 800;
-          color: #ffffff;
-          font-size: 0.75rem;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          border-bottom: 2px solid #312e81;
-          white-space: nowrap;
-        }
-
-        .daily-stitching-td {
-          padding: 12px 14px;
-          border-bottom: 1px solid #f1f5f9;
-          border-right: 1px solid #f8fafc;
-          background: #ffffff;
-          color: #1e293b;
-          text-align: center;
-          vertical-align: middle;
-        }
-
-        .daily-stitching-tr:nth-child(even) .daily-stitching-td {
-          background: #f8fafc;
-        }
-
-        .daily-stitching-tr:hover .daily-stitching-td {
-          background: #e0e7ff;
-        }
-
-        .daily-stitching-badge-new {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          padding: 3px 8px;
-          background: linear-gradient(135deg, #ec4899 0%, #be185d 100%);
-          color: #ffffff;
-          border-radius: 20px;
-          font-size: 0.68rem;
-          font-weight: 800;
-          letter-spacing: 0.06em;
-          box-shadow: 0 2px 8px rgba(236, 72, 153, 0.4);
-        }
-
-        .daily-stitching-pagination {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          background: #ffffff;
-          padding: 20px 24px;
-          border-radius: 20px;
-          border: 1px solid #e2e8f0;
-          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.03);
-        }
-
-        .daily-stitching-loader {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(15, 23, 42, 0.5);
-          backdrop-filter: blur(6px);
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          z-index: 10000;
-        }
-
-        .daily-stitching-spinner {
-          width: 56px;
-          height: 56px;
-          border-radius: 50%;
-          background: conic-gradient(from 0deg, #6366f1, #ec4899, #10b981, #6366f1);
-          animation: daily-stitching-spin 1.2s linear infinite;
-          padding: 4px;
-          mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #fff 0);
-          -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #fff 0);
-          margin-bottom: 20px;
-        }
-
-        @keyframes daily-stitching-spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-
-        .daily-stitching-loader-text {
-          font-size: 1.1rem;
-          color: #ffffff;
-          margin-bottom: 16px;
-          font-weight: 700;
-          text-align: center;
-        }
-
-        .daily-stitching-loader-progress {
-          width: 300px;
-          max-width: 80%;
-          margin-top: 10px;
-        }
-
-        .daily-stitching-progress-bar {
-          width: 100%;
-          height: 8px;
-          background: rgba(67, 49, 168, 0.1);
-          border-radius: 4px;
-          overflow: hidden;
-          margin-bottom: 8px;
-        }
-
-        .daily-stitching-progress-fill {
-          height: 100%;
-          background: linear-gradient(90deg, #4331a8, #6d5bd9);
-          border-radius: 4px;
-          transition: width 0.3s ease;
-        }
-
-        .daily-stitching-progress-text {
-          font-size: 14px;
-          color: #4331a8;
-          font-weight: 500;
-          text-align: center;
-        }
-
-        .daily-stitching-refresh-overlay {
-          position: fixed;
-          top: 20px;
-          right: 20px;
-          background: rgba(67, 49, 168, 0.9);
-          color: white;
-          padding: 12px 20px;
-          border-radius: 8px;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          z-index: 1001;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-          animation: daily-stitching-slide-in 0.3s ease;
-        }
-
-        .daily-stitching-refresh-spinner {
-          width: 20px;
-          height: 20px;
-          border: 2px solid rgba(255, 255, 255, 0.3);
-          border-top: 2px solid white;
-          border-radius: 50%;
-          animation: daily-stitching-spin 1s linear infinite;
-        }
-
-        @keyframes daily-stitching-spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-
-        @keyframes daily-stitching-slide-in {
-          from {
-            transform: translateX(100%);
-            opacity: 0;
-          }
-          to {
-            transform: translateX(0);
-            opacity: 1;
-          }
-        }
-
-        .daily-stitching-pcs-info {
-          background: #f0fdf4;
-          border: 1px solid #bbf7d0;
-          border-radius: 12px;
-          padding: 16px 20px;
-          margin-bottom: 16px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .daily-stitching-pcs-info span {
-          font-weight: 700;
-          color: #059669;
-        }
-
-        .daily-stitching-empty {
-          text-align: center;
-          padding: 40px;
-          color: #64748b;
-        }
-
-        .daily-stitching-empty-icon {
-          font-size: 48px;
-          margin-bottom: 16px;
-        }
-
-        .daily-stitching-empty-text {
-          font-size: 16px;
-          font-weight: 500;
-        }
-
-        @media (max-width: 768px) {
-          .daily-stitching-main {
-            padding: 16px;
-          }
-          
-          .daily-stitching-header-content {
-            flex-direction: column;
-          }
-          
-          .daily-stitching-stats {
-            min-width: auto;
-            width: 100%;
-          }
-          
-          .daily-stitching-controls {
-            flex-direction: column;
-            align-items: stretch;
-          }
-          
-          .daily-stitching-buttons {
-            justify-content: center;
-          }
-          
-          .daily-stitching-date-range-group {
-            grid-column: span 1;
-          }
-          
-          .daily-stitching-date-range-fields {
-            grid-template-columns: 1fr;
-          }
-          
-          .daily-stitching-loader-progress {
-            width: 250px;
-          }
-        }
-      `}</style>
-
-      {loading && (
-        <LoadingIndicator
-          message={loadingMessage}
-          progress={loadingProgress}
-        />
-      )}
-
-      {refreshing && (
-        <div className="daily-stitching-refresh-overlay">
-          <div className="daily-stitching-refresh-spinner" />
-          <span>Refreshing data...</span>
-        </div>
-      )}
-
-      <div className="daily-stitching-main" aria-busy={loading || refreshing}>
-        {/* Header */}
-        <div className="daily-stitching-header">
-          <div className="daily-stitching-header-content">
-            <div className="daily-stitching-header-left">
-              <h1 className="daily-stitching-title">DAILY STITCHING ISSUE</h1>
-              <p className="daily-stitching-subtitle">Daily Stitching Issue Tracker with Brand Information</p>
-              {lastUpdated && (
-                <p style={{ color: '#e2e8f0', fontSize: '12px', marginTop: '8px', opacity: 0.8 }}>
-                  Last updated: {lastUpdated}
-                </p>
-              )}
+    <div style={{ minHeight: "100vh", backgroundColor: "#f8fafc", color: "#0f172a", fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
+      {/* Top Navbar */}
+      <header style={{
+        background: "#ffffff",
+        borderBottom: "1px solid #e2e8f0",
+        padding: "12px 28px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+        position: "sticky",
+        top: 0,
+        zIndex: 50
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+          <button
+            onClick={handleGoBack}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              background: "#f1f5f9",
+              border: "1.5px solid #cbd5e1",
+              color: "#1e293b",
+              padding: "7px 14px",
+              borderRadius: "8px",
+              fontSize: "0.82rem",
+              fontWeight: 800,
+              cursor: "pointer",
+              transition: "all 0.15s ease"
+            }}
+            title="Go back to previous page"
+          >
+            ← Back
+          </button>
+          <Link to="/dashboard" style={{ display: "flex", alignItems: "center", gap: "10px", textDecoration: "none" }}>
+            <span style={{ fontSize: "1.6rem" }}>🏭</span>
+            <div>
+              <div style={{ fontSize: "1.05rem", fontWeight: 900, color: "#0f172a", letterSpacing: "-0.3px", display: "flex", alignItems: "center", gap: "6px" }}>
+                Factory Suite Pro <span style={{ background: "#dcfce7", color: "#15803d", fontSize: "0.68rem", fontWeight: 800, padding: "2px 6px", borderRadius: "4px" }}>LIVE</span>
+              </div>
+              <div style={{ fontSize: "0.72rem", color: "#64748b", fontWeight: 600 }}>Daily Stitching Issue Console</div>
             </div>
-            <div className="daily-stitching-stats">
-              <div className="daily-stitching-stat">
-                <span className="daily-stitching-stat-value">{analytics.totalRecords}</span>
-                <span className="daily-stitching-stat-label">Total Records</span>
-              </div>
-              <div className="daily-stitching-stat">
-                <span className="daily-stitching-stat-value">{analytics.uniqueLots}</span>
-                <span className="daily-stitching-stat-label">Active Lots</span>
-              </div>
-              <div className="daily-stitching-stat daily-stitching-stat-recent">
-                <span className="daily-stitching-stat-value">{analytics.recentLots}</span>
-                <span className="daily-stitching-stat-label">Recent Lots</span>
-              </div>
-              {/* <div className="daily-stitching-stat">
-                <span className="daily-stitching-stat-value">{analytics.uniqueBrands}</span>
-                <span className="daily-stitching-stat-label">Brands</span>
-              </div> */}
-              {/* <div className="daily-stitching-stat daily-stitching-stat-pcs">
-                <span className="daily-stitching-stat-value">{analytics.totalPCS.toLocaleString()}</span>
-                <span className="daily-stitching-stat-label">Total PCS</span>
-              </div> */}
-            </div>
-          </div>
+          </Link>
         </div>
 
-        {/* Error Display */}
-        {error && (
-          <div style={{
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: '12px',
-            padding: '16px',
-            marginBottom: '24px',
-            color: '#991b1b'
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <Link to="/dashboard" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "#1e1b4b",
+            color: "#ffffff",
+            padding: "7px 14px",
+            borderRadius: "8px",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            textDecoration: "none"
           }}>
-            <strong>Error:</strong> {error}
+            🏢 Dashboard
+          </Link>
+          <Link to="/lot-logs" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "#f1f5f9",
+            color: "#334155",
+            padding: "7px 14px",
+            borderRadius: "8px",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            textDecoration: "none"
+          }}>
+            📋 Lot Logs
+          </Link>
+          <Link to="/production-flowchart" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "#f1f5f9",
+            color: "#334155",
+            padding: "7px 14px",
+            borderRadius: "8px",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            textDecoration: "none"
+          }}>
+            🗺️ Flow Poster
+          </Link>
+          <Link to="/lot-timeline" style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "#f1f5f9",
+            color: "#334155",
+            padding: "7px 14px",
+            borderRadius: "8px",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            textDecoration: "none"
+          }}>
+            🚚 Lot Tracker
+          </Link>
+          {currentUser && (
             <button
-              onClick={handleRefresh}
+              onClick={handleLogout}
               style={{
-                marginLeft: '16px',
-                padding: '8px 16px',
-                background: '#dc2626',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontWeight: '600'
+                background: "#fee2e2",
+                border: "1px solid #fca5a5",
+                color: "#dc2626",
+                padding: "7px 14px",
+                borderRadius: "8px",
+                fontSize: "0.82rem",
+                fontWeight: 700,
+                cursor: "pointer"
               }}
             >
-              Retry
+              🚪 Logout
             </button>
-          </div>
-        )}
+          )}
+        </div>
+      </header>
 
-        {/* Total PCS Info */}
-        {hasActiveFilters && filteredTotalPCS !== totalPCS && (
-          <div className="daily-stitching-pcs-info">
-            <div>
-              <strong>Filtered Total PCS:</strong> <span>{filteredTotalPCS.toLocaleString()}</span>
+      {/* Main Container */}
+      <main style={{ padding: "24px 32px 60px 32px", maxWidth: "100%", boxSizing: "border-box" }}>
+        {/* Header Banner */}
+        <div style={{
+          background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 100%)",
+          borderRadius: "20px",
+          padding: "26px 32px",
+          marginBottom: "24px",
+          border: "1px solid rgba(255, 255, 255, 0.12)",
+          boxShadow: "0 16px 32px -10px rgba(30, 27, 75, 0.3)",
+          color: "#ffffff",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "20px"
+        }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: "1.85rem", fontWeight: 900, letterSpacing: "-0.5px", display: "flex", alignItems: "center", gap: "10px" }}>
+              <span>🪡</span> DAILY STITCHING ISSUE
+            </h1>
+            <p style={{ margin: "6px 0 0 0", color: "#c7d2fe", fontSize: "0.92rem", fontWeight: 500 }}>
+              Live stitching line allotment records, supervisor targets & brand allocations
+            </p>
+            {lastUpdated && (
+              <div style={{ color: "#a5b4fc", fontSize: "0.76rem", marginTop: "6px", fontWeight: 600 }}>
+                Synced: {lastUpdated}
+              </div>
+            )}
+          </div>
+
+          {/* KPI Stat Cards */}
+          <div style={{ display: "flex", gap: "14px", flexWrap: "wrap" }}>
+            <div style={{
+              background: "rgba(255, 255, 255, 0.12)",
+              backdropFilter: "blur(10px)",
+              padding: "10px 18px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255, 255, 255, 0.2)",
+              textAlign: "center",
+              minWidth: "100px"
+            }}>
+              <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#ffffff", lineHeight: 1.1 }}>
+                {analytics.totalRecords.toLocaleString()}
+              </div>
+              <div style={{ fontSize: "0.68rem", color: "#e0e7ff", fontWeight: 800, textTransform: "uppercase", marginTop: "2px" }}>
+                Total Records
+              </div>
             </div>
-            <div style={{ fontSize: '12px', color: '#6b7280' }}>
-              (Overall Total: {totalPCS.toLocaleString()})
+            {/* 
+            <div style={{
+              background: "rgba(255, 255, 255, 0.12)",
+              backdropFilter: "blur(10px)",
+              padding: "10px 18px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255, 255, 255, 0.2)",
+              textAlign: "center",
+              minWidth: "100px"
+            }}>
+              <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#a7f3d0", lineHeight: 1.1 }}>
+                {analytics.totalPCS.toLocaleString()}
+              </div>
+              <div style={{ fontSize: "0.68rem", color: "#e0e7ff", fontWeight: 800, textTransform: "uppercase", marginTop: "2px" }}>
+                Total PCS
+              </div>
+            </div> */}
+
+            <div style={{
+              background: "rgba(255, 255, 255, 0.12)",
+              backdropFilter: "blur(10px)",
+              padding: "10px 18px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255, 255, 255, 0.2)",
+              textAlign: "center",
+              minWidth: "100px"
+            }}>
+              <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#ffffff", lineHeight: 1.1 }}>
+                {analytics.uniqueLots}
+              </div>
+              <div style={{ fontSize: "0.68rem", color: "#e0e7ff", fontWeight: 800, textTransform: "uppercase", marginTop: "2px" }}>
+                Active Lots
+              </div>
+            </div>
+
+            <div style={{
+              background: "rgba(255, 255, 255, 0.12)",
+              backdropFilter: "blur(10px)",
+              padding: "10px 18px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255, 255, 255, 0.2)",
+              textAlign: "center",
+              minWidth: "100px"
+            }}>
+              <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#fed7aa", lineHeight: 1.1 }}>
+                {analytics.supervisorsCount}
+              </div>
+              <div style={{ fontSize: "0.68rem", color: "#e0e7ff", fontWeight: 800, textTransform: "uppercase", marginTop: "2px" }}>
+                Supervisors
+              </div>
             </div>
           </div>
-        )}
+        </div>
 
-        {/* Toolbar */}
-        <div className="daily-stitching-toolbar">
-          <div className="daily-stitching-search">
-            <span className="daily-stitching-search-icon">🔍</span>
+        {/* Toolbar & Filters */}
+        <div style={{
+          background: "#ffffff",
+          borderRadius: "18px",
+          padding: "20px 24px",
+          marginBottom: "24px",
+          border: "1px solid #e2e8f0",
+          boxShadow: "0 8px 24px rgba(0, 0, 0, 0.03)"
+        }}>
+          {/* Search Box */}
+          <div style={{ position: "relative", marginBottom: "16px" }}>
+            <span style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: "#64748b", fontSize: "16px" }}>🔍</span>
             <input
               type="text"
-              className="daily-stitching-search-input"
-              placeholder="Search across all columns…"
+              placeholder="Search across lot numbers, garments, styles, fabrics, brands, supervisors..."
               value={searchTerm}
               onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
-              disabled={loading}
+              style={{
+                width: "100%",
+                padding: "11px 16px 11px 44px",
+                border: "1.5px solid #cbd5e1",
+                borderRadius: "10px",
+                fontSize: "0.88rem",
+                fontWeight: 600,
+                color: "#0f172a",
+                boxSizing: "border-box",
+                outline: "none"
+              }}
             />
           </div>
 
-          <div className="daily-stitching-filters">
-            <div className="daily-stitching-filter-group">
-              <label className="daily-stitching-filter-label">Lot Number</label>
+          {/* Filter Dropdowns Grid */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "14px",
+            marginBottom: "16px"
+          }}>
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Lot Number
+              </label>
               <select
                 value={filterLot}
                 onChange={(e) => { setFilterLot(e.target.value); setPage(1); }}
-                className="daily-stitching-filter-select"
-                disabled={loading}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
               >
-                <option value="">All Lots</option>
+                <option value="">All Lots ({uniqueLots.length})</option>
                 {uniqueLots.map((lot) => (
                   <option key={lot} value={lot}>{lot}</option>
                 ))}
               </select>
             </div>
 
-            <div className="daily-stitching-filter-group">
-              <label className="daily-stitching-filter-label">Supervisor</label>
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Supervisor
+              </label>
               <select
                 value={filterSupervisor}
                 onChange={(e) => { setFilterSupervisor(e.target.value); setPage(1); }}
-                className="daily-stitching-filter-select"
-                disabled={loading}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
               >
-                <option value="">All Supervisors</option>
+                <option value="">All Supervisors ({uniqueSupervisors.length})</option>
                 {uniqueSupervisors.map(({ key, label }) => (
                   <option key={key} value={key}>{label}</option>
                 ))}
               </select>
             </div>
 
-            <div className="daily-stitching-filter-group">
-              <label className="daily-stitching-filter-label">Issue Date</label>
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Garment Type
+              </label>
+              <select
+                value={filterGarment}
+                onChange={(e) => { setFilterGarment(e.target.value); setPage(1); }}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
+              >
+                <option value="">All Garments ({uniqueGarments.length})</option>
+                {uniqueGarments.map((g) => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Brand
+              </label>
+              <select
+                value={filterBrand}
+                onChange={(e) => { setFilterBrand(e.target.value); setPage(1); }}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
+              >
+                <option value="">All Brands ({uniqueBrands.length})</option>
+                {uniqueBrands.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: "0.76rem", fontWeight: 800, color: "#475569", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                Issue Date
+              </label>
               <select
                 value={filterIssueDate}
                 onChange={(e) => { setFilterIssueDate(e.target.value); setPage(1); }}
-                className="daily-stitching-filter-select"
-                disabled={loading}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1.5px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 600, background: "#ffffff", color: "#0f172a" }}
               >
-                <option value="">All Dates</option>
+                <option value="">All Dates ({uniqueIssueDates.length})</option>
                 {uniqueIssueDates.map((d) => (
                   <option key={d} value={d}>{d}</option>
                 ))}
               </select>
             </div>
-
-            <div className="daily-stitching-filter-group">
-              <label className="daily-stitching-filter-label">Brand</label>
-              <select
-                value={filterBrand}
-                onChange={(e) => { setFilterBrand(e.target.value); setPage(1); }}
-                className="daily-stitching-filter-select"
-                disabled={loading}
-              >
-                <option value="">All Brands</option>
-                {uniqueBrands.map((brand) => (
-                  <option key={brand} value={brand}>{brand || "No Brand"}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Date Range Filter */}
-            <div className="daily-stitching-date-range-group">
-              <div className="daily-stitching-date-range-header">
-                <div className="daily-stitching-date-range-title">
-                  <span>📅</span>
-                  <span>Date Range Filter</span>
-                </div>
-                <div
-                  className={`daily-stitching-date-range-toggle ${dateRangeFilter.enabled ? 'active' : ''}`}
-                  onClick={toggleDateRangeFilter}
-                  style={{ cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}
-                >
-                  {dateRangeFilter.enabled ? '✓ Active' : 'Enable'}
-                </div>
-              </div>
-
-              <div className="daily-stitching-date-range-fields">
-                <div>
-                  <label className="daily-stitching-filter-label">Start Date</label>
-                  <input
-                    type="date"
-                    value={dateRangeFilter.startDate}
-                    onChange={(e) => handleDateRangeChange('startDate', e.target.value)}
-                    className="daily-stitching-date-input"
-                    disabled={!dateRangeFilter.enabled || loading}
-                  />
-                </div>
-                <div>
-                  <label className="daily-stitching-filter-label">End Date</label>
-                  <input
-                    type="date"
-                    value={dateRangeFilter.endDate}
-                    onChange={(e) => handleDateRangeChange('endDate', e.target.value)}
-                    className="daily-stitching-date-input"
-                    disabled={!dateRangeFilter.enabled || loading}
-                  />
-                </div>
-              </div>
-
-              {dateRangeFilter.enabled && (
-                <div className="daily-stitching-date-range-info">
-                  <strong>Active Filter:</strong> {getDateRangeLabel()}
-                  {dateRangeFilter.startDate && dateRangeFilter.endDate && (
-                    <span> • Records in range: {filteredRows.length}</span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="daily-stitching-filter-group">
-              <label className="daily-stitching-filter-label">Quick Filters</label>
-              <div className="daily-stitching-checkbox">
-                <input
-                  type="checkbox"
-                  id="daily-stitching-showRecent"
-                  checked={showOnlyRecent}
-                  onChange={(e) => { setShowOnlyRecent(e.target.checked); setPage(1); }}
-                  disabled={loading}
-                />
-                <label htmlFor="daily-stitching-showRecent" style={{ fontSize: '14px', color: '#374151' }}>
-                  Show only recent lots (last 24h)
-                </label>
-              </div>
-            </div>
           </div>
 
-          <div className="daily-stitching-controls">
-            <div className="daily-stitching-buttons">
+          {/* Action Buttons & Export Controls */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", borderTop: "1px solid #f1f5f9", paddingTop: "14px" }}>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button
-                onClick={() => downloadExcel(filteredRows, "stitching-quality-report")}
-                className="daily-stitching-btn daily-stitching-btn-excel"
-                disabled={filteredRows.length === 0 || loading}
-                title="Export current filtered data to CSV"
+                onClick={handleExportExcel}
+                style={{
+                  background: "#059669",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "9px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.84rem",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
               >
-                📊 Export CSV
+                📊 Export Excel (.xlsx)
               </button>
+
               <button
-                onClick={() => downloadPDF(filteredRows, "stitching-quality-report")}
-                className="daily-stitching-btn daily-stitching-btn-pdf"
-                disabled={filteredRows.length === 0 || loading}
-                title="Generate PDF report with current filters"
+                onClick={handleExportPDF}
+                style={{
+                  background: "#dc2626",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "9px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.84rem",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
               >
-                📄 PDF Report
+                📄 PDF Report (.pdf)
               </button>
+
               <button
                 onClick={handleRefresh}
-                className="daily-stitching-btn daily-stitching-btn-refresh"
-                disabled={loading || refreshing}
+                style={{
+                  background: "#4f46e5",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "9px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.84rem",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
               >
-                🔄 {refreshing ? "Refreshing..." : "Refresh Data"}
+                🔄 {refreshing ? "Refreshing..." : "Refresh Live"}
               </button>
+
               <button
-                onClick={goBack}
-                className="daily-stitching-btn daily-stitching-btn-back"
-                disabled={loading}
+                onClick={handleGoBack}
+                style={{
+                  background: "#334155",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "9px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.84rem",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
+                title="Go back to previous page"
               >
                 ← Back
               </button>
+
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  style={{
+                    background: "#f1f5f9",
+                    color: "#475569",
+                    border: "1px solid #cbd5e1",
+                    padding: "9px 16px",
+                    borderRadius: "8px",
+                    fontSize: "0.84rem",
+                    fontWeight: 800,
+                    cursor: "pointer"
+                  }}
+                >
+                  Clear Filters
+                </button>
+              )}
             </div>
 
-            {hasActiveFilters && (
-              <button
-                onClick={clearFilters}
-                className="daily-stitching-btn daily-stitching-btn-clear"
-                disabled={loading}
-              >
-                🗑️ Clear All Filters
-              </button>
-            )}
+            <div style={{ fontSize: "0.84rem", color: "#64748b", fontWeight: 700 }}>
+              Showing {filteredRows.length === 0 ? 0 : (page - 1) * pageSize + 1} - {Math.min(page * pageSize, filteredRows.length)} of {filteredRows.length} lots
+            </div>
           </div>
         </div>
 
-        {/* Table */}
-        <div className="daily-stitching-table-container">
-          <div className="daily-stitching-table-wrapper">
-            <table className="daily-stitching-table">
-              <thead className="daily-stitching-thead">
-                <tr>
+        {/* Data Table */}
+        <div style={{
+          background: "#ffffff",
+          borderRadius: "18px",
+          border: "1px solid #e2e8f0",
+          boxShadow: "0 8px 24px rgba(0, 0, 0, 0.03)",
+          overflow: "hidden"
+        }}>
+          <div style={{ overflowX: "auto", width: "100%" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "center", fontSize: "0.84rem" }}>
+              <thead>
+                <tr style={{ background: "#1e1b4b", color: "#ffffff" }}>
                   {DISPLAY_HEADERS.map((h) => (
                     <th
                       key={h}
-                      className="daily-stitching-th"
-                      onClick={() => !loading && handleSort(h)}
-                      style={{ cursor: loading ? 'default' : 'pointer' }}
+                      onClick={() => handleSort(h)}
+                      style={{
+                        padding: "12px 10px",
+                        fontWeight: 800,
+                        fontSize: "0.78rem",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.5px",
+                        borderRight: "1px solid rgba(255, 255, 255, 0.1)",
+                        cursor: "pointer",
+                        userSelect: "none",
+                        whiteSpace: "nowrap"
+                      }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                         <span>{COLUMN_ICONS[h]}</span>
                         <span>{h}</span>
                         {sortConfig.key === h && (
-                          <span>{sortConfig.direction === "asc" ? "↑" : "↓"}</span>
+                          <span style={{ color: "#38bdf8" }}>{sortConfig.direction === "asc" ? "▲" : "▼"}</span>
                         )}
                       </div>
                     </th>
                   ))}
                 </tr>
               </thead>
-              {/* Table Body */}
+
               <tbody>
-                {pagedRows.length === 0 ? (
+                {loading ? (
                   <tr>
-                    <td colSpan={DISPLAY_HEADERS.length} className="daily-stitching-td">
-                      <div className="daily-stitching-empty">
-                        <div className="daily-stitching-empty-icon">📭</div>
-                        <div className="daily-stitching-empty-text">
-                          {rows.length === 0 ? 'No data available' : 'No records found matching your filters'}
-                        </div>
-                        {hasActiveFilters && (
-                          <button
-                            className="daily-stitching-btn daily-stitching-btn-clear"
-                            onClick={clearFilters}
-                            style={{ marginTop: '16px' }}
-                            disabled={loading}
-                          >
-                            Clear all filters
-                          </button>
-                        )}
-                      </div>
+                    <td colSpan={DISPLAY_HEADERS.length} style={{ padding: "60px 20px", textAlign: "center" }}>
+                      <div style={{ fontSize: "2rem", marginBottom: "8px" }}>⏳</div>
+                      <div style={{ fontSize: "1rem", fontWeight: 800, color: "#1e1b4b" }}>{loadingMessage}</div>
+                      <div style={{ fontSize: "0.82rem", color: "#64748b" }}>Progress: {loadingProgress}%</div>
+                    </td>
+                  </tr>
+                ) : pagedRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={DISPLAY_HEADERS.length} style={{ padding: "60px 20px", textAlign: "center" }}>
+                      <div style={{ fontSize: "2.5rem", marginBottom: "8px" }}>📭</div>
+                      <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#0f172a" }}>No Stitching Issue Records Found</div>
+                      <p style={{ color: "#64748b", margin: "4px 0 14px 0" }}>Try clearing some filters or searching for another lot number.</p>
+                      {hasActiveFilters && (
+                        <button
+                          onClick={clearFilters}
+                          style={{
+                            background: "#4f46e5",
+                            color: "#ffffff",
+                            border: "none",
+                            padding: "8px 18px",
+                            borderRadius: "8px",
+                            fontSize: "0.84rem",
+                            fontWeight: 700,
+                            cursor: "pointer"
+                          }}
+                        >
+                          Clear all filters
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ) : (
                   pagedRows.map((row, idx) => {
-                    const serialNumber = ((page - 1) * pageSize) + idx + 1;
+                    const serialNumber = (page - 1) * pageSize + idx + 1;
+                    const isEven = idx % 2 === 0;
+
                     return (
                       <tr
                         key={`${row["Lot Number"]}-${idx}-${row["Source Type"]}`}
-                        className={`daily-stitching-tr ${row._isRecent ? 'daily-stitching-tr-recent' : ''}`}
+                        style={{
+                          background: row._isRecent ? "#f0fdf4" : (isEven ? "#ffffff" : "#f8fafc"),
+                          borderBottom: "1px solid #e2e8f0",
+                          transition: "background-color 0.15s"
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f1f5f9"}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = row._isRecent ? "#f0fdf4" : (isEven ? "#ffffff" : "#f8fafc")}
                       >
-                        {/* Sr. No */}
-                        <td className="daily-stitching-td">
+                        {/* 1. Sr. No */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, color: "#64748b", borderRight: "1px solid #f1f5f9" }}>
                           {serialNumber}
                         </td>
-                        {/* Lot Number */}
-                        <td className="daily-stitching-td">
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
-                            <span style={{ fontWeight: '700' }}>{row["Lot Number"]}</span>
+
+                        {/* 2. Lot Number */}
+                        <td style={{ padding: "10px 8px", fontWeight: 800, color: "#0f172a", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                            <span>{row["Lot Number"]}</span>
                             {row._isRecent && (
-                              <span className="daily-stitching-badge-new">NEW</span>
+                              <span style={{
+                                background: "#dcfce7",
+                                color: "#15803d",
+                                border: "1px solid #86efac",
+                                fontSize: "0.65rem",
+                                fontWeight: 900,
+                                padding: "1px 5px",
+                                borderRadius: "4px"
+                              }}>
+                                NEW
+                              </span>
                             )}
                           </div>
                         </td>
-                        {/* Fabric */}
-                        <td className="daily-stitching-td">
-                          {row["Fabric"] || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>—</span>}
+
+                        {/* 3. Garment Type */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#334155", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Garment Type"] || "—"}
                         </td>
-                        {/* Garment Type */}
-                        <td className="daily-stitching-td">
-                          {row["Garment Type"] || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>—</span>}
+
+                        {/* 4. Style */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#334155", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Style"] || "—"}
                         </td>
-                        {/* Brand */}
-                        <td className="daily-stitching-td">
-                          {row["Brand"] || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>—</span>}
+
+                        {/* 5. Fabric */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#334155", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Fabric"] || "—"}
                         </td>
-                        {/* Supervisor */}
-                        <td className="daily-stitching-td">
-                          {row["Supervisor"] || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>—</span>}
+
+                        {/* 6. Brand */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, color: "#0f172a", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Brand"] || "—"}
                         </td>
-                        {/* Date of Issue */}
-                        <td className="daily-stitching-td">
-                          {row["Date of Issue"] || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>—</span>}
+
+                        {/* 7. PCS */}
+                        <td style={{ padding: "10px 8px", fontWeight: 800, color: "#0f172a", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {(Number(row.PCS) || 0).toLocaleString()}
                         </td>
-                        {/* PCS */}
-                        <td className="daily-stitching-td">
-                          {row["PCS"] || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>—</span>}
+
+                        {/* 8. Section */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#475569", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Section"] || "—"}
+                        </td>
+
+                        {/* 9. Season */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#475569", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Season"] || "—"}
+                        </td>
+
+                        {/* 10. Party Name */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, color: "#0f172a", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row["Party Name"] || "—"}
+                        </td>
+
+                        {/* 11. Direct Stitching */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          <span style={{
+                            padding: "3px 8px",
+                            borderRadius: "6px",
+                            fontSize: "0.75rem",
+                            background: String(row["Direct Stitching"]).toLowerCase() === "yes" ? "#dbeafe" : "#f1f5f9",
+                            color: String(row["Direct Stitching"]).toLowerCase() === "yes" ? "#1d4ed8" : "#64748b",
+                            border: String(row["Direct Stitching"]).toLowerCase() === "yes" ? "1px solid #bfdbfe" : "1px solid #e2e8f0"
+                          }}>
+                            {row["Direct Stitching"] || "No"}
+                          </span>
+                        </td>
+
+                        {/* 12. Supervisor */}
+                        <td style={{ padding: "10px 8px", fontWeight: 700, color: "#4338ca", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          {row.Supervisor || "—"}
+                        </td>
+
+                        {/* 13. Date of Issue */}
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: "#0f172a", whiteSpace: "nowrap" }}>
+                          {row["Date of Issue"] || "—"}
                         </td>
                       </tr>
                     );
@@ -1805,78 +2143,70 @@ export default function DailyStitchingIssue() {
               </tbody>
             </table>
           </div>
-        </div>
 
-        {/* Pagination */}
-        {filteredRows.length > 0 && (
-          <div className="daily-stitching-pagination">
-            <div style={{ color: '#374151', fontSize: '14px', fontWeight: '500' }}>
-              Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, filteredRows.length)} of {filteredRows.length} entries
-              {hasActiveFilters && (
-                <span style={{ color: '#059669', marginLeft: '12px' }}>
-                  • Filtered PCS: {filteredTotalPCS.toLocaleString()}
-                </span>
-              )}
-              {dateRangeFilter.enabled && (
-                <span style={{ color: '#4331a8', marginLeft: '12px' }}>
-                  • Date Range: {getDateRangeLabel()}
-                </span>
-              )}
+          {/* Pagination Footer */}
+          <div style={{
+            padding: "16px 24px",
+            background: "#f8fafc",
+            borderTop: "1px solid #e2e8f0",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "12px"
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "0.82rem", color: "#64748b", fontWeight: 600 }}>Rows per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                style={{ padding: "5px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "0.82rem", fontWeight: 700 }}
+              >
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <button
-                className="daily-stitching-btn"
                 onClick={() => setPage(1)}
-                disabled={page <= 1 || loading}
-                style={{ padding: '8px 12px', fontSize: '14px' }}
+                disabled={page === 1}
+                style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: page === 1 ? "#f1f5f9" : "#ffffff", cursor: page === 1 ? "not-allowed" : "pointer", fontWeight: 700, fontSize: "0.8rem" }}
               >
                 « First
               </button>
               <button
-                className="daily-stitching-btn"
                 onClick={() => setPage(p => Math.max(1, p - 1))}
-                disabled={page <= 1 || loading}
-                style={{ padding: '8px 12px', fontSize: '14px' }}
+                disabled={page === 1}
+                style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: page === 1 ? "#f1f5f9" : "#ffffff", cursor: page === 1 ? "not-allowed" : "pointer", fontWeight: 700, fontSize: "0.8rem" }}
               >
                 ‹ Prev
               </button>
-              <span style={{ color: '#374151', fontSize: '14px', margin: '0 12px' }}>
+
+              <span style={{ padding: "6px 14px", fontSize: "0.84rem", fontWeight: 800, color: "#1e1b4b" }}>
                 Page {page} of {totalPages}
               </span>
+
               <button
-                className="daily-stitching-btn"
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                disabled={page >= totalPages || loading}
-                style={{ padding: '8px 12px', fontSize: '14px' }}
+                disabled={page === totalPages}
+                style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: page === totalPages ? "#f1f5f9" : "#ffffff", cursor: page === totalPages ? "not-allowed" : "pointer", fontWeight: 700, fontSize: "0.8rem" }}
               >
                 Next ›
               </button>
               <button
-                className="daily-stitching-btn"
                 onClick={() => setPage(totalPages)}
-                disabled={page >= totalPages || loading}
-                style={{ padding: '8px 12px', fontSize: '14px' }}
+                disabled={page === totalPages}
+                style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: page === totalPages ? "#f1f5f9" : "#ffffff", cursor: page === totalPages ? "not-allowed" : "pointer", fontWeight: 700, fontSize: "0.8rem" }}
               >
                 Last »
               </button>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ color: '#374151', fontSize: '14px' }}>Rows per page:</span>
-              <select
-                value={pageSize}
-                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
-                className="daily-stitching-filter-select"
-                style={{ padding: '6px 8px', fontSize: '14px' }}
-                disabled={loading}
-              >
-                {[20, 50, 100, 200].map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
-            </div>
           </div>
-        )}
-      </div>
+        </div>
+      </main>
     </div>
   );
 }

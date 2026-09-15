@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useHistory } from "react-router-dom";
 import { SPREADSHEET_IDS, fetchSheetDataFromBackend, BACKEND_URL, HOLD_LOTS_WEBHOOK_URL } from "./config";
-import { addLotLog } from "./lotLogService";
 import { getCurrentUser } from "./auth";
 
 /** Department list with rich metadata */
@@ -54,13 +53,14 @@ export default function HoldLotManager() {
   const [isHoldModalOpen, setIsHoldModalOpen] = useState(false);
   const [holdBy, setHoldBy] = useState(defaultUserName);
   const [approvedBy, setApprovedBy] = useState("");
+  const [location, setLocation] = useState("");
   const [holdReason, setHoldReason] = useState("Fabric Defect / Mismatch");
   const [customReason, setCustomReason] = useState("");
   const [priority, setPriority] = useState("High Alert");
   const [submittingHold, setSubmittingHold] = useState(false);
   const [successToast, setSuccessToast] = useState(null);
 
-  // Live Hold Lots from Google Sheet (Spreadsheet ID: 1uBelbe44z2lUXngctvk3J31WBiW1v07Nlgx5jFlyIOs)
+  // Live Hold Lots from Google Sheet (Spreadsheet ID: 1oBetbe44z2lUXngctvk3J31WBiWTv07NIgx5jFlylOs)
   const [holdRecords, setHoldRecords] = useState([]);
   const [loadingHolds, setLoadingHolds] = useState(false);
 
@@ -80,38 +80,51 @@ export default function HoldLotManager() {
       }
 
       // Step 2: Fallback to direct sheet fetch
-      const holdSpreadsheetId = SPREADSHEET_IDS.HOLD_LOTS || "1uBelbe44z2lUXngctvk3J31WBiW1v07Nlgx5jFlyIOs";
+      const holdSpreadsheetId = SPREADSHEET_IDS.HOLD_LOTS || "1oBetbe44z2lUXngctvk3J31WBiWTv07NIgx5jFlylOs";
       const tab = deptName ? deptName.replace(/Department/gi, "").trim() : "All Holds";
-      const sheetRes = await fetchSheetDataFromBackend(holdSpreadsheetId, `${tab}!A1:U1000`);
+      const sheetRes = await fetchSheetDataFromBackend(holdSpreadsheetId, `${tab}!A1:V1000`);
 
       if (sheetRes.ok && Array.isArray(sheetRes.values) && sheetRes.values.length > 1) {
         const rows = sheetRes.values;
+        const headers = rows[0].map((h) => String(h || "").trim());
+        const normalize = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+        const headerMap = {};
+        headers.forEach((h, idx) => {
+          headerMap[normalize(h)] = idx;
+        });
+
+        const getVal = (row, key) => {
+          const idx = headerMap[normalize(key)];
+          return idx !== undefined && row[idx] !== undefined ? String(row[idx]).trim() : "";
+        };
+
         const list = [];
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
-          if (!row || !row[1]) continue;
+          if (!row || (!row[0] && !row[1])) continue;
           list.push({
-            timestamp: row[0],
-            id: row[1],
-            department: row[2],
-            lotNumber: row[3],
-            jobOrderNo: row[4],
-            date: row[5],
-            partyName: row[6],
-            brand: row[7],
-            style: row[8],
-            fabric: row[9],
-            quantity: row[10],
-            unit: row[11],
-            shade: row[12],
-            size: row[13],
-            reason: row[14],
-            holdBy: row[15],
-            approvedBy: row[16],
-            priority: row[17],
-            status: row[18] || "ON HOLD",
-            releasedAt: row[19] || "",
-            releasedBy: row[20] || ""
+            timestamp: getVal(row, "Timestamp") || row[0],
+            id: getVal(row, "Hold ID") || row[1],
+            department: getVal(row, "Department") || row[2],
+            lotNumber: getVal(row, "Lot Number") || row[3],
+            jobOrderNo: getVal(row, "Job Order No") || row[4],
+            date: getVal(row, "PO Date") || row[5],
+            partyName: getVal(row, "Party Name") || row[6],
+            brand: getVal(row, "Brand") || row[7],
+            style: getVal(row, "Style") || row[8],
+            fabric: getVal(row, "Fabric") || row[9],
+            quantity: getVal(row, "Quantity") || row[10],
+            unit: getVal(row, "Unit") || row[11],
+            shade: getVal(row, "Shade") || row[12],
+            size: getVal(row, "Size") || row[13],
+            reason: getVal(row, "Hold Reason") || row[14],
+            location: getVal(row, "Location") || getVal(row, "Hold Location") || getVal(row, "Placement") || row[15] || "",
+            holdBy: getVal(row, "Hold By") || row[16] || row[15],
+            approvedBy: getVal(row, "Approved By") || row[17] || row[16],
+            priority: getVal(row, "Priority") || row[18] || row[17],
+            status: getVal(row, "Status") || row[19] || row[18] || "ON HOLD",
+            releasedAt: getVal(row, "Released At") || row[20] || row[19] || "",
+            releasedBy: getVal(row, "Released By") || row[21] || row[20] || ""
           });
         }
         setHoldRecords(list.reverse());
@@ -220,16 +233,21 @@ export default function HoldLotManager() {
     if (!lotDetails) return;
     setIsHoldModalOpen(true);
     setApprovedBy("");
+    setLocation("");
     setHoldReason("Fabric Defect / Mismatch");
     setCustomReason("");
     setPriority("High Alert");
   };
 
-  // Submit Hold Data to Google Sheet (1uBelbe44z2lUXngctvk3J31WBiW1v07Nlgx5jFlyIOs)
+  // Submit Hold Data to Google Sheet (1oBetbe44z2lUXngctvk3J31WBiWTv07NIgx5jFlylOs)
   const handleSubmitHold = async (e) => {
     e.preventDefault();
     if (!lotDetails || !selectedDept) return;
 
+    if (!location.trim()) {
+      alert("Please enter the location / rack / bin where this hold lot is placed.");
+      return;
+    }
     if (!holdBy.trim()) {
       alert("Please enter 'Hold By' name.");
       return;
@@ -242,6 +260,7 @@ export default function HoldLotManager() {
     const finalReason = holdReason === "Other" ? (customReason.trim() || "Unspecified Hold Reason") : holdReason;
     const holdId = `HOLD-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
+    const cleanLocation = location.trim();
 
     setSubmittingHold(true);
 
@@ -261,6 +280,7 @@ export default function HoldLotManager() {
       shade: lotDetails.shade,
       size: lotDetails.size,
       reason: finalReason,
+      location: cleanLocation,
       holdBy: holdBy.trim(),
       approvedBy: approvedBy.trim(),
       priority: priority,
@@ -293,21 +313,7 @@ export default function HoldLotManager() {
         }
       }
 
-      // 3. Also log to Lot Logs sheet and broadcast live alert to all users
-      try {
-        addLotLog({
-          lotNumber: lotDetails.lotNumber,
-          changeDetails: `[HOLD ALERT] Lot #${lotDetails.lotNumber} placed on HOLD in ${selectedDept.name}. Reason: "${finalReason}". Approved By: ${approvedBy.trim()}. Hold By: ${holdBy.trim()}.`,
-          changedBy: `${holdBy.trim()} (${selectedDept.name})`,
-          permissionBy: approvedBy.trim(),
-          category: selectedDept.name,
-          priority: priority
-        });
-      } catch (logErr) {
-        console.warn("Lot log notification broadcast note:", logErr);
-      }
-
-      // 4. Update UI state
+      // 3. Update UI state
       setHoldRecords((prev) => [
         {
           ...holdPayload,
@@ -317,7 +323,7 @@ export default function HoldLotManager() {
       ]);
 
       setIsHoldModalOpen(false);
-      setSuccessToast(`Lot #${lotDetails.lotNumber} stored successfully in '${selectedDept.name}' tab in Google Sheet!`);
+      setSuccessToast(`Lot #${lotDetails.lotNumber} stored successfully in '${selectedDept.name}' tab at location "${cleanLocation}"!`);
 
       setTimeout(() => {
         setSuccessToast(null);
@@ -604,8 +610,15 @@ export default function HoldLotManager() {
           </div>
 
           <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              onClick={() => history.push("/hold-lots-report")}
+              className="hlm-btn"
+              style={{ background: "#7c2d12", color: "#ffffff", border: "none", fontWeight: 800 }}
+            >
+              🚨 View Hold Lots Report
+            </button>
             <a
-              href={`https://docs.google.com/spreadsheets/d/${SPREADSHEET_IDS.HOLD_LOTS || "1uBelbe44z2lUXngctvk3J31WBiW1v07Nlgx5jFlyIOs"}/edit`}
+              href={`https://docs.google.com/spreadsheets/d/${SPREADSHEET_IDS.HOLD_LOTS || "1oBetbe44z2lUXngctvk3J31WBiWTv07NIgx5jFlylOs"}/edit`}
               target="_blank"
               rel="noopener noreferrer"
               className="hlm-btn"
@@ -812,7 +825,7 @@ export default function HoldLotManager() {
                 📋 Hold Lots Live from Spreadsheet ({holdRecords.length} Total Records)
               </h2>
               <span style={{ fontSize: "11px", color: "#64748b" }}>
-                Spreadsheet: HOLD LOT ACTION (ID: {SPREADSHEET_IDS.HOLD_LOTS || "1uBelbe44z2lUXngctvk3J31WBiW1v07Nlgx5jFlyIOs"})
+                Spreadsheet: HOLD LOT ACTION (ID: {SPREADSHEET_IDS.HOLD_LOTS || "1oBetbe44z2lUXngctvk3J31WBiWTv07NIgx5jFlylOs"})
               </span>
             </div>
             <button
@@ -846,6 +859,7 @@ export default function HoldLotManager() {
                     <th>Party & Style</th>
                     <th>Quantity</th>
                     <th>Hold Reason</th>
+                    <th>📍 Location</th>
                     <th>Hold By</th>
                     <th>Approved By</th>
                     <th>Hold Time</th>
@@ -884,6 +898,11 @@ export default function HoldLotManager() {
                         <td>
                           <span style={{ background: "#fee2e2", color: "#991b1b", padding: "3px 8px", borderRadius: "6px", fontWeight: 700, fontSize: "11px", border: "1px solid #fecaca" }}>
                             ⚠️ {item.reason}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ background: "#f1f5f9", color: "#0f172a", padding: "3px 8px", borderRadius: "6px", fontWeight: 700, fontSize: "11px", border: "1px solid #cbd5e1", display: "inline-flex", alignItems: "center", gap: "4px", whiteSpace: "nowrap" }}>
+                            📍 {item.location || "Floor / Unassigned"}
                           </span>
                         </td>
                         <td style={{ fontWeight: 600 }}>{item.holdBy}</td>
@@ -973,6 +992,19 @@ export default function HoldLotManager() {
                     />
                   </div>
                 )}
+
+                {/* Location / Placement Area */}
+                <div className="hlm-form-group">
+                  <label className="hlm-form-label">📍 Hold Lot Placement Location (Rack / Bin / Table / Area) *</label>
+                  <input
+                    type="text"
+                    value={location}
+                    onChange={(e) => setLocation(e.target.value)}
+                    placeholder="e.g., Rack A1, Bin 4, Table 2, Floor Quarantine, QC Area..."
+                    className="hlm-input"
+                    required
+                  />
+                </div>
 
                 {/* Hold By Input Label */}
                 <div className="hlm-form-group">

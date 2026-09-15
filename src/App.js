@@ -47,9 +47,11 @@ import JaybirPrintingReport from './JaybirPrintingReport';
 import JaybirEmbroideryReport from './JaybirEmbroideryReport';
 import WashingReport from './WashingReport';
 import FeedUpReport from './FeedUpReport';
+import ElasticReport from './ElasticReport';
 import LotTimelineReport from './LotTimelineReport';
 import CancelledLotsReport from './CancelledLotsReport';
 import HoldLotManager from './HoldLotManager';
+import HoldLotsReport from './HoldLotsReport';
 
 function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -89,6 +91,8 @@ function App() {
         <ProtectedRoute path="/cancelled-lots" component={CancelledLotsReport} />
         <ProtectedRoute path="/hold-lot" component={HoldLotManager} />
         <ProtectedRoute path="/hold-lot-manager" component={HoldLotManager} />
+        <ProtectedRoute path="/hold-lots-report" component={HoldLotsReport} />
+        <ProtectedRoute path="/hold-lot-report" component={HoldLotsReport} />
         <ProtectedRoute path="/pending-stitching" component={PendingIssuetoStitching} />
         <ProtectedRoute path="/pending-issue-to-stitching" component={PendingIssue} />
         <ProtectedRoute path="/issue-to-packing" component={IssueToPacking} />
@@ -127,6 +131,8 @@ function App() {
         <ProtectedRoute path="/washing-report" component={WashingReport} />
         <ProtectedRoute path="/feed-up-report" component={FeedUpReport} />
         <ProtectedRoute path="/daily-feed-up-report" component={FeedUpReport} />
+        <ProtectedRoute path="/elastic-report" component={ElasticReport} />
+        <ProtectedRoute path="/daily-elastic-report" component={ElasticReport} />
         <ProtectedRoute path="/lot-timeline" component={LotTimelineReport} />
         <ProtectedRoute path="/lot-tracking" component={LotTimelineReport} />
 

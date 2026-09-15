@@ -239,17 +239,18 @@ const ISSUES_HEADERS = [
 const DISPLAY_HEADERS = [
   'Sr.',            // Serial number
   'Lot No',
-  'Image',          // Image column from Index sheet
-  'Fabric',        // MOVED HERE - after Lot No
-  'Size',          // Size from JobOrder sheet
-  'Item',
-  'Brand',
-  'Party',
-  'Season',
-  'Section',
-  'Design Work',
-  'Job Date',       // From JobOrder
+  'Item',          // Garment Type
+  'Style',         // Style
+  'Fabric',        // Fabric
+  'Brand',         // Brand
   'PCS',           // Cutting Qty
+  'Section',       // Section
+  'Season',        // Season
+  'Party',         // Party Name
+  'Design Work',   // Direct Stitching
+  'Image',         // Image column from Index sheet
+  'Size',          // Size from JobOrder sheet
+  'Job Date',      // From JobOrder
   'Cut Date',      // Saved At
   'Emb/Print Issue', // From Challan History
   'Emb/print Comp', // From Challan History
@@ -276,16 +277,18 @@ const ALL_PDF_COLUMNS = [
   // Basic & Order Information
   { id: 'Sr.', label: 'Sr.', fullForm: 'Serial Number', dataKey: 'Sr.', type: 'number', isSerial: true, category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.6 },
   { id: 'Lot No', label: 'Lot', fullForm: 'Lot Number', dataKey: 'Lot No', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.0 },
-  { id: 'Image', label: 'Image', fullForm: 'Garment Image Preview', dataKey: 'Image', type: 'image', category: 'Basic Information', defaultSelected: false, baseWidthRatio: 1.2 },
-  { id: 'Fabric', label: 'Fabric', fullForm: 'Fabric Type', dataKey: 'Fabric', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.5 },
-  { id: 'Size', label: 'Size', fullForm: 'Garment Size / Dimension', dataKey: 'Size', type: 'text', category: 'Basic Information', defaultSelected: false, baseWidthRatio: 0.8 },
   { id: 'Item', label: 'Item', fullForm: 'Item Description / Garment Type', dataKey: 'Item', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.4 },
+  { id: 'Style', label: 'Style', fullForm: 'Style', dataKey: 'Style', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.2 },
+  { id: 'Fabric', label: 'Fabric', fullForm: 'Fabric Type', dataKey: 'Fabric', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.5 },
   { id: 'Brand', label: 'Brand', fullForm: 'Brand Name', dataKey: 'Brand', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.0 },
-  { id: 'Party', label: 'Party', fullForm: 'Party / Customer Name', dataKey: 'Party', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.3 },
-  { id: 'Season', label: 'Sea', fullForm: 'Season (SS/AW)', dataKey: 'Season', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.7 },
-  { id: 'Section', label: 'M/W/K', fullForm: 'Men / Women / Kids Section', dataKey: 'Section', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.8 },
-  { id: 'Job Date', label: 'Job Date', fullForm: 'Job Order Date', dataKey: 'Job Date', type: 'date', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.1 },
   { id: 'PCS', label: 'PCS', fullForm: 'Cutting Quantity (PCS)', dataKey: 'PCS', type: 'number', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.9 },
+  { id: 'Section', label: 'M/W/K', fullForm: 'Men / Women / Kids Section', dataKey: 'Section', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.8 },
+  { id: 'Season', label: 'Sea', fullForm: 'Season (SS/AW)', dataKey: 'Season', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 0.7 },
+  { id: 'Party', label: 'Party', fullForm: 'Party / Customer Name', dataKey: 'Party', type: 'text', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.3 },
+  { id: 'Design Work', label: 'Design', fullForm: 'Design Work (Y=Direct, N=No, Emb=Embroidery, Print=Printing)', dataKey: 'Design Work', type: 'stitching', category: 'Cutting & Emb / Print', defaultSelected: true, baseWidthRatio: 1.0 },
+  { id: 'Image', label: 'Image', fullForm: 'Garment Image Preview', dataKey: 'Image', type: 'image', category: 'Basic Information', defaultSelected: false, baseWidthRatio: 1.2 },
+  { id: 'Size', label: 'Size', fullForm: 'Garment Size / Dimension', dataKey: 'Size', type: 'text', category: 'Basic Information', defaultSelected: false, baseWidthRatio: 0.8 },
+  { id: 'Job Date', label: 'Job Date', fullForm: 'Job Order Date', dataKey: 'Job Date', type: 'date', category: 'Basic Information', defaultSelected: true, baseWidthRatio: 1.1 },
 
   // Cutting & Embroidery / Printing
   { id: 'Cut Date', label: 'Cut Date', fullForm: 'Fabric Cutting Date', dataKey: 'Cut Date', type: 'date', category: 'Cutting & Emb / Print', defaultSelected: true, baseWidthRatio: 1.1 },
@@ -321,7 +324,7 @@ const PDF_PRESETS = [
     name: 'Standard (No Days)',
     icon: '📋',
     description: 'Clean core production view without days columns (21 columns)',
-    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'Season', 'Section', 'Design Work', 'Job Date', 'PCS', 'Cut Date', 'Emb/Print Issue', 'Emb/print Comp', 'Stit Date', 'Stit Sup', 'WIP Stit', 'Comp Stit', 'Pkg Sup', 'Pkg Date', 'WIP Pkg', 'Pkg Comp']
+    columns: ['Sr.', 'Lot No', 'Item', 'Style', 'Fabric', 'Brand', 'PCS', 'Section', 'Season', 'Party', 'Design Work', 'Job Date', 'Cut Date', 'Emb/Print Issue', 'Emb/print Comp', 'Stit Date', 'Stit Sup', 'WIP Stit', 'Comp Stit', 'Pkg Sup', 'Pkg Date', 'WIP Pkg', 'Pkg Comp']
   },
   {
     name: 'All Headers (With Days)',
@@ -333,25 +336,25 @@ const PDF_PRESETS = [
     name: 'Essential Summary',
     icon: '🎯',
     description: 'Compact executive summary of lot progress (12 columns)',
-    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'PCS', 'Cut Date', 'WIP Stit', 'Comp Stit', 'WIP Pkg', 'Pkg Comp']
+    columns: ['Sr.', 'Lot No', 'Item', 'Style', 'Fabric', 'Brand', 'PCS', 'Section', 'Season', 'Party', 'Cut Date', 'WIP Stit', 'Comp Stit', 'WIP Pkg', 'Pkg Comp']
   },
   {
     name: 'Stitching Dept Focus',
     icon: '🧵',
     description: 'Tailored for Stitching supervisor and lines (13 columns)',
-    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'Design Work', 'PCS', 'Cut Date', 'Stit Date', 'Stit Sup', 'WIP Stit', 'Comp Stit', 'Stit Days']
+    columns: ['Sr.', 'Lot No', 'Item', 'Style', 'Fabric', 'Brand', 'PCS', 'Section', 'Season', 'Party', 'Design Work', 'Cut Date', 'Stit Date', 'Stit Sup', 'WIP Stit', 'Comp Stit', 'Stit Days']
   },
   {
     name: 'Packing Dept Focus',
     icon: '📦',
     description: 'Tailored for Packing and Dispatch teams (13 columns)',
-    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'PCS', 'Stit Date', 'Comp Stit', 'Pkg Sup', 'Pkg Date', 'WIP Pkg', 'Pkg Comp', 'Pkg Days']
+    columns: ['Sr.', 'Lot No', 'Item', 'Style', 'Fabric', 'Brand', 'PCS', 'Section', 'Season', 'Party', 'Stit Date', 'Comp Stit', 'Pkg Sup', 'Pkg Date', 'WIP Pkg', 'Pkg Comp', 'Pkg Days']
   },
   {
     name: 'Embroidery / Printing Focus',
     icon: '🎨',
     description: 'Tailored for Challan and Job Work tracking (12 columns)',
-    columns: ['Sr.', 'Lot No', 'Fabric', 'Item', 'Brand', 'Party', 'Design Work', 'PCS', 'Cut Date', 'Emb/Print Issue', 'Emb/print Comp', 'Emb/Print Days', 'Cut To Emb/Print']
+    columns: ['Sr.', 'Lot No', 'Item', 'Style', 'Fabric', 'Brand', 'PCS', 'Section', 'Season', 'Party', 'Design Work', 'Cut Date', 'Emb/Print Issue', 'Emb/print Comp', 'Emb/Print Days', 'Cut To Emb/Print']
   }
 ];
 

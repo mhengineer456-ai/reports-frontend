@@ -601,12 +601,15 @@ const DailyNotUpdation = () => {
     try {
       const exportData = sortedData.map(item => ({
         'Lot Number': item['Lot Number'],
-        'Fabric': item['Fabric'],
         'Garment Type': item['Garment Type'],
         'Style': item['Style'],
-        'Party Name': item['PARTY NAME'],
-        'Brand': item['BRAND'],
-        'Season': item['SEASON'],
+        'Fabric': item['Fabric'],
+        'Brand': item['BRAND'] || item['Brand'] || '',
+        'Total PCS': item['Total PCS'] || item['PCS'] || item['Total Pcs'] || '',
+        'Section': item['Section'] || item['M/W/K'] || '',
+        'Season': item['SEASON'] || item['Season'] || '',
+        'Party Name': item['PARTY NAME'] || item['Party Name'] || '',
+        'Direct Stitching': item['Direct Stitching'] || item['Design Work'] || '',
         'Current WIP Status': item['latestWIPStatus']?.status || 'Not Started',
         'Last Updated': formatDateFromTimestamp(item['latestWIPStatus']?.timestamp),
         'Remarks': item['latestWIPStatus']?.remarks || '',
@@ -667,10 +670,15 @@ const DailyNotUpdation = () => {
           return [
             idx + 1,
             item['Lot Number'] || '-',
-            item['Fabric'] || '-',
             item['Garment Type'] || '-',
             item['Style'] || '-',
-            item['PARTY NAME'] || '-',
+            item['Fabric'] || '-',
+            item['BRAND'] || item['Brand'] || '-',
+            item['Total PCS'] || item['PCS'] || item['Total Pcs'] || '-',
+            item['Section'] || item['M/W/K'] || '-',
+            item['SEASON'] || item['Season'] || '-',
+            item['PARTY NAME'] || item['Party Name'] || '-',
+            item['Direct Stitching'] || item['Design Work'] || '-',
             latestWIP.status || 'Not Started',
             lastUpdatedDate,
             latestWIP.remarks || '-',
@@ -680,14 +688,14 @@ const DailyNotUpdation = () => {
         });
 
       autoTable(doc, {
-        head: [['#', 'Lot No', 'Fabric', 'Garment', 'Style', 'Party Name', 'WIP Status', 'Last Updated', 'Remarks', 'Issue Date', 'Supervisor']],
+        head: [['#', 'Lot No', 'Garment', 'Style', 'Fabric', 'Brand', 'PCS', 'Section', 'Season', 'Party Name', 'Direct', 'WIP Status', 'Last Updated', 'Remarks', 'Issue Date', 'Supervisor']],
         body: tableRows,
         startY: 26,
-        margin: { top: 26, bottom: 15, left: 10, right: 10 },
+        margin: { top: 26, bottom: 15, left: 8, right: 8 },
         styles: {
-          fontSize: 9,
+          fontSize: 7.5,
           fontStyle: 'bold',
-          cellPadding: 3,
+          cellPadding: 2,
           textColor: [0, 0, 0],
           valign: 'middle',
           lineColor: [0, 0, 0],
@@ -697,23 +705,28 @@ const DailyNotUpdation = () => {
           fillColor: [31, 73, 125], // Navy Blue (#1F497D)
           textColor: [255, 255, 255],
           fontStyle: 'bold',
-          fontSize: 9.5,
+          fontSize: 8,
           halign: 'center',
           lineColor: [0, 0, 0],
           lineWidth: 0.2
         },
         columnStyles: {
-          0: { halign: 'center', cellWidth: 8 },
-          1: { fontStyle: 'bold', cellWidth: 18 },
-          2: { cellWidth: 23 },
-          3: { cellWidth: 22 },
-          4: { fontStyle: 'bold', cellWidth: 22 },
-          5: { cellWidth: 30 },
-          6: { fontStyle: 'bold', cellWidth: 26 },
-          7: { cellWidth: 23 },
-          8: { cellWidth: 40 },
+          0: { halign: 'center', cellWidth: 7 },
+          1: { fontStyle: 'bold', cellWidth: 16 },
+          2: { cellWidth: 16 },
+          3: { fontStyle: 'bold', cellWidth: 16 },
+          4: { cellWidth: 18 },
+          5: { cellWidth: 16 },
+          6: { halign: 'center', cellWidth: 12 },
+          7: { halign: 'center', cellWidth: 12 },
+          8: { halign: 'center', cellWidth: 12 },
           9: { cellWidth: 22 },
-          10: { fontStyle: 'bold', cellWidth: 28 }
+          10: { halign: 'center', cellWidth: 12 },
+          11: { fontStyle: 'bold', cellWidth: 20 },
+          12: { cellWidth: 18 },
+          13: { cellWidth: 32 },
+          14: { cellWidth: 16 },
+          15: { fontStyle: 'bold', cellWidth: 20 }
         },
         didDrawPage: (data) => {
           const str = `Page ${doc.internal.getNumberOfPages()}`;
@@ -1377,10 +1390,15 @@ const DailyNotUpdation = () => {
                   </th>
                   {[
                     { key: 'Lot Number', label: 'Lot No.', sortable: true },
-                    { key: 'Fabric', label: 'Fabric', sortable: true },
-                    { key: 'Garment Type', label: 'Type', sortable: true },
+                    { key: 'Garment Type', label: 'Garment Type', sortable: true },
                     { key: 'Style', label: 'Style', sortable: true },
-                    { key: 'PARTY NAME', label: 'Party', sortable: true },
+                    { key: 'Fabric', label: 'Fabric', sortable: true },
+                    { key: 'BRAND', label: 'Brand', sortable: true },
+                    { key: 'Total PCS', label: 'Pcs', sortable: true },
+                    { key: 'Section', label: 'Section', sortable: true },
+                    { key: 'SEASON', label: 'Season', sortable: true },
+                    { key: 'PARTY NAME', label: 'Party Name', sortable: true },
+                    { key: 'Direct Stitching', label: 'Direct Stitching', sortable: true },
                     { key: 'latestWIPStatus.status', label: 'WIP Status', sortable: false },
                     { key: 'latestWIPStatus.timestamp', label: 'Last Updated', sortable: true },
                     { key: 'latestWIPStatus.remarks', label: 'Remarks', sortable: false },
@@ -1431,12 +1449,17 @@ const DailyNotUpdation = () => {
                       <td style={{ ...styles.tableCell, ...styles.lotNumberCell }}>
                         <span style={styles.lotNumber}>{item['Lot Number'] || 'N/A'}</span>
                       </td>
-                      <td style={styles.tableCell}>{item['Fabric'] || '-'}</td>
                       <td style={styles.tableCell}>{item['Garment Type'] || '-'}</td>
                       <td style={styles.tableCell}>
                         <span style={styles.styleBadge}>{item['Style'] || '-'}</span>
                       </td>
-                      <td style={styles.tableCell}>{item['PARTY NAME'] || '-'}</td>
+                      <td style={styles.tableCell}>{item['Fabric'] || '-'}</td>
+                      <td style={styles.tableCell}>{item['BRAND'] || item['Brand'] || '-'}</td>
+                      <td style={styles.tableCell}>{item['Total PCS'] || item['PCS'] || item['Total Pcs'] || '-'}</td>
+                      <td style={styles.tableCell}>{item['Section'] || item['M/W/K'] || '-'}</td>
+                      <td style={styles.tableCell}>{item['SEASON'] || item['Season'] || '-'}</td>
+                      <td style={styles.tableCell}>{item['PARTY NAME'] || item['Party Name'] || '-'}</td>
+                      <td style={styles.tableCell}>{item['Direct Stitching'] || item['Design Work'] || '-'}</td>
                       <td style={styles.tableCell}>
                         <div style={styles.statusContainer}>
                           <span style={{

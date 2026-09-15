@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import './PendingPackingtoIssue.css';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, SHEET_NAMES, fetchSheetDataFromBackend } from './config';
+import { fetchRemarksForTab, saveRemarkForLot } from './embPrintRemarksService';
 
 const MultiSelectDropdown = ({ label, options, selectedValues, onChange }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -248,7 +250,6 @@ const PackingAlloted = () => {
 
   // Filter states - array of selected values for multi-selection
   const [filters, setFilters] = useState({
-    wipPacking: [],
     priority: [],
     directStitching: [],
     stitchingSupervisor: [],
@@ -259,8 +260,79 @@ const PackingAlloted = () => {
     style: [],
     season: [],
     pendingDaysRange: [],
-    partyName: []
+    partyName: [],
+    remarks: []
   });
+
+  // Remarks States & Realtime Synchronization
+  const [remarksMap, setRemarksMap] = useState({});
+  const [remarksModalOpen, setRemarksModalOpen] = useState(false);
+  const [selectedRemarksLot, setSelectedRemarksLot] = useState(null);
+  const [newRemarkInputText, setNewRemarkInputText] = useState('');
+  const [savingRemark, setSavingRemark] = useState(false);
+
+  // Fetch Remarks from Google Sheets & Subscribe to updates
+  useEffect(() => {
+    fetchRemarksForTab('PACKING_ALLOTED').then(map => {
+      if (map && typeof map === 'object') {
+        setRemarksMap(map);
+      }
+    });
+
+    const handleRemarkUpdated = (e) => {
+      if (e.detail && (e.detail.tabType === 'PACKING_ALLOTED' || e.detail.tabType === 'PACKING' || !e.detail.tabType)) {
+        setRemarksMap(prev => ({
+          ...prev,
+          [e.detail.lotNumber]: e.detail.history
+        }));
+      }
+    };
+
+    window.addEventListener('emb_print_remark_updated', handleRemarkUpdated);
+    return () => {
+      window.removeEventListener('emb_print_remark_updated', handleRemarkUpdated);
+    };
+  }, []);
+
+  const handleOpenRemarksModal = (item) => {
+    setSelectedRemarksLot(item);
+    setNewRemarkInputText('');
+    setRemarksModalOpen(true);
+  };
+
+  const handleCloseRemarksModal = () => {
+    setRemarksModalOpen(false);
+    setSelectedRemarksLot(null);
+    setNewRemarkInputText('');
+  };
+
+  const handleSaveRemark = async () => {
+    if (!selectedRemarksLot || !newRemarkInputText.trim()) return;
+
+    try {
+      setSavingRemark(true);
+      const lotNumber = selectedRemarksLot.lotNumber?.toString().trim();
+      const updatedHistory = await saveRemarkForLot({
+        tabType: 'PACKING_ALLOTED',
+        lotNumber: lotNumber,
+        partyName: selectedRemarksLot.partyName || '',
+        fabric: selectedRemarksLot.fabric || '',
+        style: selectedRemarksLot.style || selectedRemarksLot.garmentType || '',
+        remarkText: newRemarkInputText.trim()
+      });
+      setRemarksMap(prev => ({
+        ...prev,
+        [lotNumber]: updatedHistory
+      }));
+      setNewRemarkInputText('');
+      handleCloseRemarksModal();
+    } catch (err) {
+      console.error('Failed to save remark:', err);
+      alert('Failed to save remark. Please try again.');
+    } finally {
+      setSavingRemark(false);
+    }
+  };
 
   // Google Sheets configuration from .env / config
   const API_KEY = GOOGLE_API_KEY;
@@ -527,11 +599,19 @@ const PackingAlloted = () => {
     });
 
     const options = {
-      wipPacking: [
-        { value: 'all', label: 'All WIP Status' },
-        ...Array.from(new Set(mergedLots.map(item => item.wipPacking || issuesLotMap.get(item.lotNumber?.toString().trim())?.wipPacking).filter(val => val !== undefined && val !== null && val !== '')))
-          .sort()
-          .map(value => ({ value: String(value), label: String(value) }))
+      remarks: [
+        { value: 'all', label: 'All Remarks' },
+        { value: 'WITH_REMARKS', label: '📝 With Remarks' },
+        { value: 'WITHOUT_REMARKS', label: '⬜ Without Remarks' },
+        ...Array.from(new Set(
+          mergedLots
+            .map(item => {
+              const lot = item.lotNumber?.toString().trim();
+              const hist = remarksMap[lot] || [];
+              return hist.length > 0 ? hist[hist.length - 1].text : '';
+            })
+            .filter(Boolean)
+        )).sort().map(text => ({ value: text, label: text }))
       ],
       priority: [
         { value: 'all', label: 'All Priorities' },
@@ -586,7 +666,7 @@ const PackingAlloted = () => {
     };
 
     return options;
-  }, [getFilteredLots, issuesLotMap]);
+  }, [getFilteredLots, issuesLotMap, remarksMap]);
 
   // Compute all available Financial Years based on Packing Date
   const allFinancialYears = useMemo(() => {
@@ -1153,10 +1233,20 @@ const PackingAlloted = () => {
       );
     }
 
-    if (filters.wipPacking && filters.wipPacking.length > 0) {
-      filteredData = filteredData.filter(item =>
-        filters.wipPacking.includes(String(item.wipPacking || '0'))
-      );
+    // Apply remarks filter
+    if (filters.remarks && filters.remarks.length > 0) {
+      filteredData = filteredData.filter(item => {
+        const lot = item.lotNumber?.toString().trim();
+        const lotRemarks = remarksMap[lot] || [];
+        const hasRemark = lotRemarks.length > 0 && Boolean(lotRemarks[lotRemarks.length - 1].text);
+        const latestText = hasRemark ? lotRemarks[lotRemarks.length - 1].text : '';
+
+        return filters.remarks.some(filterVal => {
+          if (filterVal === 'WITH_REMARKS') return hasRemark;
+          if (filterVal === 'WITHOUT_REMARKS') return !hasRemark;
+          return latestText === filterVal || lotRemarks.some(r => r.text === filterVal);
+        });
+      });
     }
 
     // Apply pending days range multi-filter using packing pending days
@@ -1171,11 +1261,16 @@ const PackingAlloted = () => {
       const searchLower = searchTerm.toLowerCase();
       const fieldsToSearch = ['lotNumber', 'fabric', 'brand', 'garmentType', 'style', 'partyName', 'supervisor', 'season', 'mwk', 'priority', 'packingSupervisor', 'issuesBrand', 'stitchingSupervisor'];
 
-      filteredData = filteredData.filter(item =>
-        fieldsToSearch.some(field =>
+      filteredData = filteredData.filter(item => {
+        const directMatch = fieldsToSearch.some(field =>
           item[field] && item[field].toString().toLowerCase().includes(searchLower)
-        )
-      );
+        );
+        if (directMatch) return true;
+
+        const lotNumber = item.lotNumber?.toString().trim();
+        const lotRemarks = remarksMap[lotNumber] || [];
+        return lotRemarks.some(r => r.text && r.text.toLowerCase().includes(searchLower));
+      });
     }
 
     // Apply Financial Year filter based on Packing Date
@@ -1188,7 +1283,7 @@ const PackingAlloted = () => {
     }
 
     return filteredData;
-  }, [getFilteredLots, issuesLotMap, searchTerm, filters, financialYearFilter]);
+  }, [getFilteredLots, issuesLotMap, searchTerm, filters, financialYearFilter, remarksMap]);
 
   // Pagination
   const paginatedData = useMemo(() => {
@@ -1253,7 +1348,6 @@ const PackingAlloted = () => {
 
   const clearAllFilters = useCallback(() => {
     setFilters({
-      wipPacking: [],
       priority: [],
       directStitching: [],
       stitchingSupervisor: [],
@@ -1264,7 +1358,8 @@ const PackingAlloted = () => {
       style: [],
       season: [],
       pendingDaysRange: [],
-      partyName: []
+      partyName: [],
+      remarks: []
     });
     setFinancialYearFilter(getCurrentFinancialYear());
     setSearchTerm('');
@@ -1279,28 +1374,34 @@ const PackingAlloted = () => {
     return [220, 53, 69]; // Red
   };
 
-  // Export to PDF with professional formatting & embedded images
+  // Professional PDF Export with centered cells, pure black text, embedded pictures, and executive summary
   const exportToPDF = useCallback(async () => {
+    if (displayData.length === 0) {
+      alert('No data to export');
+      return;
+    }
+
     try {
       setExportLoading(true);
 
       const doc = new jsPDF({
         orientation: 'landscape',
-        unit: 'mm',
-        format: 'a4'
+        unit: 'pt',
+        format: 'a3'
       });
-
-      const headerColor = [15, 76, 129];
-      const textColor = [17, 24, 39];
-      const lotNumberColor = [239, 68, 68];
-      const partyColor = [107, 33, 168];
 
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
-      const margin = 8;
+      const margin = 15;
       const contentWidth = pageWidth - (margin * 2);
 
-      // Pre-load images for PDF embedding
+      const totalLots = displayData.length;
+      const totalPieces = displayData.reduce((sum, item) => sum + (Number(item.totalPcs) || 0), 0);
+      const highPriorityCount = displayData.filter(item => (item.priority || '').toLowerCase() === 'high').length;
+      const directLotsCount = displayData.filter(item => (item.directStitching || item.issuesDirectStitching || '').toLowerCase() === 'yes').length;
+      const avgDays = totalLots > 0 ? Math.round(displayData.reduce((sum, item) => sum + (item.packingPendingDays || 0), 0) / totalLots) : 0;
+
+      // Pre-load base64 images for all displayed items
       const imageBase64Map = new Map();
       await Promise.all(
         displayData.map(async (item) => {
@@ -1314,260 +1415,941 @@ const PackingAlloted = () => {
         })
       );
 
-      let currentY = 25;
-
-      const drawHeader = () => {
-        doc.setFillColor(255, 255, 255);
-        doc.rect(0, 0, pageWidth, 30, 'F');
-
-        doc.setFontSize(18);
-        doc.setTextColor(15, 76, 129);
-        doc.setFont('times', 'bold');
-        doc.text('PACKING ALLOTTED & IN PROGRESS REPORT', pageWidth / 2, 12, { align: 'center' });
-
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(15, 76, 129);
-
-        const today = new Date();
-        const reportDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
-        doc.text(`Report Date: ${reportDate}`, margin, 25);
-
-        const centerX = pageWidth / 2;
-        doc.text(`Total Lots: ${displayData.length} | Total Pieces: ${(summaryStats.totalPcs || 0).toLocaleString()} | High Priority: ${summaryStats.highPriority}`, centerX, 25, { align: 'center' });
-
-        const filterText = `Total: ${displayData.length} records`;
-        doc.text(filterText, pageWidth - margin, 25, { align: 'right' });
+      // Aggregations for Executive Summary
+      const garmentMap = {};
+      const seasonMap = {};
+      const supervisorMap = {};
+      const agingMap = {
+        '0-7 Days': { totalLots: 0, totalPcs: 0 },
+        '8-15 Days': { totalLots: 0, totalPcs: 0 },
+        '16-30 Days': { totalLots: 0, totalPcs: 0 },
+        '30+ Days': { totalLots: 0, totalPcs: 0 }
       };
 
-      drawHeader();
+      displayData.forEach(item => {
+        const pcs = Number(item.totalPcs) || 0;
+        const gType = (item.garmentType || 'Unknown').trim();
+        const season = (item.season || item.issuesSeason || 'N/A').trim();
+        const pSup = (item.packingSupervisor || 'Unassigned').trim();
+        const days = item.packingPendingDays || 0;
 
-      currentY = 32;
+        if (!garmentMap[gType]) garmentMap[gType] = { totalLots: 0, totalPcs: 0 };
+        garmentMap[gType].totalLots += 1;
+        garmentMap[gType].totalPcs += pcs;
 
-      const PDF_HEADERS = [
-        'Sr',
-        'Image',
-        'Lot No',
-        'Party Name',
-        'Fabric',
-        'Brand',
-        'Garment',
-        'Style',
-        'Total Pcs',
-        'Priority',
-        'Pkg Date',
-        'Pkg Days',
-        'WIP Status',
-        'Supervisor',
-        'Pkg Supervisor'
-      ];
+        if (!seasonMap[season]) seasonMap[season] = { totalLots: 0, totalPcs: 0 };
+        seasonMap[season].totalLots += 1;
+        seasonMap[season].totalPcs += pcs;
 
-      const baseWidths = {
-        0: 6,   // Sr
-        1: 12,  // Image
-        2: 18,  // Lot No
-        3: 25,  // Party Name
-        4: 26,  // Fabric
-        5: 20,  // Brand
-        6: 20,  // Garment
-        7: 20,  // Style
-        8: 16,  // Total Pcs
-        9: 15,  // Priority
-        10: 19, // Pkg Date
-        11: 15, // Pkg Days
-        12: 18, // WIP Status
-        13: 20, // Supervisor
-        14: 20  // Pkg Supervisor
-      };
+        if (!supervisorMap[pSup]) supervisorMap[pSup] = { totalLots: 0, totalPcs: 0 };
+        supervisorMap[pSup].totalLots += 1;
+        supervisorMap[pSup].totalPcs += pcs;
 
-      const totalBaseWidth = Object.values(baseWidths).reduce((a, b) => a + b, 0);
-      const scaleFactor = contentWidth / totalBaseWidth;
-
-      const columnWidths = {};
-      Object.keys(baseWidths).forEach((key) => {
-        columnWidths[key] = baseWidths[key] * scaleFactor;
-      });
-
-      const headers = [
-        PDF_HEADERS.map((header, index) => ({
-          content: header,
-          styles: {
-            fontStyle: 'bold',
-            fillColor: headerColor,
-            textColor: [255, 255, 255],
-            cellWidth: columnWidths[index],
-            halign: 'center',
-            fontSize: 8,
-            cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
-          }
-        }))
-      ];
-
-      const body = displayData.map((item, rowIndex) => {
-        const rowBgColor = rowIndex % 2 === 0 ? [255, 255, 255] : [250, 250, 250];
-        const wipVal = String(item.wipPacking !== undefined && item.wipPacking !== null ? item.wipPacking : (item.wipStatus || '0')).trim();
-        const isHold = wipVal.toUpperCase().includes('HOLD');
-
-        return [
-          { content: (rowIndex + 1).toString(), styles: { cellWidth: columnWidths[0], fontSize: 9, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor } },
-          { content: '', styles: { cellWidth: columnWidths[1], halign: 'center', fillColor: rowBgColor } },
-          { content: item.lotNumber || '-', styles: { cellWidth: columnWidths[2], fontSize: 10, halign: 'center', fontStyle: 'bold', textColor: lotNumberColor, fillColor: rowBgColor } },
-          { content: item.partyName || '-', styles: { cellWidth: columnWidths[3], fontSize: 9, halign: 'center', fontStyle: 'bold', textColor: partyColor, fillColor: rowBgColor } },
-          { content: item.fabric || '-', styles: { cellWidth: columnWidths[4], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
-          { content: item.brand || item.issuesBrand || '-', styles: { cellWidth: columnWidths[5], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
-          { content: item.garmentType || '-', styles: { cellWidth: columnWidths[6], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
-          { content: item.style || '-', styles: { cellWidth: columnWidths[7], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
-          { content: (item.totalPcs || '0').toString(), styles: { cellWidth: columnWidths[8], fontSize: 10, halign: 'center', fontStyle: 'bold', textColor: [239, 68, 68], fillColor: rowBgColor } },
-          { content: item.priority || 'Normal', styles: { cellWidth: columnWidths[9], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
-          { content: item.packingDate || '-', styles: { cellWidth: columnWidths[10], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
-          { content: (item.packingPendingDays || 0).toString(), styles: { cellWidth: columnWidths[11], fontSize: 9, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor } },
-          {
-            content: wipVal || '0',
-            styles: {
-              cellWidth: columnWidths[12],
-              fontSize: 9,
-              halign: 'center',
-              fontStyle: isHold ? 'bold' : 'normal',
-              textColor: isHold ? [220, 38, 38] : textColor,
-              fillColor: isHold ? [254, 226, 226] : rowBgColor
-            }
-          },
-          { content: item.supervisor || item.stitchingSupervisor || '-', styles: { cellWidth: columnWidths[13], fontSize: 9, halign: 'center', fillColor: rowBgColor } },
-          { content: item.packingSupervisor || '-', styles: { cellWidth: columnWidths[14], fontSize: 9, halign: 'center', fillColor: rowBgColor } }
-        ];
-      });
-
-      autoTable(doc, {
-        head: headers,
-        body: body,
-        startY: currentY,
-        margin: { left: margin, right: margin },
-        tableWidth: contentWidth,
-        styles: {
-          fontSize: 8.5,
-          minCellHeight: 12,
-          cellPadding: 1.5,
-          lineColor: [0, 0, 0],
-          lineWidth: 0.25,
-          textColor: textColor,
-          halign: 'center',
-          valign: 'middle',
-          overflow: 'linebreak'
-        },
-        headStyles: {
-          fillColor: headerColor,
-          textColor: [255, 255, 255],
-          fontStyle: 'bold',
-          lineColor: [0, 0, 0],
-          lineWidth: 0.35,
-          halign: 'center'
-        },
-        bodyStyles: {
-          lineColor: [0, 0, 0],
-          lineWidth: 0.25
-        },
-        alternateRowStyles: {
-          fillColor: [248, 250, 252],
-          lineColor: [0, 0, 0],
-          lineWidth: 0.25
-        },
-        didDrawCell: (data) => {
-          // Embed Image Thumbnail into Column 1
-          if (data.column.index === 1 && data.cell.section === 'body') {
-            const rowItem = displayData[data.row.index];
-            if (rowItem) {
-              const b64 = imageBase64Map.get(rowItem.id);
-              if (b64) {
-                try {
-                  const imgWidth = 10;
-                  const imgHeight = 10;
-                  const posX = data.cell.x + (data.cell.width - imgWidth) / 2;
-                  const posY = data.cell.y + (data.cell.height - imgHeight) / 2;
-                  doc.addImage(b64, posX, posY, imgWidth, imgHeight);
-                } catch (e) {
-                  console.warn('Could not draw image in PDF cell:', e);
-                }
-              }
-            }
-          }
-
-          return true;
+        if (days <= 7) {
+          agingMap['0-7 Days'].totalLots += 1;
+          agingMap['0-7 Days'].totalPcs += pcs;
+        } else if (days <= 15) {
+          agingMap['8-15 Days'].totalLots += 1;
+          agingMap['8-15 Days'].totalPcs += pcs;
+        } else if (days <= 30) {
+          agingMap['16-30 Days'].totalLots += 1;
+          agingMap['16-30 Days'].totalPcs += pcs;
+        } else {
+          agingMap['30+ Days'].totalLots += 1;
+          agingMap['30+ Days'].totalPcs += pcs;
         }
       });
 
+      const sortedGarments = Object.keys(garmentMap).map(k => ({ name: k, totalLots: garmentMap[k].totalLots, totalPcs: garmentMap[k].totalPcs })).sort((a, b) => b.totalPcs - a.totalPcs);
+      const sortedSeasons = Object.keys(seasonMap).map(k => ({ name: k, totalLots: seasonMap[k].totalLots, totalPcs: seasonMap[k].totalPcs })).sort((a, b) => b.totalPcs - a.totalPcs);
+      const sortedSupervisors = Object.keys(supervisorMap).map(k => ({ name: k, totalLots: supervisorMap[k].totalLots, totalPcs: supervisorMap[k].totalPcs })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      // Title Banner
+      doc.setFillColor(15, 23, 42); // Dark Navy
+      doc.rect(margin, 12, contentWidth, 48, 'F');
+
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text("MH FACTORY SUITE PRO - PACKING ALLOTTED & IN PROGRESS REPORT", pageWidth / 2, 30, { align: 'center' });
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(199, 210, 254);
+      const subText = `Lots in Packing: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()}   |   Direct Lots: ${directLotsCount}   |   High Priority: ${highPriorityCount}   |   Avg Packing Days: ${avgDays}d   |   Generated: ${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN')}`;
+      doc.text(subText, pageWidth / 2, 48, { align: 'center' });
+
+      // Filter Banner
+      doc.setFillColor(241, 245, 249);
+      doc.rect(margin, 63, contentWidth, 16, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(0, 0, 0);
+      const filterSummary = `Filters: Priority: ${filters.priority.length ? filters.priority.join(', ') : 'All'} | Direct: ${filters.directStitching.length ? filters.directStitching.join(', ') : 'All'} | Stitching Sup: ${filters.stitchingSupervisor.length ? filters.stitchingSupervisor.join(', ') : 'All'} | Pkg Sup: ${filters.packingSupervisor.length ? filters.packingSupervisor.join(', ') : 'All'} | Brand: ${filters.brand.length ? filters.brand.join(', ') : 'All'} | Fabric: ${filters.fabric.length ? filters.fabric.join(', ') : 'All'} | Garment: ${filters.garmentType.length ? filters.garmentType.join(', ') : 'All'} | Style: ${filters.style.length ? filters.style.join(', ') : 'All'} | Season: ${filters.season.length ? filters.season.join(', ') : 'All'}`;
+      doc.text(filterSummary, pageWidth / 2, 74, { align: 'center' });
+
+      // Table columns & rows
+      const tableColumns = [
+        '#',
+        'Image',
+        'Lot Number',
+        'Garment Type',
+        'Style',
+        'Fabric',
+        'Brand',
+        'Total Pcs',
+        'M/W/K',
+        'Season',
+        'Party Name',
+        'Direct Stitching',
+        'Supervisor',
+        'Date of Issue',
+        'Priority',
+        'Packing Supervisor',
+        'Packing Date',
+        'Packing Days',
+        'Status',
+        'Remarks'
+      ];
+
+      const tableBody = displayData.map((item, idx) => {
+        const lotNo = (item.lotNumber || '').toString().trim();
+        const lotRemarks = remarksMap[lotNo] || [];
+        const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1].text : '—';
+        const pcs = Number(item.totalPcs) || 0;
+        const isDirect = (item.directStitching || item.issuesDirectStitching || '').toLowerCase() === 'yes';
+
+        return [
+          (idx + 1).toString(),
+          '', // Image cell rendered via didDrawCell
+          lotNo || '—',
+          item.garmentType || '—',
+          item.style || '—',
+          item.fabric || '—',
+          item.brand || item.issuesBrand || '—',
+          pcs.toLocaleString(),
+          item.mwk || '—',
+          item.season || item.issuesSeason || '—',
+          item.partyName || '—',
+          isDirect ? 'Yes' : 'No',
+          item.supervisor || item.stitchingSupervisor || '—',
+          item.dateOfIssue || item.stitchingIssueDate || '—',
+          item.priority || 'Normal',
+          item.packingSupervisor || '—',
+          item.packingDate || '—',
+          `${item.packingPendingDays || 0}d`,
+          'In Progress',
+          latestRemark
+        ];
+      });
+
+      // Total Row
+      tableBody.push([
+        '',
+        '',
+        `TOTAL (${totalLots} Lots)`,
+        '',
+        '',
+        '',
+        '',
+        totalPieces.toLocaleString(),
+        '',
+        '',
+        '',
+        `${directLotsCount} Direct`,
+        '',
+        '',
+        `${highPriorityCount} High`,
+        '',
+        '',
+        `${avgDays}d Avg`,
+        'In Progress',
+        ''
+      ]);
+
+      const baseWidths = {
+        0: 24,   // #
+        1: 36,   // Image
+        2: 55,   // Lot Number
+        3: 65,   // Garment Type
+        4: 65,   // Style
+        5: 72,   // Fabric
+        6: 60,   // Brand
+        7: 52,   // Total Pcs
+        8: 42,   // M/W/K
+        9: 48,   // Season
+        10: 76,  // Party Name
+        11: 46,  // Direct Stitching
+        12: 65,  // Supervisor
+        13: 56,  // Date of Issue
+        14: 46,  // Priority
+        15: 68,  // Packing Supervisor
+        16: 56,  // Packing Date
+        17: 46,  // Packing Days
+        18: 56,  // Status
+        19: 120  // Remarks
+      };
+
+      const sumBase = Object.values(baseWidths).reduce((a, b) => a + b, 0);
+      const scale = contentWidth / sumBase;
+
+      const columnStyles = {};
+      Object.keys(baseWidths).forEach(k => {
+        const w = baseWidths[k] * scale;
+        columnStyles[k] = {
+          cellWidth: w,
+          halign: 'center',
+          fontStyle: (k === '2' || k === '7' || k === '17') ? 'bold' : 'normal'
+        };
+      });
+
+      autoTable(doc, {
+        head: [tableColumns],
+        body: tableBody,
+        startY: 85,
+        tableWidth: contentWidth,
+        margin: { top: 85, right: margin, bottom: 25, left: margin },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3, right: 2, bottom: 3, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0], // Pure Black
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+          fontStyle: 'normal',
+          minCellHeight: 25
+        },
+        headStyles: {
+          fillColor: [15, 23, 42],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          lineColor: [0, 0, 0],
+          lineWidth: 0.5,
+          halign: 'center',
+          fontSize: 9,
+          valign: 'middle',
+          cellPadding: { top: 5, right: 2, bottom: 5, left: 2 },
+          minCellHeight: 14
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252]
+        },
+        columnStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
+
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [226, 232, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.halign = 'center';
+              return;
+            }
+
+            const row = displayData[rowIndex];
+            if (!row) return;
+
+            // Direct styling
+            if (data.column.index === 11 && (row.directStitching || row.issuesDirectStitching || '').toLowerCase() === 'yes') {
+              data.cell.styles.textColor = [21, 128, 61];
+              data.cell.styles.fontStyle = 'bold';
+            }
+
+            // High Priority styling
+            if (data.column.index === 14 && (row.priority || '').toLowerCase() === 'high') {
+              data.cell.styles.textColor = [220, 38, 38];
+              data.cell.styles.fontStyle = 'bold';
+            }
+
+            // Aging days styling
+            if (data.column.index === 17) {
+              const days = row.packingPendingDays || 0;
+              if (days > 15) {
+                data.cell.styles.textColor = [220, 38, 38];
+                data.cell.styles.fontStyle = 'bold';
+              } else if (days > 7) {
+                data.cell.styles.textColor = [217, 119, 6];
+              } else {
+                data.cell.styles.textColor = [22, 163, 74];
+              }
+            }
+
+            // Status styling
+            if (data.column.index === 18) {
+              data.cell.styles.textColor = [217, 119, 6];
+              data.cell.styles.fontStyle = 'bold';
+            }
+          }
+        },
+        didDrawCell: function (data) {
+          if (data.column.index === 1 && data.section === 'body') {
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
+            if (isTotalRow) return;
+
+            const rowItem = displayData[rowIndex];
+            if (!rowItem) return;
+
+            const b64 = imageBase64Map.get(rowItem.id);
+            if (b64) {
+              try {
+                const imgSize = 20;
+                const posX = data.cell.x + (data.cell.width - imgSize) / 2;
+                const posY = data.cell.y + (data.cell.height - imgSize) / 2;
+                doc.addImage(b64, 'JPEG', posX, posY, imgSize, imgSize);
+              } catch (e) {
+                console.warn('Could not draw image in PDF cell:', e);
+              }
+            }
+          }
+        }
+      });
+
+      // --- 4-COLUMN SIDE-BY-SIDE EXECUTIVE SUMMARY ---
+      const gBody = sortedGarments.map(item => [
+        item.name,
+        item.totalLots.toString(),
+        item.totalPcs.toLocaleString(),
+        totalPieces > 0 ? `${((item.totalPcs / totalPieces) * 100).toFixed(1)}%` : "0.0%"
+      ]);
+      gBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const sBody = sortedSeasons.map(item => [
+        item.name,
+        item.totalLots.toString(),
+        item.totalPcs.toLocaleString(),
+        totalPieces > 0 ? `${((item.totalPcs / totalPieces) * 100).toFixed(1)}%` : "0.0%"
+      ]);
+      sBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const supBody = sortedSupervisors.map(item => [
+        item.name,
+        item.totalLots.toString(),
+        item.totalPcs.toLocaleString(),
+        totalPieces > 0 ? `${((item.totalPcs / totalPieces) * 100).toFixed(1)}%` : "0.0%"
+      ]);
+      supBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const ageBody = Object.entries(agingMap).map(([rangeName, data]) => [
+        rangeName,
+        data.totalLots.toString(),
+        data.totalPcs.toLocaleString(),
+        totalPieces > 0 ? `${((data.totalPcs / totalPieces) * 100).toFixed(1)}%` : "0.0%"
+      ]);
+      ageBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const maxRows = Math.max(gBody.length, sBody.length, supBody.length, ageBody.length);
+      const approxSummaryHeight = 55 + (maxRows * 18);
+
+      let summaryStartY = doc.lastAutoTable.finalY + 22;
+      const neededSpace = approxSummaryHeight + 35;
+      if (summaryStartY + neededSpace > pageHeight - 30) {
+        doc.addPage();
+        summaryStartY = 40;
+      } else {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(1);
+        doc.line(margin, summaryStartY - 10, pageWidth - margin, summaryStartY - 10);
+      }
+
+      // Title Banner for Summary
+      doc.setFillColor(15, 23, 42);
+      doc.rect(margin, summaryStartY, contentWidth, 22, 'F');
+      doc.setFontSize(10.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text("EXECUTIVE PRODUCTION SUMMARY & DISTRIBUTION", pageWidth / 2, summaryStartY + 14, { align: 'center' });
+
+      const sumTableY = summaryStartY + 26;
+      const totalAvailWidth = contentWidth;
+      const colGap = 12;
+      const singleTableWidth = (totalAvailWidth - (colGap * 3)) / 4;
+
+      const summaryHeadStyles = {
+        fontStyle: 'bold',
+        textColor: [255, 255, 255],
+        fontSize: 8,
+        halign: 'center',
+        valign: 'middle',
+        cellPadding: 3
+      };
+
+      const summaryBodyStyles = {
+        fontSize: 8,
+        halign: 'center',
+        valign: 'middle',
+        cellPadding: 2.5,
+        textColor: [0, 0, 0],
+        lineColor: [0, 0, 0],
+        lineWidth: 0.25
+      };
+
+      // 1. Garment Table
+      autoTable(doc, {
+        head: [['Garment Type', 'Lots', 'Qty', '%']],
+        body: gBody,
+        startY: sumTableY,
+        margin: { left: margin },
+        tableWidth: singleTableWidth,
+        theme: 'grid',
+        styles: summaryBodyStyles,
+        headStyles: { ...summaryHeadStyles, fillColor: [15, 118, 110] },
+        didParseCell: (d) => {
+          if (d.section === 'body' && d.row.index === gBody.length - 1) {
+            d.cell.styles.fontStyle = 'bold';
+            d.cell.styles.fillColor = [226, 232, 240];
+          }
+        }
+      });
+
+      // 2. Season Table
+      autoTable(doc, {
+        head: [['Season', 'Lots', 'Qty', '%']],
+        body: sBody,
+        startY: sumTableY,
+        margin: { left: margin + singleTableWidth + colGap },
+        tableWidth: singleTableWidth,
+        theme: 'grid',
+        styles: summaryBodyStyles,
+        headStyles: { ...summaryHeadStyles, fillColor: [67, 56, 202] },
+        didParseCell: (d) => {
+          if (d.section === 'body' && d.row.index === sBody.length - 1) {
+            d.cell.styles.fontStyle = 'bold';
+            d.cell.styles.fillColor = [226, 232, 240];
+          }
+        }
+      });
+
+      // 3. Packing Supervisor Table
+      autoTable(doc, {
+        head: [['Packing Sup', 'Lots', 'Qty', '%']],
+        body: supBody,
+        startY: sumTableY,
+        margin: { left: margin + (singleTableWidth * 2) + (colGap * 2) },
+        tableWidth: singleTableWidth,
+        theme: 'grid',
+        styles: summaryBodyStyles,
+        headStyles: { ...summaryHeadStyles, fillColor: [30, 64, 175] },
+        didParseCell: (d) => {
+          if (d.section === 'body' && d.row.index === supBody.length - 1) {
+            d.cell.styles.fontStyle = 'bold';
+            d.cell.styles.fillColor = [226, 232, 240];
+          }
+        }
+      });
+
+      // 4. Aging Table
+      autoTable(doc, {
+        head: [['Aging Range', 'Lots', 'Qty', '%']],
+        body: ageBody,
+        startY: sumTableY,
+        margin: { left: margin + (singleTableWidth * 3) + (colGap * 3) },
+        tableWidth: singleTableWidth,
+        theme: 'grid',
+        styles: summaryBodyStyles,
+        headStyles: { ...summaryHeadStyles, fillColor: [153, 27, 27] },
+        didParseCell: (d) => {
+          if (d.section === 'body' && d.row.index === ageBody.length - 1) {
+            d.cell.styles.fontStyle = 'bold';
+            d.cell.styles.fillColor = [226, 232, 240];
+          }
+        }
+      });
+
+      // Page numbers in footer
       const pageCount = doc.internal.getNumberOfPages();
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i);
-        doc.setFontSize(7);
+        doc.setFontSize(8);
         doc.setTextColor(100, 100, 100);
-        doc.text(`Page ${i} of ${pageCount}`, pageWidth - margin, pageHeight - 5, { align: 'right' });
-        doc.text('Confidential - Internal Use Only', margin, pageHeight - 5);
+        doc.text(`Page ${i} of ${pageCount}`, pageWidth - margin, pageHeight - 10, { align: 'right' });
+        doc.text('FACTORY SUITE PRO - CONFIDENTIAL', margin, pageHeight - 10);
       }
 
-      const date = new Date().toISOString().split('T')[0];
-      doc.save(`Packing_Allotted_In_Progress_${date}.pdf`);
+      const dateStr = new Date().toISOString().split('T')[0];
+      doc.save(`Packing_Allotted_In_Progress_${dateStr}.pdf`);
+
     } catch (error) {
       console.error('Error exporting to PDF:', error);
       alert('Error exporting to PDF. Please try again.');
     } finally {
       setExportLoading(false);
     }
-  }, [displayData, summaryStats]);
+  }, [displayData, remarksMap, filters]);
 
-  // Export to Excel - updated to remove wipPacking and stitching qty, use totalPcs
-  const exportToExcel = useCallback(() => {
+  // Professional Multi-Sheet Excel Export with Executive Summary & Applied Filters
+  const exportToExcel = useCallback(async () => {
+    if (displayData.length === 0) {
+      alert('No data to export');
+      return;
+    }
+
     try {
       setExportLoading(true);
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'MH Factory Suite Pro';
+      workbook.created = new Date();
 
-      const exportData = displayData.map(item => ({
-        'Lot Number': item.lotNumber,
-        'Party Name': item.partyName,
-        'Fabric': item.fabric,
-        'Brand': item.brand || item.issuesBrand || '-',
-        'Garment Type': item.garmentType,
-        'Style': item.style,
-        'Supervisor': item.supervisor || item.stitchingSupervisor || '-',
-        'Direct Stitching': item.directStitching || item.issuesDirectStitching || '-',
-        'Date of Issue': item.dateOfIssue || item.stitchingIssueDate || '-',
-        'Total Pcs': item.totalPcs,
-        'Priority': item.priority || 'Normal',
-        'M/W/K': item.mwk || '-',
-        'Season': item.season || item.issuesSeason || '-',
-        'Packing Supervisor': item.packingSupervisor || '-',
-        'Packing Date': item.packingDate || '-',
-        'Packing Days': item.packingPendingDays || 0,
-        'Packing Complete': item.packingComplete,
-        'Total Manpower': item.totalManpower,
-        'WIP Packing': item.wipPacking,
-        'Cutting Qty': item.cuttingQty || '0',
-        'Manpower': item.manpower || '0',
-        'Job Order Date': item.jobOrderDate || '-',
-        'Status': 'Packing In Progress'
-      }));
+      const totalLots = displayData.length;
+      const totalPieces = displayData.reduce((sum, item) => sum + (Number(item.totalPcs) || 0), 0);
+      const highPriorityCount = displayData.filter(item => (item.priority || '').toLowerCase() === 'high').length;
+      const directLotsCount = displayData.filter(item => (item.directStitching || item.issuesDirectStitching || '').toLowerCase() === 'yes').length;
+      const avgDays = totalLots > 0 ? Math.round(displayData.reduce((sum, item) => sum + (item.packingPendingDays || 0), 0) / totalLots) : 0;
 
-      const ws = XLSX.utils.json_to_sheet(exportData);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Packing In Progress');
+      // Aggregations for Executive Summary
+      const garmentMap = {};
+      const seasonMap = {};
+      const supervisorMap = {};
+      const partyMap = {};
+      const agingMap = {
+        '0-7 Days': { totalLots: 0, totalPcs: 0 },
+        '8-15 Days': { totalLots: 0, totalPcs: 0 },
+        '16-30 Days': { totalLots: 0, totalPcs: 0 },
+        '30+ Days': { totalLots: 0, totalPcs: 0 }
+      };
 
-      // Auto-size columns
-      const colWidths = [];
-      exportData.forEach(row => {
-        Object.keys(row).forEach((key, i) => {
-          const value = row[key] ? row[key].toString().length : 10;
-          colWidths[i] = Math.max(colWidths[i] || 10, Math.min(value, 50));
+      displayData.forEach(item => {
+        const pcs = Number(item.totalPcs) || 0;
+        const gType = (item.garmentType || 'Unknown').trim();
+        const season = (item.season || item.issuesSeason || 'N/A').trim();
+        const pSup = (item.packingSupervisor || 'Unassigned').trim();
+        const party = (item.partyName || (item.directStitching === 'yes' ? 'Direct Stitching' : '—')).trim();
+        const days = item.packingPendingDays || 0;
+
+        if (!garmentMap[gType]) garmentMap[gType] = { totalLots: 0, totalPcs: 0 };
+        garmentMap[gType].totalLots += 1;
+        garmentMap[gType].totalPcs += pcs;
+
+        if (!seasonMap[season]) seasonMap[season] = { totalLots: 0, totalPcs: 0 };
+        seasonMap[season].totalLots += 1;
+        seasonMap[season].totalPcs += pcs;
+
+        if (!supervisorMap[pSup]) supervisorMap[pSup] = { totalLots: 0, totalPcs: 0 };
+        supervisorMap[pSup].totalLots += 1;
+        supervisorMap[pSup].totalPcs += pcs;
+
+        if (!partyMap[party]) partyMap[party] = { totalLots: 0, totalPcs: 0 };
+        partyMap[party].totalLots += 1;
+        partyMap[party].totalPcs += pcs;
+
+        if (days <= 7) {
+          agingMap['0-7 Days'].totalLots += 1;
+          agingMap['0-7 Days'].totalPcs += pcs;
+        } else if (days <= 15) {
+          agingMap['8-15 Days'].totalLots += 1;
+          agingMap['8-15 Days'].totalPcs += pcs;
+        } else if (days <= 30) {
+          agingMap['16-30 Days'].totalLots += 1;
+          agingMap['16-30 Days'].totalPcs += pcs;
+        } else {
+          agingMap['30+ Days'].totalLots += 1;
+          agingMap['30+ Days'].totalPcs += pcs;
+        }
+      });
+
+      const sortedGarments = Object.keys(garmentMap).map(k => ({ name: k, totalLots: garmentMap[k].totalLots, totalPcs: garmentMap[k].totalPcs })).sort((a, b) => b.totalPcs - a.totalPcs);
+      const sortedSeasons = Object.keys(seasonMap).map(k => ({ name: k, totalLots: seasonMap[k].totalLots, totalPcs: seasonMap[k].totalPcs })).sort((a, b) => b.totalPcs - a.totalPcs);
+      const sortedSupervisors = Object.keys(supervisorMap).map(k => ({ name: k, totalLots: supervisorMap[k].totalLots, totalPcs: supervisorMap[k].totalPcs })).sort((a, b) => b.totalPcs - a.totalPcs);
+      const sortedParties = Object.keys(partyMap).map(k => ({ name: k, totalLots: partyMap[k].totalLots, totalPcs: partyMap[k].totalPcs })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+      };
+
+      // ================= SHEET 1: DATA TABLE =================
+      const ws1 = workbook.addWorksheet('Packing In Progress', { views: [{ showGridLines: true }] });
+
+      // Title Banner
+      ws1.mergeCells('A1:U1');
+      const titleCell = ws1.getCell('A1');
+      titleCell.value = 'MH FACTORY SUITE PRO - PACKING ALLOTTED & IN PROGRESS REPORT';
+      titleCell.font = { name: 'Segoe UI', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E1B4B' } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws1.getRow(1).height = 30;
+
+      // Subtitle KPI Banner
+      ws1.mergeCells('A2:U2');
+      const subCell = ws1.getCell('A2');
+      subCell.value = `Lots in Packing: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()}   |   Direct Lots: ${directLotsCount}   |   High Priority: ${highPriorityCount}   |   Avg Packing Days: ${avgDays}d   |   Generated: ${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN')}`;
+      subCell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FFC7D2FE' } };
+      subCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF312E81' } };
+      subCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws1.getRow(2).height = 22;
+
+      // Table Header Row
+      const tableHeaders = [
+        '#', 'Lot Number', 'Garment Type', 'Style', 'Fabric', 'Brand',
+        'Total Pcs', 'M/W/K', 'Season', 'Party Name', 'Direct Stitching',
+        'Supervisor', 'Date of Issue', 'Priority', 'Packing Supervisor',
+        'Packing Date', 'Packing Days', 'Status', 'Remarks'
+      ];
+      const headerRow = ws1.addRow(tableHeaders);
+      headerRow.height = 24;
+      headerRow.eachCell(cell => {
+        cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = thinBorder;
+      });
+
+      // Data Rows
+      displayData.forEach((item, index) => {
+        const lotNo = (item.lotNumber || '').toString().trim();
+        const lotRemarks = remarksMap[lotNo] || [];
+        const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1].text : '';
+        const pcs = Number(item.totalPcs) || 0;
+        const days = item.packingPendingDays || 0;
+        const isDirect = (item.directStitching || item.issuesDirectStitching || '').toLowerCase() === 'yes';
+
+        const r = ws1.addRow([
+          index + 1,
+          lotNo,
+          item.garmentType || '—',
+          item.style || '—',
+          item.fabric || '—',
+          item.brand || item.issuesBrand || '—',
+          pcs,
+          item.mwk || '—',
+          item.season || item.issuesSeason || '—',
+          item.partyName || '—',
+          isDirect ? 'Yes' : 'No',
+          item.supervisor || item.stitchingSupervisor || '—',
+          item.dateOfIssue || item.stitchingIssueDate || '—',
+          item.priority || 'Normal',
+          item.packingSupervisor || '—',
+          item.packingDate || '—',
+          days,
+          'In Progress',
+          latestRemark || '—'
+        ]);
+
+        r.height = 20;
+
+        r.eachCell(cell => {
+          cell.font = { name: 'Segoe UI', size: 9 };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          cell.border = thinBorder;
+          if (index % 2 === 1) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+          }
+        });
+
+        // Total Pcs styling
+        r.getCell(7).numFmt = '#,##0';
+        r.getCell(7).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF1E40AF' } };
+
+        // Days Aging formatting
+        const daysCell = r.getCell(17);
+        if (days <= 7) {
+          daysCell.font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF16A34A' } };
+        } else if (days <= 15) {
+          daysCell.font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FFD97706' } };
+        } else {
+          daysCell.font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FFDC2626' } };
+          daysCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        }
+
+        // Direct badge
+        if (isDirect) {
+          r.getCell(11).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF15803D' } };
+        }
+      });
+
+      // Total Row
+      const totalRow1 = ws1.addRow([
+        '', `TOTAL (${totalLots} Lots)`, '', '', '', '',
+        totalPieces, '', '', '', `${directLotsCount} Direct`,
+        '', '', `${highPriorityCount} High`, '', '',
+        `${avgDays}d Avg`, 'In Progress', ''
+      ]);
+      totalRow1.height = 24;
+      totalRow1.eachCell(cell => {
+        cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF000000' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FF000000' } },
+          bottom: { style: 'double', color: { argb: 'FF000000' } },
+          left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+        };
+      });
+      totalRow1.getCell(7).numFmt = '#,##0';
+
+      // Column widths
+      const colWidths = [6, 15, 18, 18, 20, 16, 14, 10, 12, 22, 16, 18, 15, 12, 18, 15, 14, 15, 30];
+      colWidths.forEach((w, i) => {
+        ws1.getColumn(i + 1).width = w;
+      });
+
+      // ================= SHEET 2: EXECUTIVE SUMMARY =================
+      const ws2 = workbook.addWorksheet('Executive Summary', { views: [{ showGridLines: true }] });
+
+      // 1. Garment Type Breakdown
+      ws2.mergeCells('A1:D1');
+      const gTitle = ws2.getCell('A1');
+      gTitle.value = '1. GARMENT TYPE BREAKDOWN (LOTS & PIECES DISTRIBUTION)';
+      gTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      gTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } };
+      gTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(1).height = 26;
+
+      const gHeader = ws2.addRow(['Garment Type', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      gHeader.height = 22;
+      gHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF134E4A' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedGarments.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
         });
       });
-      ws['!cols'] = colWidths.map(width => ({ wch: width }));
 
-      const date = new Date().toISOString().split('T')[0];
-      XLSX.writeFile(wb, `packing_in_progress_${date}.xlsx`);
-    } catch (error) {
-      console.error('Error exporting to Excel:', error);
-      alert('Error exporting to Excel. Please try again.');
+      const gTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      gTotalRow.height = 22;
+      gTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      gTotalRow.getCell(3).numFmt = '#,##0';
+      gTotalRow.getCell(4).numFmt = '0.0%';
+
+      // Spacer
+      ws2.addRow([]);
+
+      // 2. Season Wise Breakdown
+      const sStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${sStartRow}:D${sStartRow}`);
+      const sTitle = ws2.getCell(`A${sStartRow}`);
+      sTitle.value = '2. SEASON WISE BREAKDOWN (LOTS & PIECES DISTRIBUTION)';
+      sTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      sTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4338CA' } };
+      sTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(sStartRow).height = 26;
+
+      const sHeader = ws2.addRow(['Season', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      sHeader.height = 22;
+      sHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF312E81' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedSeasons.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const sTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      sTotalRow.height = 22;
+      sTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      sTotalRow.getCell(3).numFmt = '#,##0';
+      sTotalRow.getCell(4).numFmt = '0.0%';
+
+      // Spacer
+      ws2.addRow([]);
+
+      // 3. Packing Supervisor Breakdown
+      const supStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${supStartRow}:D${supStartRow}`);
+      const supTitle = ws2.getCell(`A${supStartRow}`);
+      supTitle.value = '3. PACKING SUPERVISOR BREAKDOWN';
+      supTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      supTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
+      supTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(supStartRow).height = 26;
+
+      const supHeader = ws2.addRow(['Packing Supervisor', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      supHeader.height = 22;
+      supHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedSupervisors.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const supTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      supTotalRow.height = 22;
+      supTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      supTotalRow.getCell(3).numFmt = '#,##0';
+      supTotalRow.getCell(4).numFmt = '0.0%';
+
+      // Spacer
+      ws2.addRow([]);
+
+      // 4. Aging Breakdown
+      const ageStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${ageStartRow}:D${ageStartRow}`);
+      const ageTitle = ws2.getCell(`A${ageStartRow}`);
+      ageTitle.value = '4. PACKING DAYS AGING BREAKDOWN';
+      ageTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      ageTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF991B1B' } };
+      ageTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(ageStartRow).height = 26;
+
+      const ageHeader = ws2.addRow(['Aging Range', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      ageHeader.height = 22;
+      ageHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF7F1D1D' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      Object.entries(agingMap).forEach(([rangeName, data], idx) => {
+        const pct = totalPieces > 0 ? (data.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([rangeName, data.totalLots, data.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const ageTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      ageTotalRow.height = 22;
+      ageTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      ageTotalRow.getCell(3).numFmt = '#,##0';
+      ageTotalRow.getCell(4).numFmt = '0.0%';
+
+      ws2.getColumn(1).width = 28;
+      ws2.getColumn(2).width = 16;
+      ws2.getColumn(3).width = 24;
+      ws2.getColumn(4).width = 16;
+
+      // ================= SHEET 3: APPLIED FILTERS =================
+      const ws3 = workbook.addWorksheet('Applied Filters', { views: [{ showGridLines: true }] });
+      ws3.mergeCells('A1:B1');
+      const fTitle = ws3.getCell('A1');
+      fTitle.value = 'APPLIED FILTERS & METADATA';
+      fTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      fTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E1B4B' } };
+      fTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws3.getRow(1).height = 26;
+
+      const filterEntries = [
+        ['Search Term', searchTerm || 'None'],
+        ['Financial Year', financialYearFilter || 'All'],
+        ['Priority', filters.priority.length ? filters.priority.join(', ') : 'All'],
+        ['Direct Stitching', filters.directStitching.length ? filters.directStitching.join(', ') : 'All'],
+        ['Stitching Supervisor', filters.stitchingSupervisor.length ? filters.stitchingSupervisor.join(', ') : 'All'],
+        ['Packing Supervisor', filters.packingSupervisor.length ? filters.packingSupervisor.join(', ') : 'All'],
+        ['Brand', filters.brand.length ? filters.brand.join(', ') : 'All'],
+        ['Fabric', filters.fabric.length ? filters.fabric.join(', ') : 'All'],
+        ['Garment Type', filters.garmentType.length ? filters.garmentType.join(', ') : 'All'],
+        ['Style', filters.style.length ? filters.style.join(', ') : 'All'],
+        ['Season', filters.season.length ? filters.season.join(', ') : 'All'],
+        ['Party Name', filters.partyName.length ? filters.partyName.join(', ') : 'All'],
+        ['Remarks', filters.remarks.length ? filters.remarks.join(', ') : 'All'],
+        ['Packing Days Range', filters.pendingDaysRange.length ? filters.pendingDaysRange.join(', ') : 'All'],
+        ['Matching Lots', totalLots.toString()],
+        ['Total Pieces', totalPieces.toLocaleString()]
+      ];
+
+      filterEntries.forEach(([k, v], idx) => {
+        const r = ws3.addRow([k, v]);
+        r.height = 20;
+        r.getCell(1).font = { name: 'Segoe UI', size: 9.5, bold: true };
+        r.getCell(2).font = { name: 'Segoe UI', size: 9.5 };
+        r.eachCell(c => {
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      ws3.getColumn(1).width = 24;
+      ws3.getColumn(2).width = 50;
+
+      // Save Excel file
+      const buffer = await workbook.xlsx.writeBuffer();
+      const ts = new Date().toISOString().slice(0, 10);
+      saveAs(new Blob([buffer]), `Packing_In_Progress_${ts}.xlsx`);
+
+    } catch (err) {
+      console.error('Error exporting to Excel:', err);
+      alert(`Excel export failed: ${err.message}`);
     } finally {
       setExportLoading(false);
     }
-  }, [displayData]);
+  }, [displayData, remarksMap, searchTerm, financialYearFilter, filters]);
 
   const getPendingDaysClass = (days) => {
     if (days <= 7) return 'pending-days-low';
@@ -1802,11 +2584,11 @@ const PackingAlloted = () => {
             />
 
             <MultiSelectDropdown
-              label="WIP Packing:"
-              options={filterOptions.wipPacking}
-              selectedValues={filters.wipPacking}
+              label="Remarks Filter:"
+              options={filterOptions.remarks || []}
+              selectedValues={filters.remarks}
               onChange={(newVals) => {
-                setFilters(prev => ({ ...prev, wipPacking: newVals }));
+                setFilters(prev => ({ ...prev, remarks: newVals }));
                 setCurrentPage(1);
               }}
             />
@@ -1871,24 +2653,23 @@ const PackingAlloted = () => {
                   <th>#</th>
                   <th>Image</th>
                   <th>Lot Number</th>
-                  <th>Party Name</th>
-                  <th>Fabric</th>
-                  <th>Brand</th>
                   <th>Garment Type</th>
                   <th>Style</th>
-                  <th>Supervisor</th>
-                  <th>Direct Stitching</th>
-                  <th>Date of Issue</th>
+                  <th>Fabric</th>
+                  <th>Brand</th>
                   <th>Total Pcs</th>
-                  <th>Priority</th>
                   <th>M/W/K</th>
                   <th>Season</th>
+                  <th>Party Name</th>
+                  <th>Direct Stitching</th>
+                  <th>Supervisor</th>
+                  <th>Date of Issue</th>
+                  <th>Priority</th>
                   <th>Packing Supervisor</th>
                   <th>Packing Date</th>
                   <th>Packing Days</th>
-                  <th>WIP Packing</th>
-                  <th>Total Manpower</th>
                   <th>Status</th>
+                  <th>Remarks</th>
                 </tr>
               </thead>
               <tbody>
@@ -1917,30 +2698,30 @@ const PackingAlloted = () => {
                       )}
                     </td>
                     <td className="lot-number">{item.lotNumber || '-'}</td>
-                    <td>{item.partyName || '-'}</td>
-                    <td>{item.fabric || '-'}</td>
-                    <td>{item.brand || item.issuesBrand || '-'}</td>
                     <td>{item.garmentType || '-'}</td>
                     <td>{item.style || '-'}</td>
-                    <td>{item.supervisor || item.stitchingSupervisor || '-'}</td>
-                    <td>
-                      <span className={`status-badge ${(item.directStitching || item.issuesDirectStitching)?.toLowerCase() === 'yes' ? 'status-yes' : 'status-no'}`}>
-                        {item.directStitching || item.issuesDirectStitching || '-'}
-                      </span>
-                    </td>
-                    <td>{item.dateOfIssue || item.stitchingIssueDate || '-'}</td>
+                    <td>{item.fabric || '-'}</td>
+                    <td>{item.brand || item.issuesBrand || '-'}</td>
                     <td className="quantity-cell">
                       <span className={parseInt(item.totalPcs) > 0 ? 'positive-qty' : 'zero-qty'}>
                         {item.totalPcs || '0'}
                       </span>
                     </td>
+                    <td>{item.mwk || '-'}</td>
+                    <td>{item.season || item.issuesSeason || '-'}</td>
+                    <td>{item.partyName || '-'}</td>
+                    <td>
+                      <span className={`status-badge ${(item.directStitching || item.issuesDirectStitching)?.toLowerCase() === 'yes' ? 'status-yes' : 'status-no'}`}>
+                        {item.directStitching || item.issuesDirectStitching || '-'}
+                      </span>
+                    </td>
+                    <td>{item.supervisor || item.stitchingSupervisor || '-'}</td>
+                    <td>{item.dateOfIssue || item.stitchingIssueDate || '-'}</td>
                     <td>
                       <span className={`priority-badge priority-${(item.priority || 'normal').toLowerCase()}`}>
                         {item.priority || 'Normal'}
                       </span>
                     </td>
-                    <td>{item.mwk || '-'}</td>
-                    <td>{item.season || item.issuesSeason || '-'}</td>
                     <td>
                       <span className="packing-supervisor-badge">
                         {item.packingSupervisor || '-'}
@@ -1952,12 +2733,72 @@ const PackingAlloted = () => {
                         {item.packingPendingDays || 0} {item.packingPendingDays === 1 ? 'day' : 'days'}
                       </span>
                     </td>
-                    <td>{item.wipPacking || '0'}</td>
-                    <td>{item.totalManpower || '0'}</td>
                     <td>
                       <span className="status-badge status-pending">
                         ⏳ In Progress
                       </span>
+                    </td>
+
+                    {/* Remarks Column */}
+                    <td style={{ minWidth: '180px', maxWidth: '240px' }}>
+                      {(() => {
+                        const lot = (item.lotNumber || '').toString().trim();
+                        const lotRemarks = remarksMap[lot] || [];
+                        const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1] : null;
+
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
+                            {latestRemark ? (
+                              <div
+                                onClick={() => handleOpenRemarksModal(item)}
+                                style={{
+                                  background: '#f8fafc',
+                                  border: '1px solid #cbd5e1',
+                                  borderLeft: '3.5px solid #6366f1',
+                                  borderRadius: '8px',
+                                  padding: '5px 8px',
+                                  fontSize: '0.78rem',
+                                  color: '#1e293b',
+                                  width: '100%',
+                                  boxSizing: 'border-box',
+                                  textAlign: 'left',
+                                  cursor: 'pointer'
+                                }}
+                                title="Click to view history or add remark"
+                              >
+                                <div style={{ fontWeight: 600, wordBreak: 'break-word', whiteSpace: 'normal', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                  {latestRemark.text}
+                                </div>
+                                <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '3px' }}>
+                                  🕒 {latestRemark.timestamp}
+                                </div>
+                              </div>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontSize: '0.76rem', fontStyle: 'italic' }}>No remarks</span>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenRemarksModal(item)}
+                              style={{
+                                background: '#eef2ff',
+                                color: '#4338ca',
+                                border: '1px solid #c7d2fe',
+                                padding: '3px 9px',
+                                borderRadius: '6px',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                            >
+                              <span>✏️</span> {latestRemark ? 'History / Edit' : '+ Add Remark'}
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
@@ -1989,27 +2830,156 @@ const PackingAlloted = () => {
               </button>
             </div>
           )}
-
-          {/* Summary Section */}
-          {/* <div className="summary-section">
-            <div className="summary-stats">
-              <span>📦 Lots in Packing: {summaryStats.totalItems}</span>
-              <span>📦 Total Pcs: {summaryStats.totalPcs}</span>
-              <span>⚡ High Priority: {summaryStats.highPriority}</span>
-              <span>🎯 Direct Stitching: {summaryStats.directStitching}</span>
-              <span>📋 Total Allocated: {summaryStats.totalInIssuesSheet}</span>
-              <span>✅ Packing Complete: {summaryStats.completedPackingLots}</span>
-              <span>⏳ Avg Packing Days: {summaryStats.avgPackingPendingDays}</span>
-            </div>
-            <div className="aging-summary">
-              <span className="aging-title">Packing Aging:</span>
-              <span className="aging-badge low">0-7 days: {summaryStats.agingSummary['0-7 days']}</span>
-              <span className="aging-badge medium">8-15 days: {summaryStats.agingSummary['8-15 days']}</span>
-              <span className="aging-badge high">16-30 days: {summaryStats.agingSummary['16-30 days']}</span>
-              <span className="aging-badge critical">30+ days: {summaryStats.agingSummary['30+ days']}</span>
-            </div>
-          </div> */}
         </>
+      )}
+
+      {/* Interactive Remarks Modal */}
+      {remarksModalOpen && selectedRemarksLot && (
+        <div className="remarks-modal-overlay" onClick={handleCloseRemarksModal}>
+          <div className="remarks-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="remarks-modal-header">
+              <div className="remarks-modal-header-title">
+                <span style={{ fontSize: '1.4rem' }}>💬</span>
+                <h3>Lot Remarks</h3>
+                <span className="remarks-modal-lot-tag">#{selectedRemarksLot.lotNumber}</span>
+              </div>
+              <button
+                className="remarks-modal-close-btn"
+                onClick={handleCloseRemarksModal}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="remarks-modal-body">
+              {/* Lot Information Summary */}
+              <div className="remarks-lot-card">
+                <div className="remarks-lot-field">
+                  <span className="remarks-lot-field-label">Party</span>
+                  <span className="remarks-lot-field-value">{selectedRemarksLot.partyName || '-'}</span>
+                </div>
+                <div className="remarks-lot-field">
+                  <span className="remarks-lot-field-label">Fabric</span>
+                  <span className="remarks-lot-field-value">{selectedRemarksLot.fabric || '-'}</span>
+                </div>
+                <div className="remarks-lot-field">
+                  <span className="remarks-lot-field-label">Style / Garment</span>
+                  <span className="remarks-lot-field-value">{selectedRemarksLot.style || selectedRemarksLot.garmentType || '-'}</span>
+                </div>
+                <div className="remarks-lot-field">
+                  <span className="remarks-lot-field-label">Total Pcs</span>
+                  <span className="remarks-lot-field-value" style={{ color: '#1e40af', fontWeight: '800' }}>
+                    {selectedRemarksLot.totalPcs || '0'} pcs
+                  </span>
+                </div>
+                <div className="remarks-lot-field">
+                  <span className="remarks-lot-field-label">Packing Sup</span>
+                  <span className="remarks-lot-field-value">{selectedRemarksLot.packingSupervisor || '-'}</span>
+                </div>
+                <div className="remarks-lot-field">
+                  <span className="remarks-lot-field-label">Packing Days</span>
+                  <span className="remarks-lot-field-value" style={{ color: '#4338ca', fontWeight: '800' }}>
+                    {selectedRemarksLot.packingPendingDays || 0} days
+                  </span>
+                </div>
+              </div>
+
+              {/* Remarks History */}
+              <div className="remarks-history-section">
+                <h4 className="remarks-history-title">
+                  <span>📜</span> Remarks History ({(remarksMap[selectedRemarksLot.lotNumber?.toString().trim()] || []).length})
+                </h4>
+                <div className="remarks-history-list">
+                  {(() => {
+                    const history = remarksMap[selectedRemarksLot.lotNumber?.toString().trim()] || [];
+                    if (history.length === 0) {
+                      return (
+                        <div style={{ textAlign: 'center', padding: '16px', color: '#94a3b8', fontSize: '0.85rem' }}>
+                          No previous remarks for this lot. Add the first remark below!
+                        </div>
+                      );
+                    }
+                    return history.map((item, i) => (
+                      <div
+                        key={i}
+                        className={`remarks-history-item ${i === history.length - 1 ? 'latest' : ''}`}
+                      >
+                        <div className="remarks-history-text">{item.text}</div>
+                        <div className="remarks-history-time">
+                          <span>🕒</span> {item.timestamp}
+                          {i === history.length - 1 && (
+                            <span style={{ marginLeft: 'auto', color: '#4338ca', fontWeight: '700', fontSize: '0.7rem', background: '#e0e7ff', padding: '2px 6px', borderRadius: '4px' }}>
+                              Latest
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+
+              {/* Enter New Remark Input */}
+              <div className="remarks-input-section">
+                <h4 className="remarks-input-label">
+                  <span>✏️</span> Enter Your Remark
+                </h4>
+
+                {/* Quick Presets */}
+                <div className="remarks-quick-presets">
+                  {[
+                    "Ready for Packing",
+                    "In Ironing / Folding",
+                    "Packing Material Pending",
+                    "Tag / Barcode Pending",
+                    "Urgent Packing Required",
+                    "Hold for Quality Check",
+                    "Partial Quantity Packed",
+                    "Completed & Ready for Dispatch"
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      className="remark-preset-tag"
+                      onClick={() => setNewRemarkInputText(preset)}
+                    >
+                      + {preset}
+                    </button>
+                  ))}
+                </div>
+
+                <textarea
+                  className="remarks-textarea"
+                  placeholder="Type your custom remark here..."
+                  value={newRemarkInputText}
+                  onChange={(e) => setNewRemarkInputText(e.target.value)}
+                  rows={3}
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="remarks-modal-footer">
+              <button
+                type="button"
+                className="remarks-cancel-btn"
+                onClick={handleCloseRemarksModal}
+                disabled={savingRemark}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="remarks-save-btn"
+                onClick={handleSaveRemark}
+                disabled={savingRemark || !newRemarkInputText.trim()}
+              >
+                {savingRemark ? '⏳ Saving...' : '💾 Save Remark'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Image Preview Lightbox Modal */}

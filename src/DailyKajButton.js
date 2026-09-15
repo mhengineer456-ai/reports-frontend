@@ -1,7 +1,188 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx'; 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
+import { SPREADSHEET_IDS, fetchSheetDataFromBackend } from './config';
+
+// Reusable Multi-Select Dropdown Component matching the KajButton Theme
+const MultiSelectDropdown = ({ 
+  label, 
+  options = [], 
+  selectedValues = [], 
+  onChange, 
+  placeholder = "All", 
+  themeColor = "#4f46e5" 
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const toggleOption = (val) => {
+    if (selectedValues.includes(val)) {
+      onChange(selectedValues.filter((v) => v !== val));
+    } else {
+      onChange([...selectedValues, val]);
+    }
+  };
+
+  const isAllSelected = selectedValues.length === 0;
+
+  const getDisplayText = () => {
+    if (isAllSelected) return placeholder;
+    if (selectedValues.length === 1) return selectedValues[0];
+    return `${selectedValues.length} Selected`;
+  };
+
+  const filteredOptions = options.filter((opt) => {
+    const lbl = typeof opt === "object" ? opt.label : opt;
+    return String(lbl || "").toLowerCase().includes(searchTerm.toLowerCase());
+  });
+
+  return (
+    <div className="filter-group" ref={dropdownRef} style={{ position: "relative" }}>
+      <label className="filter-label">{label}</label>
+      <div
+        onClick={() => setIsOpen(!isOpen)}
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          userSelect: "none",
+          padding: "10px 14px",
+          borderRadius: "12px",
+          border: `1.5px solid ${selectedValues.length > 0 ? themeColor : "#e2e8f0"}`,
+          background: selectedValues.length > 0 ? "#eef2ff" : "#ffffff",
+          fontWeight: selectedValues.length > 0 ? "700" : "500",
+          color: selectedValues.length > 0 ? themeColor : "#0f172a",
+          cursor: "pointer",
+          fontSize: "13px",
+          minHeight: "42px",
+          boxSizing: "border-box",
+          transition: "all 0.2s"
+        }}
+      >
+        <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "160px" }}>
+          {getDisplayText()}
+        </span>
+        <span style={{ fontSize: "10px", transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s", color: "#64748b" }}>
+          ▼
+        </span>
+      </div>
+
+      {isOpen && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            zIndex: 1000,
+            background: "#ffffff",
+            border: "1.5px solid #e2e8f0",
+            borderRadius: "12px",
+            boxShadow: "0 10px 25px rgba(0, 0, 0, 0.15)",
+            minWidth: "220px",
+            maxHeight: "260px",
+            overflowY: "auto",
+            padding: "8px"
+          }}
+        >
+          {options.length > 5 && (
+            <input
+              type="text"
+              placeholder={`Search ${label}...`}
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: "100%",
+                padding: "6px 10px",
+                borderRadius: "8px",
+                border: "1px solid #cbd5e1",
+                fontSize: "12px",
+                marginBottom: "6px",
+                boxSizing: "border-box",
+                outline: "none"
+              }}
+            />
+          )}
+
+          <div
+            onClick={() => onChange([])}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 10px",
+              borderRadius: "8px",
+              cursor: "pointer",
+              fontSize: "12px",
+              fontWeight: 700,
+              color: isAllSelected ? themeColor : "#64748b",
+              background: isAllSelected ? "#eef2ff" : "transparent",
+              borderBottom: "1px solid #f1f5f9",
+              marginBottom: "4px"
+            }}
+          >
+            <span>All (Clear Selection)</span>
+            {isAllSelected && <span>✓</span>}
+          </div>
+
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((opt) => {
+              const val = typeof opt === "object" ? opt.value : opt;
+              const lbl = typeof opt === "object" ? opt.label : opt;
+              const isChecked = selectedValues.includes(val);
+              return (
+                <div
+                  key={val}
+                  onClick={() => toggleOption(val)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "6px 10px",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: isChecked ? "700" : "500",
+                    color: isChecked ? themeColor : "#1e293b",
+                    background: isChecked ? "#eef2ff" : "transparent",
+                    transition: "background 0.15s"
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => {}}
+                    style={{ accentColor: themeColor, cursor: "pointer" }}
+                  />
+                  <span style={{ flex: 1 }}>{lbl}</span>
+                </div>
+              );
+            })
+          ) : (
+            <div style={{ padding: "8px 10px", fontSize: "12px", color: "#94a3b8", textAlign: "center" }}>
+              No options found
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const DailyKajButtonReport = () => {
   const [data, setData] = useState([]);
   const [filteredData, setFilteredData] = useState([]);
@@ -9,15 +190,18 @@ const DailyKajButtonReport = () => {
   const [error, setError] = useState(null);
   const [filters, setFilters] = useState({
     lotNumber: '',
-    supervisor: '',
-    garmentType: '',
-    fabric: '',
-    brand: '',
-    stitchingSupervisor: '',
+    supervisors: [],
+    garmentTypes: [],
+    fabrics: [],
+    brands: [],
+    parties: [],
+    seasons: [],
+    sections: [],
+    stitchingSupervisors: [],
+    statuses: ['WIP', 'Not Started'], // Active Lots by default
     minAging: '',
     maxAging: '',
-    status: 'active',
-    holdLots: false // NEW: Filter for Hold Lots
+    holdLots: false
   });
   const [selectedRow, setSelectedRow] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -35,60 +219,123 @@ const DailyKajButtonReport = () => {
     filterData();
   }, [data, filters]);
 
- const fetchData = async () => {
-  setLoading(true);
-  setError(null);
-  
-  try {
-    const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${RANGE}?key=${API_KEY}`
-    );
+  const fetchData = async () => {
+    setLoading(true);
+    setError(null);
     
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
-    const result = await response.json();
-    
-    if (result.values && result.values.length > 0) {
-      const headers = result.values[0];
-      const rows = result.values.slice(1);
-      
-      const formattedData = rows
-        .filter(row => {
-          // Skip completely empty rows
-          if (!row || row.length === 0) return false;
-          
-          // Skip rows where the first column (Lot Number) is empty
-          if (!row[0] || row[0].trim() === '') return false;
-          
-          // You can add more conditions here if needed
-          // For example, skip rows where all cells are empty
-          const hasAnyData = row.some(cell => cell && cell.toString().trim() !== '');
-          return hasAnyData;
-        })
-        .map(row => {
-          const record = {};
-          headers.forEach((header, index) => {
-            record[header] = row[index] || '';
-          });
-          
-          // Calculate aging
-          record['Aging'] = calculateAging(record);
-          record['Status'] = getLotStatus(record);
-          
-          return record;
+    try {
+      // Fetch KajButton data and JobOrder data in parallel
+      const [kajButtonRes, jobOrderRes] = await Promise.allSettled([
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${RANGE}?key=${API_KEY}`),
+        fetchSheetDataFromBackend(SPREADSHEET_IDS.JOBORDER, 'JobOrder!A:AZ')
+      ]);
+
+      // Parse JobOrder Sheet for Brand / Season / Section lookup against lots
+      const lotToJobInfo = {};
+      if (jobOrderRes.status === 'fulfilled' && jobOrderRes.value?.ok && Array.isArray(jobOrderRes.value.values)) {
+        const jRows = jobOrderRes.value.values;
+        const jHeaders = jRows[0] || [];
+        const normalize = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+        const headerMap = {};
+        jHeaders.forEach((h, idx) => {
+          headerMap[normalize(h)] = idx;
         });
+
+        const getVal = (row, key) => {
+          const idx = headerMap[normalize(key)];
+          return idx !== undefined && row[idx] !== undefined ? String(row[idx]).trim() : "";
+        };
+
+        for (let i = 1; i < jRows.length; i++) {
+          const r = jRows[i];
+          const lotNo = normalize(getVal(r, "Lot Number") || getVal(r, "Lot No") || getVal(r, "Lot"));
+          if (!lotNo) continue;
+          lotToJobInfo[lotNo] = {
+            brand: getVal(r, "Brand") || getVal(r, "Brand Name") || getVal(r, "Party Name") || getVal(r, "Party"),
+            party: getVal(r, "Party Name") || getVal(r, "Party"),
+            garment: getVal(r, "Garment Type") || getVal(r, "Garment"),
+            style: getVal(r, "Style"),
+            fabric: getVal(r, "Fabric"),
+            season: getVal(r, "Season"),
+            section: getVal(r, "Section"),
+            directStitching: getVal(r, "Direct Stitching") || getVal(r, "Direct")
+          };
+        }
+      }
+
+      let kajButtonValues = [];
+      if (kajButtonRes.status === 'fulfilled' && kajButtonRes.value.ok) {
+        const result = await kajButtonRes.value.json();
+        if (result.values) kajButtonValues = result.values;
+      } else {
+        const backendKajButton = await fetchSheetDataFromBackend(SPREADSHEET_ID, RANGE);
+        if (backendKajButton.ok && Array.isArray(backendKajButton.values)) {
+          kajButtonValues = backendKajButton.values;
+        }
+      }
       
-      setData(formattedData);
+      if (kajButtonValues && kajButtonValues.length > 0) {
+        const headers = kajButtonValues[0];
+        const rows = kajButtonValues.slice(1);
+        
+        const formattedData = rows
+          .filter(row => {
+            // Skip completely empty rows
+            if (!row || row.length === 0) return false;
+            
+            // Skip rows where the first column (Lot Number) is empty
+            if (!row[0] || row[0].trim() === '') return false;
+            
+            const hasAnyData = row.some(cell => cell && cell.toString().trim() !== '');
+            return hasAnyData;
+          })
+          .map(row => {
+            const record = {};
+            headers.forEach((header, index) => {
+              record[header] = row[index] || '';
+            });
+
+            const rawLot = String(record['Lot Number'] || record['Lot No'] || row[0] || '').trim();
+            const cleanLot = rawLot.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const jobInfo = lotToJobInfo[cleanLot] || {};
+            
+            const sheetBrand = String(record['BRAND'] || record['Brand'] || '').trim();
+            const finalBrand = sheetBrand && sheetBrand !== '-' ? sheetBrand : (jobInfo.brand || jobInfo.party || '');
+            record['BRAND'] = finalBrand;
+            record['Brand'] = finalBrand;
+            
+            const sheetParty = String(record['Party Name'] || record['Party'] || '').trim();
+            const finalParty = sheetParty && sheetParty !== '-' ? sheetParty : (jobInfo.party || jobInfo.brand || '');
+            record['Party Name'] = finalParty;
+            record['Party'] = finalParty;
+
+            if ((!record['Garment Type'] || record['Garment Type'] === '-') && jobInfo.garment) record['Garment Type'] = jobInfo.garment;
+            if ((!record['Style'] || record['Style'] === '-') && jobInfo.style) record['Style'] = jobInfo.style;
+            if ((!record['Fabric'] || record['Fabric'] === '-') && jobInfo.fabric) record['Fabric'] = jobInfo.fabric;
+            
+            const sheetSeason = String(record['Season'] || '').trim();
+            record['Season'] = sheetSeason && sheetSeason !== '-' ? sheetSeason : (jobInfo.season || '');
+            
+            const sheetSection = String(record['Section'] || '').trim();
+            record['Section'] = sheetSection && sheetSection !== '-' ? sheetSection : (jobInfo.section || '');
+            record['Direct Stitching'] = jobInfo.directStitching || '';
+            
+            // Calculate aging
+            record['Aging'] = calculateAging(record);
+            record['Status'] = getLotStatus(record);
+            
+            return record;
+          });
+        
+        setData(formattedData);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to fetch data from Google Sheets');
+      console.error('Error fetching data:', err);
+    } finally {
+      setLoading(false);
     }
-  } catch (err) {
-    setError(err.message || 'Failed to fetch data from Google Sheets');
-    console.error('Error fetching data:', err);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const getLotStatus = (record) => {
     const packingComplete = record['KajButton Complete'] || '';
@@ -257,52 +504,79 @@ const getRecentRemarks = (record) => {
   const filterData = () => {
     let filtered = [...data];
     
-    // Apply status filter - show only active (WIP + Not Started) by default
-    if (filters.status === 'active') {
-      filtered = filtered.filter(item => getLotStatus(item) !== 'Completed');
-    } else if (filters.status !== 'all') {
-      filtered = filtered.filter(item => getLotStatus(item) === filters.status);
+    // Apply multi-select status filter
+    if (filters.statuses && filters.statuses.length > 0) {
+      filtered = filtered.filter(item => {
+        const itemStatus = getLotStatus(item);
+        return filters.statuses.includes(itemStatus);
+      });
     }
     
-    // NEW: Apply Hold Lots filter
+    // Apply Hold Lots filter
     if (filters.holdLots) {
       filtered = filtered.filter(item => isLotOnHold(item));
     }
     
-    // Apply other filters
+    // Apply Lot Number search
     if (filters.lotNumber) {
       filtered = filtered.filter(item => 
-        item['Lot Number'].toLowerCase().includes(filters.lotNumber.toLowerCase())
+        item['Lot Number']?.toLowerCase().includes(filters.lotNumber.toLowerCase())
       );
     }
     
-    if (filters.supervisor) {
+    // Multi-select KajButton Supervisors
+    if (filters.supervisors && filters.supervisors.length > 0) {
       filtered = filtered.filter(item => 
-        item['kajButton Supervisor'].toLowerCase().includes(filters.supervisor.toLowerCase())
+        filters.supervisors.includes(item['kajButton Supervisor'])
       );
     }
     
-    if (filters.garmentType) {
+    // Multi-select Garment Types
+    if (filters.garmentTypes && filters.garmentTypes.length > 0) {
       filtered = filtered.filter(item => 
-        item['Garment Type'].toLowerCase().includes(filters.garmentType.toLowerCase())
+        filters.garmentTypes.includes(item['Garment Type'])
       );
     }
     
-    if (filters.fabric) {
+    // Multi-select Fabrics
+    if (filters.fabrics && filters.fabrics.length > 0) {
       filtered = filtered.filter(item => 
-        item['Fabric'].toLowerCase().includes(filters.fabric.toLowerCase())
+        filters.fabrics.includes(item['Fabric'])
       );
     }
     
-    if (filters.brand) {
+    // Multi-select Brands
+    if (filters.brands && filters.brands.length > 0) {
       filtered = filtered.filter(item => 
-        item['BRAND']?.toLowerCase().includes(filters.brand.toLowerCase())
+        filters.brands.includes(item['BRAND'])
+      );
+    }
+
+    // Multi-select Party Names
+    if (filters.parties && filters.parties.length > 0) {
+      filtered = filtered.filter(item => 
+        filters.parties.includes(item['Party Name'])
       );
     }
     
-    if (filters.stitchingSupervisor) {
+    // Multi-select Seasons
+    if (filters.seasons && filters.seasons.length > 0) {
       filtered = filtered.filter(item => 
-        item['Stiching Supervisor']?.toLowerCase().includes(filters.stitchingSupervisor.toLowerCase())
+        filters.seasons.includes(item['Season'])
+      );
+    }
+    
+    // Multi-select Sections
+    if (filters.sections && filters.sections.length > 0) {
+      filtered = filtered.filter(item => 
+        filters.sections.includes(item['Section'])
+      );
+    }
+    
+    // Multi-select Stitching Supervisors
+    if (filters.stitchingSupervisors && filters.stitchingSupervisors.length > 0) {
+      filtered = filtered.filter(item => 
+        filters.stitchingSupervisors.includes(item['Stiching Supervisor'])
       );
     }
     
@@ -321,397 +595,1063 @@ const getRecentRemarks = (record) => {
     setFilteredData(filtered);
   };
 
-  // Export to Excel Function (with status)
-  const exportToExcel = () => {
-    const exportColumns = [
-      'Lot Number', 'Fabric', 'Garment Type', 'Style', 'BRAND', 'Total Pcs', 
-      'KajButton Date', 'kajButton Supervisor', 'Aging', 'Status', 'Recent Remarks', 
-      'Stiching Supervisor'
-    ];
-    
-    const dataToExport = filteredData.map(item => {
-      const row = {};
-      exportColumns.forEach(col => {
-        if (col === 'Recent Remarks') {
-          row[col] = getRecentRemarks(item);
-        } else if (col === 'Status') {
-          row[col] = getLotStatus(item);
-        } else if (col === 'Aging') {
-          row[col] = calculateAging(item);
+  // Professional Multi-Sheet Excel Export (matching PendingIssue format)
+  const exportToExcel = async () => {
+    if (filteredData.length === 0) {
+      alert('No data available to export.');
+      return;
+    }
+
+    try {
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Factory Suite Pro';
+      workbook.created = new Date();
+
+      const totalLots = filteredData.length;
+      const totalPieces = filteredData.reduce((sum, item) => sum + (parseInt(item['Total Pcs']) || 0), 0);
+
+      // Grouping for Executive Summary
+      const garmentMap = {};
+      const supervisorMap = {};
+      const seasonMap = {};
+      let goodAgingLots = 0, goodAgingPcs = 0;
+      let warnAgingLots = 0, warnAgingPcs = 0;
+      let critAgingLots = 0, critAgingPcs = 0;
+      let completedLots = 0, completedPcs = 0;
+      let wipLots = 0, wipPcs = 0;
+      let notStartedLots = 0, notStartedPcs = 0;
+
+      filteredData.forEach(item => {
+        const pcs = parseInt(item['Total Pcs']) || 0;
+        const gType = (item['Garment Type'] || 'Unknown').trim();
+        const sup = (item['kajButton Supervisor'] || 'Unassigned').trim();
+        const season = (item['Season'] || 'Other / NA').trim();
+        const aging = parseInt(item['Aging']) || 0;
+        const status = getLotStatus(item);
+
+        if (!garmentMap[gType]) garmentMap[gType] = { totalLots: 0, totalPcs: 0 };
+        garmentMap[gType].totalLots += 1;
+        garmentMap[gType].totalPcs += pcs;
+
+        if (!supervisorMap[sup]) supervisorMap[sup] = { totalLots: 0, totalPcs: 0 };
+        supervisorMap[sup].totalLots += 1;
+        supervisorMap[sup].totalPcs += pcs;
+
+        if (!seasonMap[season]) seasonMap[season] = { totalLots: 0, totalPcs: 0 };
+        seasonMap[season].totalLots += 1;
+        seasonMap[season].totalPcs += pcs;
+
+        if (aging <= 2) {
+          goodAgingLots += 1;
+          goodAgingPcs += pcs;
+        } else if (aging <= 5) {
+          warnAgingLots += 1;
+          warnAgingPcs += pcs;
         } else {
-          row[col] = item[col] || '';
+          critAgingLots += 1;
+          critAgingPcs += pcs;
+        }
+
+        if (status === 'Completed') {
+          completedLots += 1;
+          completedPcs += pcs;
+        } else if (status === 'WIP') {
+          wipLots += 1;
+          wipPcs += pcs;
+        } else {
+          notStartedLots += 1;
+          notStartedPcs += pcs;
         }
       });
-      return row;
-    });
 
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "KajButtonReport");
-    XLSX.writeFile(workbook, "KajButton.xlsx");
+      const sortedGarments = Object.keys(garmentMap).map(name => ({
+        name,
+        totalLots: garmentMap[name].totalLots,
+        totalPcs: garmentMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedSupervisors = Object.keys(supervisorMap).map(name => ({
+        name,
+        totalLots: supervisorMap[name].totalLots,
+        totalPcs: supervisorMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+      };
+
+      // ================= SHEET 1: MAIN DATA =================
+      const ws1 = workbook.addWorksheet('KajButton Report', {
+        views: [{ showGridLines: true }]
+      });
+
+      // Title Banner
+      ws1.mergeCells('A1:Q1');
+      const titleCell = ws1.getCell('A1');
+      titleCell.value = filters.holdLots ? 'FACTORY SUITE PRO - KAJBUTTON HOLD LOTS REPORT' : 'FACTORY SUITE PRO - DAILY KAJBUTTON PRODUCTION REPORT';
+      titleCell.font = { name: 'Segoe UI', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws1.getRow(1).height = 32;
+
+      // Subtitle
+      ws1.mergeCells('A2:Q2');
+      const subCell = ws1.getCell('A2');
+      subCell.value = `Report Date: ${new Date().toLocaleDateString('en-IN')}  |  Total Lots: ${totalLots}  |  Total Pieces: ${totalPieces.toLocaleString()}  |  Completed: ${completedLots}  |  WIP: ${wipLots}  |  Not Started: ${notStartedLots}`;
+      subCell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FFCBD5E1' } };
+      subCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      subCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws1.getRow(2).height = 22;
+
+      // Spacer
+      ws1.addRow([]);
+
+      // Table Headers
+      const headers1 = [
+        'Sr No.', 'Lot Number', 'Garment Type', 'Style', 'Fabric', 'Brand',
+        'Total Pcs', 'Section', 'Season', 'Party Name', 'Direct Stitching',
+        'KajButton Date', 'KajButton Supervisor', 'Aging (Days)', 'Status',
+        'Recent Remarks', 'Stitching Supervisor'
+      ];
+      const headerRow = ws1.addRow(headers1);
+      headerRow.height = 25;
+      headerRow.eachCell((cell) => {
+        cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = thinBorder;
+      });
+
+      // Data Rows
+      filteredData.forEach((item, idx) => {
+        const pcs = parseInt(item['Total Pcs']) || 0;
+        const aging = parseInt(item['Aging']) || 0;
+        const status = getLotStatus(item);
+        const remarks = getRecentRemarks(item);
+        const isHold = isLotOnHold(item);
+
+        const row = ws1.addRow([
+          idx + 1,
+          item['Lot Number'] || '—',
+          item['Garment Type'] || '—',
+          item['Style'] || '—',
+          item['Fabric'] || '—',
+          item['BRAND'] || '—',
+          pcs,
+          item['Section'] || '—',
+          item['Season'] || '—',
+          item['Party Name'] || '—',
+          item['Direct Stitching'] || '—',
+          item['KajButton Date'] || '—',
+          item['kajButton Supervisor'] || '—',
+          aging,
+          status,
+          remarks || '—',
+          item['Stiching Supervisor'] || '—'
+        ]);
+
+        row.height = 20;
+        row.eachCell((cell) => {
+          cell.font = { name: 'Segoe UI', size: 9.5 };
+          cell.border = thinBorder;
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          if (idx % 2 === 1) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+          }
+        });
+
+        row.getCell(2).font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFDC2626' } };
+        row.getCell(7).numFmt = '#,##0';
+        row.getCell(7).font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFDC2626' } };
+
+        if (aging <= 2) {
+          row.getCell(14).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+          row.getCell(14).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF15803D' } };
+        } else if (aging <= 5) {
+          row.getCell(14).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+          row.getCell(14).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FFB45309' } };
+        } else {
+          row.getCell(14).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+          row.getCell(14).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FFDC2626' } };
+        }
+
+        if (status === 'Completed') {
+          row.getCell(15).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+          row.getCell(15).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF15803D' } };
+        } else if (status === 'WIP') {
+          row.getCell(15).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } };
+          row.getCell(15).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF3730A3' } };
+        }
+
+        if (isHold) {
+          row.getCell(16).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+          row.getCell(16).font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FFDC2626' } };
+        }
+      });
+
+      // Total Row
+      const totalRow1 = ws1.addRow([
+        '',
+        `TOTAL (${totalLots} Lots)`,
+        '',
+        '',
+        '',
+        '',
+        totalPieces,
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        `${completedLots} Comp | ${wipLots} WIP`,
+        '',
+        ''
+      ]);
+      totalRow1.height = 24;
+      totalRow1.eachCell((cell) => {
+        cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF000000' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FF000000' } },
+          bottom: { style: 'double', color: { argb: 'FF000000' } },
+          left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+        };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+      totalRow1.getCell(7).numFmt = '#,##0';
+
+      const colWidths = [8, 16, 20, 20, 20, 16, 14, 12, 14, 20, 16, 16, 22, 14, 16, 30, 20];
+      colWidths.forEach((w, i) => {
+        ws1.getColumn(i + 1).width = w;
+      });
+
+      // ================= SHEET 2: EXECUTIVE SUMMARY =================
+      const ws2 = workbook.addWorksheet('Executive Summary', {
+        views: [{ showGridLines: true }]
+      });
+
+      // Section 1: Garment Type Breakdown
+      ws2.mergeCells('A1:D1');
+      const gTitle = ws2.getCell('A1');
+      gTitle.value = '1. GARMENT TYPE BREAKDOWN (LOTS & PIECES DISTRIBUTION)';
+      gTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      gTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } };
+      gTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(1).height = 26;
+
+      const gHeader = ws2.addRow(['Garment Type', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      gHeader.height = 22;
+      gHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF134E4A' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedGarments.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const gTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      gTotalRow.height = 22;
+      gTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+      gTotalRow.getCell(3).numFmt = '#,##0';
+      gTotalRow.getCell(4).numFmt = '0.0%';
+
+      // Spacer
+      ws2.addRow([]);
+
+      // Section 2: Supervisor Breakdown
+      const supStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${supStartRow}:D${supStartRow}`);
+      const supTitle = ws2.getCell(`A${supStartRow}`);
+      supTitle.value = '2. SUPERVISOR WORKLOAD DISTRIBUTION';
+      supTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      supTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
+      supTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(supStartRow).height = 26;
+
+      const supHeader = ws2.addRow(['Supervisor Name', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      supHeader.height = 22;
+      supHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      sortedSupervisors.forEach((item, idx) => {
+        const pct = totalPieces > 0 ? (item.totalPcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      const supTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      supTotalRow.height = 22;
+      supTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+      supTotalRow.getCell(3).numFmt = '#,##0';
+      supTotalRow.getCell(4).numFmt = '0.0%';
+
+      // Spacer
+      ws2.addRow([]);
+
+      // Section 3: Aging Breakdown
+      const slaStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${slaStartRow}:D${slaStartRow}`);
+      const slaTitle = ws2.getCell(`A${slaStartRow}`);
+      slaTitle.value = '3. AGING & SLA PERFORMANCE';
+      slaTitle.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      slaTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB45309' } };
+      slaTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws2.getRow(slaStartRow).height = 26;
+
+      const slaHeader = ws2.addRow(['Aging Bracket', 'Total Lots', 'Total Pieces (Qty)', 'Share %']);
+      slaHeader.height = 22;
+      slaHeader.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF78350F' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        c.border = thinBorder;
+      });
+
+      const slaData = [
+        { name: '<= 2 Days (Good / On Track)', lots: goodAgingLots, pcs: goodAgingPcs, bg: 'FFDCFCE7', fg: 'FF15803D' },
+        { name: '3 - 5 Days (Warning Zone)', lots: warnAgingLots, pcs: warnAgingPcs, bg: 'FFFEF3C7', fg: 'FFB45309' },
+        { name: '> 5 Days (Critical Delay)', lots: critAgingLots, pcs: critAgingPcs, bg: 'FFFEE2E2', fg: 'FFDC2626' }
+      ];
+
+      slaData.forEach(item => {
+        const pct = totalPieces > 0 ? (item.pcs / totalPieces) : 0;
+        const r = ws2.addRow([item.name, item.lots, item.pcs, pct]);
+        r.height = 20;
+        r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(3).numFmt = '#,##0';
+        r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        r.getCell(4).numFmt = '0.0%';
+        r.eachCell(c => {
+          c.font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: item.fg } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: item.bg } };
+          c.border = thinBorder;
+        });
+      });
+
+      const slaTotalRow = ws2.addRow(['TOTAL', totalLots, totalPieces, 1]);
+      slaTotalRow.height = 22;
+      slaTotalRow.eachCell(c => {
+        c.font = { name: 'Segoe UI', size: 9.5, bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+        c.border = { top: { style: 'thin' }, bottom: { style: 'double' }, left: { style: 'thin' }, right: { style: 'thin' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+      slaTotalRow.getCell(3).numFmt = '#,##0';
+      slaTotalRow.getCell(4).numFmt = '0.0%';
+
+      ws2.getColumn(1).width = 34;
+      ws2.getColumn(2).width = 16;
+      ws2.getColumn(3).width = 22;
+      ws2.getColumn(4).width = 16;
+
+      // ================= SHEET 3: APPLIED FILTERS =================
+      const ws3 = workbook.addWorksheet('Applied Filters', {
+        views: [{ showGridLines: true }]
+      });
+
+      ws3.mergeCells('A1:B1');
+      const fTitle = ws3.getCell('A1');
+      fTitle.value = 'APPLIED FILTERS & METADATA';
+      fTitle.font = { name: 'Segoe UI', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+      fTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      fTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws3.getRow(1).height = 28;
+
+      const filterItems = [
+        ['Report Generated', `${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN')}`],
+        ['Total Lots Exported', totalLots],
+        ['Total Pieces Exported', totalPieces.toLocaleString()],
+        ['Hold Lots Filter', filters.holdLots ? 'Yes (Hold Lots Only)' : 'All Lots'],
+        ['Status Filter', filters.statuses?.length ? filters.statuses.join(', ') : 'All Statuses'],
+        ['Supervisor Filter', filters.supervisors?.length ? filters.supervisors.join(', ') : 'All Supervisors'],
+        ['Garment Type Filter', filters.garmentTypes?.length ? filters.garmentTypes.join(', ') : 'All Types'],
+        ['Fabric Filter', filters.fabrics?.length ? filters.fabrics.join(', ') : 'All Fabrics'],
+        ['Brand Filter', filters.brands?.length ? filters.brands.join(', ') : 'All Brands'],
+        ['Party Filter', filters.parties?.length ? filters.parties.join(', ') : 'All Parties'],
+        ['Season Filter', filters.seasons?.length ? filters.seasons.join(', ') : 'All Seasons'],
+        ['Aging Range', `${filters.minAging || 0} - ${filters.maxAging || 'Max'} Days`],
+        ['Lot Search Query', filters.lotNumber || 'None']
+      ];
+
+      filterItems.forEach(([k, v], idx) => {
+        const r = ws3.addRow([k, v]);
+        r.height = 20;
+        r.getCell(1).font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF1E293B' } };
+        r.getCell(2).font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF334155' } };
+        r.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+        r.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
+        r.eachCell(c => {
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      });
+
+      ws3.getColumn(1).width = 24;
+      ws3.getColumn(2).width = 50;
+
+      // Generate and Save Excel File
+      const buffer = await workbook.xlsx.writeBuffer();
+      const ts = new Date().toISOString().slice(0, 10);
+      saveAs(new Blob([buffer]), `Daily_KajButton_Report_${ts}.xlsx`);
+
+    } catch (e) {
+      console.error('Excel export error:', e);
+      alert(`Excel export failed: ${e.message}`);
+    }
   };
 
   // Export to PDF Function
 // Export to PDF Function - FIXED VERSION
 // Export to PDF Function - COMPLETELY REWRITTEN
 // Export to PDF Function - PRINT VERSION (Opens Print Dialog)
-const exportToPDF = () => {
-  if (filteredData.length === 0) {
-    alert('No data available to export.');
-    return;
-  }
+  // --- Professional PDF Export (A3 Landscape - Matching Factory Suite Pro Standard) ---
+  const exportToPDF = () => {
+    if (filteredData.length === 0) {
+      alert('No data available to export.');
+      return;
+    }
 
-  try {
-    // Create PDF in landscape mode
-    const doc = new jsPDF({
-      orientation: 'landscape',
-      unit: 'mm',
-      format: 'a4'
-    });
-
-    // Color Palette matching Stitching Production Report
-    const headerColor = [15, 76, 129];      // Deep Navy Blue
-    const daysGood = [220, 252, 231];       // Green badge background
-    const daysGoodText = [21, 128, 61];     // Green text
-    const daysWarning = [254, 243, 199];    // Amber badge background
-    const daysWarningText = [180, 83, 9];   // Amber text
-    const daysBad = [239, 68, 68];          // Solid Vibrant Red background (#ef4444)
-    const daysBadText = [255, 255, 255];    // Bold White text (#ffffff)
-
-    // Page dimensions
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const margin = 10;
-    const contentWidth = pageWidth - (margin * 2);
-
-    let currentY = 25;
-
-    // ---- 1. HEADER (White background with Navy Blue Title & Metrics) ----
-    const drawHeader = () => {
-      doc.setFillColor(255, 255, 255);
-      doc.rect(0, 0, pageWidth, 28, 'F');
-
-      const totalPCS = filteredData.reduce((sum, item) => sum + (parseInt(item['Total Pcs']) || 0), 0);
-      const totalLots = filteredData.length;
-      const holdLotsCount = filteredData.filter(item => isLotOnHold(item)).length;
-
-      let title = filters.holdLots ? 'KAJBUTTON HOLD LOTS REPORT' : 'KAJBUTTON PRODUCTION REPORT';
-
-      // Main Title - Deep Navy Blue on White background
-      doc.setFontSize(18);
-      doc.setTextColor(...headerColor);
-      doc.setFont('Times New Roman', 'bold');
-      doc.text(title, pageWidth / 2, 12, { align: 'center' });
-
-      // Key Metrics Row - Styled in Navy Blue
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(...headerColor);
-
-      // Left side: Date
-      const today = new Date();
-      const reportDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
-      doc.text(`Report Date: ${reportDate}`, margin, 24);
-
-      // Center: Summary Metrics
-      const centerSummary = `Total Lots: ${totalLots}  |  Total PCS: ${totalPCS.toLocaleString()}  |  Hold Lots: ${holdLotsCount}`;
-      doc.text(centerSummary, pageWidth / 2, 24, { align: 'center' });
-
-      // Right side: Record count
-      doc.text(`Showing: ${filteredData.length} records`, pageWidth - margin, 24, { align: 'right' });
-    };
-
-    drawHeader();
-
-    // ---- 2. COLOR CODING LEGEND (Matching Stitching Report) ----
-    const addColorLegend = (yPos) => {
-      doc.setFontSize(8);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(...headerColor);
-      doc.text('AGING DAYS COLOR CODING:', margin, yPos);
-
-      const legendItems = [
-        { color: [16, 185, 129], text: '0-2 Days: Good (Green)' },
-        { color: [245, 158, 11], text: '3-5 Days: Warning (Yellow)' },
-        { color: [239, 68, 68], text: '5+ Days: Critical (Red)' }
-      ];
-
-      let legendX = margin + 55;
-      legendItems.forEach((item) => {
-        doc.setFillColor(...item.color);
-        doc.rect(legendX, yPos - 3, 5, 5, 'F');
-        doc.setDrawColor(0, 0, 0);
-        doc.rect(legendX, yPos - 3, 5, 5, 'D');
-
-        doc.setTextColor(50, 50, 50);
-        doc.setFont('helvetica', 'normal');
-        doc.text(item.text, legendX + 7, yPos);
-
-        legendX += 65;
+    try {
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "pt",
+        format: "a3"
       });
 
-      return yPos + 6;
-    };
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const totalPieces = filteredData.reduce((sum, item) => sum + (parseInt(item['Total Pcs']) || 0), 0);
+      const totalLots = filteredData.length;
 
-    currentY = addColorLegend(30);
+      // Grouping for 4-Column Side-by-Side Executive Summary
+      const garmentMap = {};
+      const supervisorMap = {};
+      const seasonMap = {};
+      let goodAgingLots = 0, goodAgingPcs = 0;
+      let warnAgingLots = 0, warnAgingPcs = 0;
+      let critAgingLots = 0, critAgingPcs = 0;
+      let completedLots = 0, completedPcs = 0;
+      let wipLots = 0, wipPcs = 0;
+      let notStartedLots = 0, notStartedPcs = 0;
 
-    // ---- 3. MAIN DATA TABLE ----
-    const columns = [
-      'Sr',
-      'Lot No',
-      'Fabric',
-      'Garment',
-      'Style',
-      'Brand',
-      'Total PCS',
-      'KajButton Date',
-      'Supervisor',
-      'Aging (Days)',
-      'Status',
-      'Recent Remarks',
-      'Stitching Sup'
-    ];
+      filteredData.forEach(item => {
+        const pcs = parseInt(item['Total Pcs']) || 0;
+        const gType = (item['Garment Type'] || 'Unknown').trim();
+        const sup = (item['kajButton Supervisor'] || 'Unassigned').trim();
+        const season = (item['Season'] || 'Other / NA').trim();
+        const aging = parseInt(item['Aging']) || 0;
+        const status = getLotStatus(item);
 
-    const body = filteredData.map((item, index) => [
-      String(index + 1),
-      item['Lot Number'] || '',
-      item['Fabric'] || '',
-      item['Garment Type'] || '',
-      item['Style'] || '',
-      item['BRAND'] || '',
-      (parseInt(item['Total Pcs']) || 0).toLocaleString(),
-      item['KajButton Date'] || '',
-      item['kajButton Supervisor'] || '',
-      String(item['Aging'] || 0),
-      item['Status'] || 'Not Started',
-      getRecentRemarks(item) || 'No remarks',
-      item['Stiching Supervisor'] || ''
-    ]);
+        if (!garmentMap[gType]) garmentMap[gType] = { totalLots: 0, totalPcs: 0 };
+        garmentMap[gType].totalLots += 1;
+        garmentMap[gType].totalPcs += pcs;
 
-    const agingColIdx = columns.indexOf('Aging (Days)');
-    const statusColIdx = columns.indexOf('Status');
-    const remarksColIdx = columns.indexOf('Recent Remarks');
+        if (!supervisorMap[sup]) supervisorMap[sup] = { totalLots: 0, totalPcs: 0 };
+        supervisorMap[sup].totalLots += 1;
+        supervisorMap[sup].totalPcs += pcs;
 
-    // Calculate proportional column widths so total sum EXACTLY equals contentWidth
-    const baseWidths = [
-      10, // 0: Sr
-      18, // 1: Lot No
-      24, // 2: Fabric
-      22, // 3: Garment
-      24, // 4: Style
-      20, // 5: Brand
-      18, // 6: Total PCS
-      22, // 7: KajButton Date
-      24, // 8: Supervisor
-      16, // 9: Aging (Days)
-      18, // 10: Status
-      48, // 11: Recent Remarks (allocated extra width for full remarks)
-      22  // 12: Stitching Sup
-    ];
+        if (!seasonMap[season]) seasonMap[season] = { totalLots: 0, totalPcs: 0 };
+        seasonMap[season].totalLots += 1;
+        seasonMap[season].totalPcs += pcs;
 
-    const baseSum = baseWidths.reduce((a, b) => a + b, 0);
-    const columnStyles = {};
-    baseWidths.forEach((w, i) => {
-      columnStyles[i] = {
-        cellWidth: (w / baseSum) * contentWidth,
-        halign: i === 11 ? 'left' : 'center',
-        ...(i === 1 || i === 6 ? { fontStyle: 'bold' } : {})
+        if (aging <= 2) {
+          goodAgingLots += 1;
+          goodAgingPcs += pcs;
+        } else if (aging <= 5) {
+          warnAgingLots += 1;
+          warnAgingPcs += pcs;
+        } else {
+          critAgingLots += 1;
+          critAgingPcs += pcs;
+        }
+
+        if (status === 'Completed') {
+          completedLots += 1;
+          completedPcs += pcs;
+        } else if (status === 'WIP') {
+          wipLots += 1;
+          wipPcs += pcs;
+        } else {
+          notStartedLots += 1;
+          notStartedPcs += pcs;
+        }
+      });
+
+      const sortedGarments = Object.keys(garmentMap).map(name => ({
+        name,
+        totalLots: garmentMap[name].totalLots,
+        totalPcs: garmentMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedSupervisors = Object.keys(supervisorMap).map(name => ({
+        name,
+        totalLots: supervisorMap[name].totalLots,
+        totalPcs: supervisorMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedSeasons = Object.keys(seasonMap).map(name => ({
+        name,
+        totalLots: seasonMap[name].totalLots,
+        totalPcs: seasonMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      // 1. Main Header Block
+      doc.setFillColor(15, 23, 42); // Dark Navy #0F172A
+      doc.rect(15, 12, pageW - 30, 48, 'F');
+
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      const reportTitle = filters.holdLots 
+        ? "FACTORY SUITE PRO - KAJBUTTON HOLD LOTS REPORT" 
+        : "FACTORY SUITE PRO - DAILY KAJBUTTON PRODUCTION REPORT";
+      doc.text(reportTitle, pageW / 2, 30, { align: 'center' });
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(199, 210, 254);
+      const subText = `Total Lots: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()}   |   Completed: ${completedLots}   |   WIP: ${wipLots}   |   Not Started: ${notStartedLots}   |   Aging <=2d: ${goodAgingLots}   |   3-5d: ${warnAgingLots}   |   >5d: ${critAgingLots}`;
+      doc.text(subText, pageW / 2, 48, { align: 'center' });
+
+      // 2. Filter Banner
+      doc.setFillColor(241, 245, 249);
+      doc.rect(15, 63, pageW - 30, 16, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(0, 0, 0);
+      const filterSummary = `Filters: Status: ${filters.statuses?.length ? filters.statuses.join(', ') : 'All'} | Supervisors: ${filters.supervisors?.length ? filters.supervisors.join(', ') : 'All'} | Garments: ${filters.garmentTypes?.length ? filters.garmentTypes.join(', ') : 'All'} | Fabrics: ${filters.fabrics?.length ? filters.fabrics.join(', ') : 'All'} | Brands: ${filters.brands?.length ? filters.brands.join(', ') : 'All'} | Seasons: ${filters.seasons?.length ? filters.seasons.join(', ') : 'All'} | Aging: ${filters.minAging || 0} - ${filters.maxAging || 'Max'}d | Search: ${filters.lotNumber || 'None'}`;
+      doc.text(filterSummary, pageW / 2, 74, { align: 'center' });
+
+      // 3. Main Data Table
+      const tableColumns = [
+        '#',
+        'Lot Number',
+        'Garment Type',
+        'Style',
+        'Fabric',
+        'Brand',
+        'Total Pcs',
+        'Section',
+        'Season',
+        'Party Name',
+        'Direct Stitching',
+        'KajButton Date',
+        'Supervisor',
+        'Aging (Days)',
+        'Status',
+        'Recent Remarks',
+        'Stitching Sup'
+      ];
+
+      const tableBody = filteredData.map((item, idx) => {
+        const pcs = parseInt(item['Total Pcs']) || 0;
+        const aging = parseInt(item['Aging']) || 0;
+        const status = getLotStatus(item);
+        const remarks = getRecentRemarks(item);
+
+        return [
+          (idx + 1).toString(),
+          item['Lot Number'] || '—',
+          item['Garment Type'] || '—',
+          item['Style'] || '—',
+          item['Fabric'] || '—',
+          item['BRAND'] || '—',
+          pcs.toLocaleString(),
+          item['Section'] || '—',
+          item['Season'] || '—',
+          item['Party Name'] || '—',
+          item['Direct Stitching'] || '—',
+          item['KajButton Date'] || '—',
+          item['kajButton Supervisor'] || '—',
+          `${aging}d`,
+          status,
+          remarks || 'No remarks',
+          item['Stiching Supervisor'] || '—'
+        ];
+      });
+
+      // Total Row
+      tableBody.push([
+        '',
+        `TOTAL (${totalLots})`,
+        '',
+        '',
+        '',
+        '',
+        totalPieces.toLocaleString(),
+        '',
+        '',
+        '',
+        '',
+        '',
+        `${sortedSupervisors.length} Sups`,
+        '',
+        `${completedLots} Comp | ${wipLots} WIP`,
+        '',
+        ''
+      ]);
+
+      const columnStyles = {
+        0: { cellWidth: 25, halign: 'center' },
+        1: { cellWidth: 65, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: 80, halign: 'center' },
+        3: { cellWidth: 80, halign: 'center' },
+        4: { cellWidth: 80, halign: 'center' },
+        5: { cellWidth: 65, halign: 'center' },
+        6: { cellWidth: 55, halign: 'center', fontStyle: 'bold' },
+        7: { cellWidth: 45, halign: 'center' },
+        8: { cellWidth: 55, halign: 'center' },
+        9: { cellWidth: 80, halign: 'center' },
+        10: { cellWidth: 50, halign: 'center' },
+        11: { cellWidth: 65, halign: 'center' },
+        12: { cellWidth: 75, halign: 'center' },
+        13: { cellWidth: 50, halign: 'center' },
+        14: { cellWidth: 65, halign: 'center' },
+        15: { cellWidth: 160, halign: 'center' },
+        16: { cellWidth: 65, halign: 'center' }
       };
-    });
 
-    autoTable(doc, {
-      head: [columns],
-      body,
-      startY: currentY,
-      margin: { left: margin, right: margin },
-      tableWidth: contentWidth,
-      theme: 'grid',
-      styles: {
-        fontSize: 8,
-        cellPadding: { top: 3, right: 2, bottom: 3, left: 2 },
-        overflow: 'linebreak',
-        valign: 'middle',
-        textColor: [17, 24, 39],
-        lineColor: [0, 0, 0],
-        lineWidth: 0.4,
-        fontStyle: 'normal',
-      },
-      headStyles: {
-        fillColor: headerColor,
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-        lineColor: [0, 0, 0],
-        lineWidth: 0.5,
-        halign: 'center',
-        fontSize: 8.5,
-        valign: 'middle',
-        cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
-      },
-      bodyStyles: {
-        halign: 'center',
-        valign: 'middle',
-      },
-      alternateRowStyles: {
-        fillColor: [248, 250, 252],
-      },
-      columnStyles,
+      autoTable(doc, {
+        head: [tableColumns],
+        body: tableBody,
+        startY: 85,
+        tableWidth: pageW - 30,
+        margin: { top: 85, right: 15, bottom: 25, left: 15 },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0], // Pure Black
+          lineColor: [0, 0, 0], // Black grid lines
+          lineWidth: 0.3,
+          fontStyle: 'normal',
+          minCellHeight: 12,
+        },
+        headStyles: {
+          fillColor: [15, 23, 42],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          lineColor: [0, 0, 0],
+          lineWidth: 0.5,
+          halign: 'center',
+          fontSize: 9,
+          valign: 'middle',
+          cellPadding: { top: 5, right: 3, bottom: 5, left: 3 },
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+        columnStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
 
-      didParseCell: function (data) {
-        if (data.section === 'body') {
-          // Color code Aging column
-          if (data.column.index === agingColIdx) {
-            const days = parseInt(data.cell.raw) || 0;
-            if (days <= 2) {
-              data.cell.styles.fillColor = daysGood;
-              data.cell.styles.textColor = daysGoodText;
+            if (isTotalRow) {
               data.cell.styles.fontStyle = 'bold';
-            } else if (days <= 5) {
-              data.cell.styles.fillColor = daysWarning;
-              data.cell.styles.textColor = daysWarningText;
-              data.cell.styles.fontStyle = 'bold';
-            } else {
-              data.cell.styles.fillColor = daysBad;       // Solid Vibrant Red (#ef4444)
-              data.cell.styles.textColor = daysBadText;   // Bold White text (#ffffff)
+              data.cell.styles.fillColor = [226, 232, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.halign = 'center';
+              return;
+            }
+
+            const item = filteredData[rowIndex];
+            if (!item) return;
+
+            // Lot number styling
+            if (data.column.index === 1) {
+              data.cell.styles.textColor = [220, 38, 38];
               data.cell.styles.fontStyle = 'bold';
             }
-          }
 
-          // Color code Status column
-          if (data.column.index === statusColIdx) {
-            const status = String(data.cell.raw).trim();
-            if (status === 'Completed') {
-              data.cell.styles.fillColor = [220, 252, 231];
-              data.cell.styles.textColor = [21, 128, 61];
-              data.cell.styles.fontStyle = 'bold';
-            } else if (status === 'WIP') {
-              data.cell.styles.fillColor = [224, 231, 255];
-              data.cell.styles.textColor = [55, 48, 163];
+            // Total Pcs styling
+            if (data.column.index === 6) {
+              data.cell.styles.textColor = [220, 38, 38];
               data.cell.styles.fontStyle = 'bold';
             }
-          }
 
-          // Highlight Hold Lots in Remarks
-          if (data.column.index === remarksColIdx) {
-            const text = String(data.cell.raw).toLowerCase();
-            if (text.includes('hold')) {
+            // Aging styling
+            if (data.column.index === 13) {
+              const days = parseInt(item['Aging']) || 0;
+              if (days > 5) {
+                data.cell.styles.fillColor = [239, 68, 68];
+                data.cell.styles.textColor = [255, 255, 255];
+                data.cell.styles.fontStyle = "bold";
+              } else if (days >= 3) {
+                data.cell.styles.fillColor = [254, 243, 199];
+                data.cell.styles.textColor = [180, 83, 9];
+                data.cell.styles.fontStyle = "bold";
+              } else {
+                data.cell.styles.fillColor = [220, 252, 231];
+                data.cell.styles.textColor = [21, 128, 61];
+                data.cell.styles.fontStyle = "bold";
+              }
+            }
+
+            // Status styling
+            if (data.column.index === 14) {
+              const status = getLotStatus(item);
+              if (status === 'Completed') {
+                data.cell.styles.fillColor = [220, 252, 231];
+                data.cell.styles.textColor = [21, 128, 61];
+                data.cell.styles.fontStyle = 'bold';
+              } else if (status === 'WIP') {
+                data.cell.styles.fillColor = [224, 231, 255];
+                data.cell.styles.textColor = [55, 48, 163];
+                data.cell.styles.fontStyle = 'bold';
+              } else {
+                data.cell.styles.fillColor = [241, 245, 249];
+                data.cell.styles.textColor = [100, 116, 139];
+              }
+            }
+
+            // Remarks hold styling
+            if (data.column.index === 15 && isLotOnHold(item)) {
               data.cell.styles.fillColor = [254, 226, 226];
               data.cell.styles.textColor = [185, 28, 28];
               data.cell.styles.fontStyle = 'bold';
             }
           }
         }
-      },
+      });
 
-      didDrawPage: function (data) {
-        const pageCount = doc.internal.getNumberOfPages();
-        doc.setFontSize(8);
-        doc.setTextColor(100, 116, 139);
-        doc.text(
-          `Page ${data.pageNumber} of ${pageCount}`,
-          pageWidth / 2,
-          pageHeight - 6,
-          { align: 'center' }
-        );
+      // --- 4-COLUMN SIDE-BY-SIDE EXECUTIVE SUMMARY ---
+      const gBody = sortedGarments.map(item => {
+        const pct = totalPieces > 0 ? ((item.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [item.name, item.totalLots.toString(), item.totalPcs.toLocaleString(), `${pct}%`];
+      });
+      gBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const supBody = sortedSupervisors.map(item => {
+        const pct = totalPieces > 0 ? ((item.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [item.name, item.totalLots.toString(), item.totalPcs.toLocaleString(), `${pct}%`];
+      });
+      supBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const seasonBody = sortedSeasons.map(item => {
+        const pct = totalPieces > 0 ? ((item.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [item.name, item.totalLots.toString(), item.totalPcs.toLocaleString(), `${pct}%`];
+      });
+      seasonBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const slaBody = [
+        ["<= 2 Days (Good)", goodAgingLots.toString(), goodAgingPcs.toLocaleString(), `${totalLots > 0 ? ((goodAgingLots / totalLots) * 100).toFixed(1) : 0}%`],
+        ["3 - 5 Days (Warning)", warnAgingLots.toString(), warnAgingPcs.toLocaleString(), `${totalLots > 0 ? ((warnAgingLots / totalLots) * 100).toFixed(1) : 0}%`],
+        ["> 5 Days (Critical)", critAgingLots.toString(), critAgingPcs.toLocaleString(), `${totalLots > 0 ? ((critAgingLots / totalLots) * 100).toFixed(1) : 0}%`],
+        ["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]
+      ];
+
+      const maxRows = Math.max(gBody.length, supBody.length, seasonBody.length, slaBody.length);
+      const approxSummaryHeight = 55 + (maxRows * 18);
+
+      let summaryStartY = doc.lastAutoTable.finalY + 22;
+      const neededSpace = approxSummaryHeight + 35;
+      if (summaryStartY + neededSpace > pageH - 30) {
+        doc.addPage();
+        summaryStartY = 40;
+      } else {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.8);
+        doc.line(15, summaryStartY - 8, pageW - 15, summaryStartY - 8);
       }
-    });
 
-    // ---- 4. SUPERVISOR WORKLOAD SUMMARY TABLE ----
-    const supervisorTotals = {};
-    filteredData.forEach(item => {
-      const supervisor = item['kajButton Supervisor'] || 'Unassigned';
-      const pieces = parseInt(item['Total Pcs']) || 0;
-      
-      if (!supervisorTotals[supervisor]) {
-        supervisorTotals[supervisor] = { pieces: 0, lots: 0 };
-      }
-      supervisorTotals[supervisor].pieces += pieces;
-      supervisorTotals[supervisor].lots += 1;
-    });
+      // Title & KPI Subtitle
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("EXECUTIVE SUMMARY & PRODUCTION BREAKDOWN", pageW / 2, summaryStartY + 4, { align: 'center' });
 
-    const supervisorArray = Object.entries(supervisorTotals).map(([name, data]) => ({
-      name,
-      lots: data.lots,
-      pieces: data.pieces,
-    })).sort((a, b) => b.pieces - a.pieces);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(0, 0, 0);
+      const summarySub = `Total Lots: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()} Pcs   |   Supervisors: ${sortedSupervisors.length}   |   Garments: ${sortedGarments.length}   |   Seasons: ${sortedSeasons.length}`;
+      doc.text(summarySub, pageW / 2, summaryStartY + 16, { align: 'center' });
 
-    const totalPieces = supervisorArray.reduce((sum, s) => sum + s.pieces, 0);
-    const totalLots = supervisorArray.reduce((sum, s) => sum + s.lots, 0);
+      const sectionTitleY = summaryStartY + 30;
+      const tableStartY = sectionTitleY + 6;
 
-    const summaryHeaders = [['KajButton Supervisor', 'Lots Count', 'Total Pieces', '% of Total Production']];
-    const summaryData = supervisorArray.map(s => [
-      s.name,
-      s.lots.toString(),
-      s.pieces.toLocaleString(),
-      totalPieces > 0 ? ((s.pieces / totalPieces) * 100).toFixed(1) + '%' : '0%'
-    ]);
+      // 4 Columns Side-by-Side Configuration (Exactly matching full page width)
+      const colWidth = 278;
+      const gap = 16;
+      const col1X = 15;
+      const col2X = col1X + colWidth + gap; // 309
+      const col3X = col2X + colWidth + gap; // 603
+      const col4X = col3X + colWidth + gap; // 897
 
-    summaryData.push([
-      'TOTAL SUMMARY',
-      totalLots.toString(),
-      totalPieces.toLocaleString(),
-      '100%'
-    ]);
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("1. GARMENT BREAKDOWN", col1X, sectionTitleY);
+      doc.text("2. SUPERVISOR BREAKDOWN", col2X, sectionTitleY);
+      doc.text("3. SEASON BREAKDOWN", col3X, sectionTitleY);
+      doc.text("4. AGING & SLA BREAKDOWN", col4X, sectionTitleY);
 
-    let finalY = doc.lastAutoTable.finalY + 10;
-    if (finalY > pageHeight - 45) {
-      doc.addPage();
-      finalY = 20;
-    }
-
-    doc.setFontSize(11);
-    doc.setTextColor(...headerColor);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SUPERVISOR WORKLOAD SUMMARY', margin, finalY);
-
-    const summaryBaseWidths = [70, 45, 55, 55];
-    const summaryBaseSum = summaryBaseWidths.reduce((a, b) => a + b, 0);
-    const summaryColumnStyles = {};
-    summaryBaseWidths.forEach((w, i) => {
-      summaryColumnStyles[i] = {
-        cellWidth: (w / summaryBaseSum) * contentWidth,
-        halign: i === 0 ? 'left' : 'center',
-        ...(i === 0 || i === 2 ? { fontStyle: 'bold' } : {})
+      const summaryColStyles = {
+        0: { cellWidth: 110, halign: 'center' },
+        1: { cellWidth: 45, halign: 'center' },
+        2: { cellWidth: 68, halign: 'center' },
+        3: { cellWidth: 55, halign: 'center' },
       };
-    });
 
-    autoTable(doc, {
-      head: summaryHeaders,
-      body: summaryData,
-      startY: finalY + 4,
-      margin: { left: margin, right: margin },
-      tableWidth: contentWidth,
-      theme: 'grid',
-      styles: {
-        fontSize: 8.5,
-        cellPadding: 3,
-        lineColor: [0, 0, 0],
-        lineWidth: 0.4,
-      },
-      headStyles: {
-        fillColor: headerColor,
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-        lineColor: [0, 0, 0],
-        lineWidth: 0.5,
-        halign: 'center'
-      },
-      bodyStyles: {
-        textColor: [17, 24, 39],
-        halign: 'center'
-      },
-      columnStyles: summaryColumnStyles,
-      margin: { left: margin, right: margin }
-    });
+      // Column 1 Table: Garment Breakdown
+      autoTable(doc, {
+        head: [['Garment Type', 'Lots', 'Total Pcs', 'Share %']],
+        body: gBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col1X, right: pageW - (col1X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === gBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY1 = doc.lastAutoTable.finalY;
 
-    // Print & Open Dialog
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
+      // Column 2 Table: Supervisor Breakdown
+      autoTable(doc, {
+        head: [['Supervisor', 'Lots', 'Total Pcs', 'Share %']],
+        body: supBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col2X, right: pageW - (col2X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [67, 56, 202], // Indigo
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === supBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY2 = doc.lastAutoTable.finalY;
 
-  } catch (error) {
-    console.error('PDF Generation Error Details:', error);
-    alert(`Error generating PDF: ${error.message || 'Unknown error'}`);
-  }
-};
+      // Column 3 Table: Season Breakdown
+      autoTable(doc, {
+        head: [['Season', 'Lots', 'Total Pcs', 'Share %']],
+        body: seasonBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col3X, right: pageW - (col3X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [30, 64, 175], // Royal Blue
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === seasonBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY3 = doc.lastAutoTable.finalY;
+
+      // Column 4 Table: SLA & Aging Breakdown
+      autoTable(doc, {
+        head: [['Aging Bracket', 'Lots', 'Total Pcs', 'Share %']],
+        body: slaBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col4X, right: pageW - (col4X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [180, 83, 9], // Amber
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === 0) {
+              data.cell.styles.fillColor = [220, 252, 231]; // Soft Green
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 1) {
+              data.cell.styles.fillColor = [254, 243, 199]; // Soft Amber
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 2) {
+              data.cell.styles.fillColor = [254, 226, 226]; // Soft Red
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 3) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY4 = doc.lastAutoTable.finalY;
+
+      const maxEndY = Math.max(endY1, endY2, endY3, endY4);
+      const finalY = maxEndY + 16;
+      if (finalY <= pageH - 22) {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.5);
+        doc.line(15, finalY, pageW - 15, finalY);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(0, 0, 0);
+        doc.text("Daily Kaj Button Department Report — Factory Suite Pro", 15, finalY + 12);
+      }
+
+      // Page Numbering Loop
+      const totalPages = doc.internal.getNumberOfPages();
+      const timeStr = `${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN')}`;
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(0, 0, 0);
+
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.5);
+        doc.line(15, pageH - 22, pageW - 15, pageH - 22);
+
+        doc.text(`Page ${i} of ${totalPages}`, pageW / 2, pageH - 12, { align: 'center' });
+        doc.text(`Generated: ${timeStr}`, pageW - 18, pageH - 12, { align: 'right' });
+      }
+
+      const ts = new Date().toISOString().slice(0, 10);
+      doc.save(filters.holdLots ? `Daily_KajButton_Hold_Lots_${ts}.pdf` : `Daily_KajButton_Report_${ts}.pdf`);
+
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF. Please try again.');
+    }
+  };
   // Helper function for aging text color in PDF
   const getAgingPDFColor = (days) => {
     const aging = parseInt(days) || 0;
@@ -750,15 +1690,18 @@ const exportToPDF = () => {
   const clearFilters = () => {
     setFilters({
       lotNumber: '',
-      supervisor: '',
-      garmentType: '',
-      fabric: '',
-      brand: '',
-      stitchingSupervisor: '',
+      supervisors: [],
+      garmentTypes: [],
+      fabrics: [],
+      brands: [],
+      parties: [],
+      seasons: [],
+      sections: [],
+      stitchingSupervisors: [],
+      statuses: ['WIP', 'Not Started'],
       minAging: '',
       maxAging: '',
-      status: 'active',
-      holdLots: false // NEW: Reset hold filter
+      holdLots: false
     });
   };
 
@@ -1628,6 +2571,18 @@ const exportToPDF = () => {
                   <div className="detail-value">{selectedRow['BRAND'] || 'N/A'}</div>
                 </div>
                 <div className="detail-card">
+                  <div className="detail-label">Party Name</div>
+                  <div className="detail-value">{selectedRow['Party Name'] || 'N/A'}</div>
+                </div>
+                <div className="detail-card">
+                  <div className="detail-label">Season</div>
+                  <div className="detail-value">{selectedRow['Season'] || 'N/A'}</div>
+                </div>
+                <div className="detail-card">
+                  <div className="detail-label">Section</div>
+                  <div className="detail-value">{selectedRow['Section'] || 'N/A'}</div>
+                </div>
+                <div className="detail-card">
                   <div className="detail-label">KajButton Date</div>
                   <div className="detail-value">{selectedRow['KajButton Date']}</div>
                 </div>
@@ -1830,100 +2785,81 @@ const exportToPDF = () => {
               />
             </div>
             
-            <div className="filter-group">
-              <label className="filter-label">kajButton Supervisor</label>
-              <select
-                className="filter-select"
-                value={filters.supervisor}
-                onChange={(e) => handleFilterChange('supervisor', e.target.value)}
-              >
-                <option value="">All Supervisors</option>
-                {getUniqueValues('kajButton Supervisor').map((supervisor, index) => (
-                  <option key={index} value={supervisor}>
-                    {supervisor}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <MultiSelectDropdown
+              label="KajButton Supervisor"
+              options={getUniqueValues('kajButton Supervisor')}
+              selectedValues={filters.supervisors}
+              onChange={(vals) => handleFilterChange('supervisors', vals)}
+              placeholder="All Supervisors"
+            />
             
-            <div className="filter-group">
-              <label className="filter-label">Garment Type</label>
-              <select
-                className="filter-select"
-                value={filters.garmentType}
-                onChange={(e) => handleFilterChange('garmentType', e.target.value)}
-              >
-                <option value="">All Types</option>
-                {getUniqueValues('Garment Type').map((type, index) => (
-                  <option key={index} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <MultiSelectDropdown
+              label="Garment Type"
+              options={getUniqueValues('Garment Type')}
+              selectedValues={filters.garmentTypes}
+              onChange={(vals) => handleFilterChange('garmentTypes', vals)}
+              placeholder="All Types"
+            />
             
-            <div className="filter-group">
-              <label className="filter-label">Fabric</label>
-              <select
-                className="filter-select"
-                value={filters.fabric}
-                onChange={(e) => handleFilterChange('fabric', e.target.value)}
-              >
-                <option value="">All Fabrics</option>
-                {getUniqueValues('Fabric').map((fabric, index) => (
-                  <option key={index} value={fabric}>
-                    {fabric}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <MultiSelectDropdown
+              label="Fabric"
+              options={getUniqueValues('Fabric')}
+              selectedValues={filters.fabrics}
+              onChange={(vals) => handleFilterChange('fabrics', vals)}
+              placeholder="All Fabrics"
+            />
             
-            <div className="filter-group">
-              <label className="filter-label">Brand</label>
-              <select
-                className="filter-select"
-                value={filters.brand}
-                onChange={(e) => handleFilterChange('brand', e.target.value)}
-              >
-                <option value="">All Brands</option>
-                {getUniqueValues('BRAND').map((brand, index) => (
-                  <option key={index} value={brand}>
-                    {brand}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <MultiSelectDropdown
+              label="Brand"
+              options={getUniqueValues('BRAND')}
+              selectedValues={filters.brands}
+              onChange={(vals) => handleFilterChange('brands', vals)}
+              placeholder="All Brands"
+            />
+
+            <MultiSelectDropdown
+              label="Party Name"
+              options={getUniqueValues('Party Name')}
+              selectedValues={filters.parties}
+              onChange={(vals) => handleFilterChange('parties', vals)}
+              placeholder="All Parties"
+            />
             
-            <div className="filter-group">
-              <label className="filter-label">Stiching Supervisor</label>
-              <select
-                className="filter-select"
-                value={filters.stitchingSupervisor}
-                onChange={(e) => handleFilterChange('stitchingSupervisor', e.target.value)}
-              >
-                <option value="">All Stiching Supervisors</option>
-                {getUniqueValues('Stiching Supervisor').map((supervisor, index) => (
-                  <option key={index} value={supervisor}>
-                    {supervisor}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <MultiSelectDropdown
+              label="Season"
+              options={getUniqueValues('Season')}
+              selectedValues={filters.seasons}
+              onChange={(vals) => handleFilterChange('seasons', vals)}
+              placeholder="All Seasons"
+            />
+
+            <MultiSelectDropdown
+              label="Section"
+              options={getUniqueValues('Section')}
+              selectedValues={filters.sections}
+              onChange={(vals) => handleFilterChange('sections', vals)}
+              placeholder="All Sections"
+            />
             
-            <div className="filter-group">
-              <label className="filter-label">Status</label>
-              <select
-                className="filter-select"
-                value={filters.status}
-                onChange={(e) => handleFilterChange('status', e.target.value)}
-              >
-                <option value="active">Active (WIP + Not Started)</option>
-                <option value="all">All Status</option>
-                <option value="WIP">WIP Only</option>
-                <option value="Completed">Completed Only</option>
-                <option value="Not Started">Not Started Only</option>
-              </select>
-            </div>
+            <MultiSelectDropdown
+              label="Stitching Supervisor"
+              options={getUniqueValues('Stiching Supervisor')}
+              selectedValues={filters.stitchingSupervisors}
+              onChange={(vals) => handleFilterChange('stitchingSupervisors', vals)}
+              placeholder="All Stiching Supervisors"
+            />
+            
+            <MultiSelectDropdown
+              label="Status"
+              options={[
+                { value: 'WIP', label: 'WIP' },
+                { value: 'Not Started', label: 'Not Started' },
+                { value: 'Completed', label: 'Completed' }
+              ]}
+              selectedValues={filters.statuses}
+              onChange={(vals) => handleFilterChange('statuses', vals)}
+              placeholder="All Status"
+            />
             
             <div className="filter-group">
               <label className="filter-label">Min Aging (Days)</label>
@@ -1990,11 +2926,15 @@ const exportToPDF = () => {
               <thead>
                 <tr>
                   <th>Lot #</th>
-                  <th>Fabric</th>
                   <th>Garment Type</th>
                   <th>Style</th>
+                  <th>Fabric</th>
                   <th>Brand</th>
                   <th>Total Pcs</th>
+                  <th>Section</th>
+                  <th>Season</th>
+                  <th>Party Name</th>
+                  <th>Direct Stitching</th>
                   <th>KajButton Date</th>
                   <th>kajButton Supervisor</th>
                   <th>Aging (Days)</th>
@@ -2010,15 +2950,37 @@ const exportToPDF = () => {
                     return (
                       <tr key={index} onClick={() => openRowDetails(item)}>
                         <td>{item['Lot Number']}</td>
-                        <td>{item['Fabric']}</td>
                         <td>{item['Garment Type']}</td>
                         <td>{item['Style']}</td>
+                        <td>{item['Fabric']}</td>
                         <td>
                           {item['BRAND'] && (
                             <span className="brand-tag">{item['BRAND']}</span>
                           )}
                         </td>
                         <td>{item['Total Pcs']}</td>
+                        <td>
+                          {item['Section'] ? (
+                            <span className="brand-tag" style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
+                              {item['Section']}
+                            </span>
+                          ) : '-'}
+                        </td>
+                        <td>
+                          {item['Season'] ? (
+                            <span className="brand-tag" style={{ background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' }}>
+                              {item['Season']}
+                            </span>
+                          ) : '-'}
+                        </td>
+                        <td>
+                          {item['Party Name'] ? (
+                            <span className="party-tag" style={{ background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', padding: '4px 10px', borderRadius: '9999px', fontSize: '12px', fontWeight: '700', display: 'inline-block' }}>
+                              {item['Party Name']}
+                            </span>
+                          ) : '-'}
+                        </td>
+                        <td>{item['Direct Stitching'] || '-'}</td>
                         <td>{item['KajButton Date']}</td>
                         <td><span className="supervisor-tag">{item['kajButton Supervisor']}</span></td>
                         <td>
@@ -2061,7 +3023,7 @@ const exportToPDF = () => {
                   })
                 ) : (
                   <tr>
-                    <td colSpan="12">
+                    <td colSpan="15">
                       <div className="no-data">
                         <div className="no-data-icon">📭</div>
                         No kajbutton lots match your current filters.

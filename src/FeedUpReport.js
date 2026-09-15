@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useHistory } from "react-router-dom";
-import { fetchSheetDataFromBackend } from "./config";
+import { SPREADSHEET_IDS, fetchSheetDataFromBackend } from "./config";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 const SPREADSHEET_ID = "1IMhmYlJ3s2PPRgEQs1Ikd4O1OBXK4EYL1oV_-kWAkyg";
 const SHEET_NAME = "FeedUp";
@@ -197,6 +201,8 @@ export default function FeedUpReport() {
   const [selectedBrands, setSelectedBrands] = useState([]);
   const [selectedGarments, setSelectedGarments] = useState([]);
   const [selectedFabrics, setSelectedFabrics] = useState([]);
+  const [selectedSeasons, setSelectedSeasons] = useState([]);
+  const [selectedSections, setSelectedSections] = useState([]);
   const [selectedSupervisors, setSelectedSupervisors] = useState([]);
   const [dateFilter, setDateFilter] = useState("");
 
@@ -240,14 +246,57 @@ export default function FeedUpReport() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchSheetDataFromBackend(SPREADSHEET_ID, `'${SHEET_NAME}'!A:Z`);
-      if (!res.ok || !Array.isArray(res.values) || res.values.length === 0) {
+      const [feedUpRes, jobOrderRes] = await Promise.allSettled([
+        fetchSheetDataFromBackend(SPREADSHEET_ID, `'${SHEET_NAME}'!A:Z`),
+        fetchSheetDataFromBackend(SPREADSHEET_IDS.JOBORDER, `'JobOrder'!A:AZ`),
+      ]);
+
+      const lotToJobInfo = {};
+      if (jobOrderRes.status === "fulfilled" && jobOrderRes.value?.ok && Array.isArray(jobOrderRes.value.values)) {
+        const jRows = jobOrderRes.value.values;
+        const jHeaders = jRows[0] || [];
+        const jLotIdx = findCol(jHeaders, ["lot number", "lot no", "lot #", "lot"]);
+        const jBrandIdx = findCol(jHeaders, ["brand", "brand name", "buyer"]);
+        const jPartyIdx = findCol(jHeaders, ["party name", "party", "customer"]);
+        const jGarmentIdx = findCol(jHeaders, ["garment type", "garment"]);
+        const jStyleIdx = findCol(jHeaders, ["style"]);
+        const jFabricIdx = findCol(jHeaders, ["fabric"]);
+        const jSeasonIdx = findCol(jHeaders, ["season"]);
+        const jSectionIdx = findCol(jHeaders, ["section"]);
+        const jDirectIdx = findCol(jHeaders, ["direct stitching", "directstitch", "direct"]);
+
+        if (jLotIdx !== -1) {
+          for (let i = 1; i < jRows.length; i++) {
+            const r = jRows[i];
+            const lotKey = String(r[jLotIdx] || "").trim().toLowerCase();
+            if (lotKey) {
+              lotToJobInfo[lotKey] = {
+                brand: (jBrandIdx !== -1 ? String(r[jBrandIdx] || "").trim() : "") || (jPartyIdx !== -1 ? String(r[jPartyIdx] || "").trim() : ""),
+                party: jPartyIdx !== -1 ? String(r[jPartyIdx] || "").trim() : "",
+                garment: jGarmentIdx !== -1 ? String(r[jGarmentIdx] || "").trim() : "",
+                style: jStyleIdx !== -1 ? String(r[jStyleIdx] || "").trim() : "",
+                fabric: jFabricIdx !== -1 ? String(r[jFabricIdx] || "").trim() : "",
+                season: jSeasonIdx !== -1 ? String(r[jSeasonIdx] || "").trim() : "",
+                section: jSectionIdx !== -1 ? String(r[jSectionIdx] || "").trim() : "",
+                directStitching: jDirectIdx !== -1 ? String(r[jDirectIdx] || "").trim() : "",
+              };
+            }
+          }
+        }
+      }
+
+      if (
+        feedUpRes.status !== "fulfilled" ||
+        !feedUpRes.value?.ok ||
+        !Array.isArray(feedUpRes.value.values) ||
+        feedUpRes.value.values.length === 0
+      ) {
         setData([]);
         setLoading(false);
         return;
       }
 
-      const rows = res.values;
+      const rows = feedUpRes.value.values;
       const headers = rows[0] || [];
 
       const tsIdx = findCol(headers, ["timestamp", "time"]);
@@ -255,7 +304,9 @@ export default function FeedUpReport() {
       const garmentIdx = findCol(headers, ["garment type", "garment"]);
       const fabricIdx = findCol(headers, ["fabric"]);
       const styleIdx = findCol(headers, ["style"]);
-      const brandIdx = findCol(headers, ["brand"]);
+      const brandIdx = findCol(headers, ["brand", "brand name"]);
+      const seasonIdx = findCol(headers, ["season"]);
+      const sectionIdx = findCol(headers, ["section"]);
       const supIdx = findCol(headers, ["feed up supervisor", "supervisor"]);
       const dateIdx = findCol(headers, ["feed up date", "date"]);
       const pcsIdx = findCol(headers, ["total pcs", "pcs", "quantity"]);
@@ -276,17 +327,30 @@ export default function FeedUpReport() {
         const isCompleted = !!completeDate && completeDate !== "-" && !completeDate.toLowerCase().includes("pending");
         const wipText = parseWipRemarks(rawWip);
 
+        const normLot = lotNo.toLowerCase();
+        const jobInfo = lotToJobInfo[normLot] || {};
+        const sheetBrand = brandIdx !== -1 ? String(row[brandIdx] || "").trim() : "";
+        const finalBrand = sheetBrand && sheetBrand !== "-" ? sheetBrand : (jobInfo.brand || jobInfo.party || "—");
+        const sheetSeason = seasonIdx !== -1 ? String(row[seasonIdx] || "").trim() : "";
+        const finalSeason = sheetSeason && sheetSeason !== "-" ? sheetSeason : (jobInfo.season || "—");
+        const sheetSection = sectionIdx !== -1 ? String(row[sectionIdx] || "").trim() : "";
+        const finalSection = sheetSection && sheetSection !== "-" ? sheetSection : (jobInfo.section || "—");
+
         parsed.push({
           id: i,
           timestamp: row[tsIdx !== -1 ? tsIdx : 0] || "",
           lotNumber: lotNo,
-          garmentType: row[garmentIdx !== -1 ? garmentIdx : 2] || "",
-          fabric: row[fabricIdx !== -1 ? fabricIdx : 3] || "",
-          style: row[styleIdx !== -1 ? styleIdx : 4] || "",
-          brand: row[brandIdx !== -1 ? brandIdx : 5] || "",
+          garmentType: row[garmentIdx !== -1 ? garmentIdx : 2] || jobInfo.garment || "",
+          style: row[styleIdx !== -1 ? styleIdx : 4] || jobInfo.style || "",
+          fabric: row[fabricIdx !== -1 ? fabricIdx : 3] || jobInfo.fabric || "",
+          brand: finalBrand,
+          totalPcs: pcs,
+          section: finalSection,
+          season: finalSeason,
+          partyName: jobInfo.party || "—",
+          directStitching: jobInfo.directStitching || "—",
           supervisor: row[supIdx !== -1 ? supIdx : 6] || "Feed Up Department",
           feedUpDate: row[dateIdx !== -1 ? dateIdx : 7] || "",
-          totalPcs: pcs,
           wip: wipText,
           completeDate,
           isCompleted
@@ -327,6 +391,16 @@ export default function FeedUpReport() {
     return Array.from(set).sort().map((f) => ({ value: f, label: f }));
   }, [data]);
 
+  const seasonOptions = useMemo(() => {
+    const set = new Set(data.map((d) => d.season).filter((s) => s && s !== "—" && s !== "-"));
+    return Array.from(set).sort().map((s) => ({ value: s, label: s }));
+  }, [data]);
+
+  const sectionOptions = useMemo(() => {
+    const set = new Set(data.map((d) => d.section).filter((s) => s && s !== "—" && s !== "-"));
+    return Array.from(set).sort().map((s) => ({ value: s, label: s }));
+  }, [data]);
+
   const supervisorOptions = useMemo(() => {
     const set = new Set(data.map((d) => d.supervisor).filter(Boolean));
     return Array.from(set).sort().map((s) => ({ value: s, label: s }));
@@ -342,6 +416,8 @@ export default function FeedUpReport() {
         item.style.toLowerCase().includes(term) ||
         item.fabric.toLowerCase().includes(term) ||
         item.brand.toLowerCase().includes(term) ||
+        (item.season && item.season.toLowerCase().includes(term)) ||
+        (item.section && item.section.toLowerCase().includes(term)) ||
         item.garmentType.toLowerCase().includes(term) ||
         item.supervisor.toLowerCase().includes(term) ||
         item.wip.toLowerCase().includes(term);
@@ -354,12 +430,14 @@ export default function FeedUpReport() {
       const matchesBrand = selectedBrands.length === 0 || selectedBrands.some((b) => b.toLowerCase() === item.brand.toLowerCase());
       const matchesGarment = selectedGarments.length === 0 || selectedGarments.some((g) => g.toLowerCase() === item.garmentType.toLowerCase());
       const matchesFabric = selectedFabrics.length === 0 || selectedFabrics.some((f) => f.toLowerCase() === item.fabric.toLowerCase());
+      const matchesSeason = selectedSeasons.length === 0 || selectedSeasons.some((s) => s.toLowerCase() === (item.season || "").toLowerCase());
+      const matchesSection = selectedSections.length === 0 || selectedSections.some((s) => s.toLowerCase() === (item.section || "").toLowerCase());
       const matchesSupervisor = selectedSupervisors.length === 0 || selectedSupervisors.some((s) => s.toLowerCase() === item.supervisor.toLowerCase());
       const matchesDate = !dateFilter || item.feedUpDate.includes(dateFilter);
 
-      return matchesSearch && matchesStatus && matchesBrand && matchesGarment && matchesFabric && matchesSupervisor && matchesDate;
+      return matchesSearch && matchesStatus && matchesBrand && matchesGarment && matchesFabric && matchesSeason && matchesSection && matchesSupervisor && matchesDate;
     });
-  }, [data, searchTerm, selectedStatuses, selectedBrands, selectedGarments, selectedFabrics, selectedSupervisors, dateFilter]);
+  }, [data, searchTerm, selectedStatuses, selectedBrands, selectedGarments, selectedFabrics, selectedSeasons, selectedSections, selectedSupervisors, dateFilter]);
 
   const resetFilters = () => {
     setSearchTerm("");
@@ -367,6 +445,8 @@ export default function FeedUpReport() {
     setSelectedBrands([]);
     setSelectedGarments([]);
     setSelectedFabrics([]);
+    setSelectedSeasons([]);
+    setSelectedSections([]);
     setSelectedSupervisors([]);
     setDateFilter("");
   };
@@ -377,6 +457,8 @@ export default function FeedUpReport() {
     selectedBrands.length > 0 ||
     selectedGarments.length > 0 ||
     selectedFabrics.length > 0 ||
+    selectedSeasons.length > 0 ||
+    selectedSections.length > 0 ||
     selectedSupervisors.length > 0 ||
     dateFilter !== "";
 
@@ -386,10 +468,426 @@ export default function FeedUpReport() {
   const completedLots = filteredData.filter((item) => item.isCompleted).length;
   const pendingLots = totalLots - completedLots;
 
+  // Professional Multi-Sheet Excel Export (matching PendingIssue format)
+  const exportToExcel = async () => {
+    if (filteredData.length === 0) {
+      alert("No data available to export.");
+      return;
+    }
+
+    try {
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = "Factory Suite Pro";
+      workbook.created = new Date();
+
+      const totalLotsCount = filteredData.length;
+      const totalPiecesCount = filteredData.reduce((sum, item) => sum + (item.totalPcs || 0), 0);
+
+      // Grouping for Executive Summary
+      const garmentMap = {};
+      const supervisorMap = {};
+      const seasonMap = {};
+      let compCount = 0, compPcs = 0;
+      let pendCount = 0, pendPcs = 0;
+
+      filteredData.forEach((item) => {
+        const pcs = item.totalPcs || 0;
+        const gType = (item.garmentType || "Unknown").trim();
+        const sup = (item.supervisor || "Unassigned").trim();
+        const season = (item.season || "Other / NA").trim();
+
+        if (!garmentMap[gType]) garmentMap[gType] = { totalLots: 0, totalPcs: 0 };
+        garmentMap[gType].totalLots += 1;
+        garmentMap[gType].totalPcs += pcs;
+
+        if (!supervisorMap[sup]) supervisorMap[sup] = { totalLots: 0, totalPcs: 0 };
+        supervisorMap[sup].totalLots += 1;
+        supervisorMap[sup].totalPcs += pcs;
+
+        if (!seasonMap[season]) seasonMap[season] = { totalLots: 0, totalPcs: 0 };
+        seasonMap[season].totalLots += 1;
+        seasonMap[season].totalPcs += pcs;
+
+        if (item.isCompleted) {
+          compCount += 1;
+          compPcs += pcs;
+        } else {
+          pendCount += 1;
+          pendPcs += pcs;
+        }
+      });
+
+      const sortedGarments = Object.keys(garmentMap)
+        .map((name) => ({
+          name,
+          totalLots: garmentMap[name].totalLots,
+          totalPcs: garmentMap[name].totalPcs,
+        }))
+        .sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedSupervisors = Object.keys(supervisorMap)
+        .map((name) => ({
+          name,
+          totalLots: supervisorMap[name].totalLots,
+          totalPcs: supervisorMap[name].totalPcs,
+        }))
+        .sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const thinBorder = {
+        top: { style: "thin", color: { argb: "FFCBD5E1" } },
+        bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+        left: { style: "thin", color: { argb: "FFCBD5E1" } },
+        right: { style: "thin", color: { argb: "FFCBD5E1" } },
+      };
+
+      // ================= SHEET 1: MAIN DATA =================
+      const ws1 = workbook.addWorksheet("Feed Up Report", {
+        views: [{ showGridLines: true }],
+      });
+
+      // Title Banner
+      ws1.mergeCells("A1:N1");
+      const titleCell = ws1.getCell("A1");
+      titleCell.value = "FACTORY SUITE PRO - FEED UP DEPARTMENT PRODUCTION REPORT";
+      titleCell.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+      titleCell.alignment = { horizontal: "center", vertical: "middle" };
+      ws1.getRow(1).height = 32;
+
+      // Subtitle
+      ws1.mergeCells("A2:N2");
+      const subCell = ws1.getCell("A2");
+      subCell.value = `Report Date: ${new Date().toLocaleDateString("en-IN")}  |  Total Lots: ${totalLotsCount}  |  Total Pieces: ${totalPiecesCount.toLocaleString()}  |  Completed Lots: ${compCount}  |  Pending Lots: ${pendCount}`;
+      subCell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FFCBD5E1" } };
+      subCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+      subCell.alignment = { horizontal: "center", vertical: "middle" };
+      ws1.getRow(2).height = 22;
+
+      // Spacer
+      ws1.addRow([]);
+
+      // Table Headers
+      const headers1 = [
+        "Sr No.",
+        "Lot Number",
+        "Garment Type",
+        "Style",
+        "Fabric",
+        "Brand",
+        "Total Pcs",
+        "Section",
+        "Season",
+        "Party Name",
+        "Feed Up Date",
+        "Feed Up Supervisor",
+        "Status",
+        "WIP Remarks",
+      ];
+      const headerRow = ws1.addRow(headers1);
+      headerRow.height = 25;
+      headerRow.eachCell((cell) => {
+        cell.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.border = thinBorder;
+      });
+
+      // Data Rows
+      filteredData.forEach((item, idx) => {
+        const isComp = item.isCompleted;
+
+        const row = ws1.addRow([
+          idx + 1,
+          item.lotNumber || "—",
+          item.garmentType || "—",
+          item.style || "—",
+          item.fabric || "—",
+          item.brand || "—",
+          item.totalPcs || 0,
+          item.section || "—",
+          item.season || "—",
+          item.party || "—",
+          item.feedUpDate || "—",
+          item.supervisor || "—",
+          isComp ? "Completed" : "Pending",
+          item.wip || "—",
+        ]);
+
+        row.height = 20;
+        row.eachCell((cell) => {
+          cell.font = { name: "Segoe UI", size: 9.5 };
+          cell.border = thinBorder;
+          cell.alignment = { horizontal: "center", vertical: "middle" };
+          if (idx % 2 === 1) {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+          }
+        });
+
+        row.getCell(2).font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFDC2626" } };
+        row.getCell(7).numFmt = "#,##0";
+        row.getCell(7).font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFDC2626" } };
+
+        if (isComp) {
+          row.getCell(13).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
+          row.getCell(13).font = { name: "Segoe UI", size: 9, bold: true, color: { argb: "FF15803D" } };
+        } else {
+          row.getCell(13).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0E7FF" } };
+          row.getCell(13).font = { name: "Segoe UI", size: 9, bold: true, color: { argb: "FF3730A3" } };
+        }
+      });
+
+      // Total Row
+      const totalRow1 = ws1.addRow([
+        "",
+        `TOTAL (${totalLotsCount} Lots)`,
+        "",
+        "",
+        "",
+        "",
+        totalPiecesCount,
+        "",
+        "",
+        "",
+        "",
+        "",
+        `${compCount} Comp | ${pendCount} Pending`,
+        "",
+      ]);
+      totalRow1.height = 24;
+      totalRow1.eachCell((cell) => {
+        cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF000000" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF000000" } },
+          bottom: { style: "double", color: { argb: "FF000000" } },
+          left: { style: "thin", color: { argb: "FFCBD5E1" } },
+          right: { style: "thin", color: { argb: "FFCBD5E1" } },
+        };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+      });
+      totalRow1.getCell(7).numFmt = "#,##0";
+
+      const colWidths = [8, 16, 20, 20, 20, 16, 14, 12, 14, 20, 16, 20, 16, 30];
+      colWidths.forEach((w, i) => {
+        ws1.getColumn(i + 1).width = w;
+      });
+
+      // ================= SHEET 2: EXECUTIVE SUMMARY =================
+      const ws2 = workbook.addWorksheet("Executive Summary", {
+        views: [{ showGridLines: true }],
+      });
+
+      // Section 1: Garment Type Breakdown
+      ws2.mergeCells("A1:D1");
+      const gTitle = ws2.getCell("A1");
+      gTitle.value = "1. GARMENT TYPE BREAKDOWN (LOTS & PIECES DISTRIBUTION)";
+      gTitle.font = { name: "Segoe UI", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      gTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+      gTitle.alignment = { horizontal: "left", vertical: "middle" };
+      ws2.getRow(1).height = 26;
+
+      const gHeader = ws2.addRow(["Garment Type", "Total Lots", "Total Pieces (Qty)", "Share %"]);
+      gHeader.height = 22;
+      gHeader.eachCell((c) => {
+        c.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF134E4A" } };
+        c.alignment = { horizontal: "center", vertical: "middle" };
+        c.border = thinBorder;
+      });
+
+      sortedGarments.forEach((item, idx) => {
+        const pct = totalPiecesCount > 0 ? item.totalPcs / totalPiecesCount : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(2).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(3).numFmt = "#,##0";
+        r.getCell(4).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(4).numFmt = "0.0%";
+        r.eachCell((c) => {
+          c.font = { name: "Segoe UI", size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+        });
+      });
+
+      const gTotalRow = ws2.addRow(["TOTAL", totalLotsCount, totalPiecesCount, 1]);
+      gTotalRow.height = 22;
+      gTotalRow.eachCell((c) => {
+        c.font = { name: "Segoe UI", size: 9.5, bold: true };
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+        c.border = { top: { style: "thin" }, bottom: { style: "double" }, left: { style: "thin" }, right: { style: "thin" } };
+        c.alignment = { horizontal: "center", vertical: "middle" };
+      });
+      gTotalRow.getCell(3).numFmt = "#,##0";
+      gTotalRow.getCell(4).numFmt = "0.0%";
+
+      // Spacer
+      ws2.addRow([]);
+
+      // Section 2: Supervisor Breakdown
+      const supStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${supStartRow}:D${supStartRow}`);
+      const supTitle = ws2.getCell(`A${supStartRow}`);
+      supTitle.value = "2. FEED UP SUPERVISOR WORKLOAD";
+      supTitle.font = { name: "Segoe UI", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      supTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E40AF" } };
+      supTitle.alignment = { horizontal: "left", vertical: "middle" };
+      ws2.getRow(supStartRow).height = 26;
+
+      const supHeader = ws2.addRow(["Supervisor Name", "Total Lots", "Total Pieces (Qty)", "Share %"]);
+      supHeader.height = 22;
+      supHeader.eachCell((c) => {
+        c.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A8A" } };
+        c.alignment = { horizontal: "center", vertical: "middle" };
+        c.border = thinBorder;
+      });
+
+      sortedSupervisors.forEach((item, idx) => {
+        const pct = totalPiecesCount > 0 ? item.totalPcs / totalPiecesCount : 0;
+        const r = ws2.addRow([item.name, item.totalLots, item.totalPcs, pct]);
+        r.height = 19;
+        r.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(2).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(3).numFmt = "#,##0";
+        r.getCell(4).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(4).numFmt = "0.0%";
+        r.eachCell((c) => {
+          c.font = { name: "Segoe UI", size: 9 };
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+        });
+      });
+
+      const supTotalRow = ws2.addRow(["TOTAL", totalLotsCount, totalPiecesCount, 1]);
+      supTotalRow.height = 22;
+      supTotalRow.eachCell((c) => {
+        c.font = { name: "Segoe UI", size: 9.5, bold: true };
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+        c.border = { top: { style: "thin" }, bottom: { style: "double" }, left: { style: "thin" }, right: { style: "thin" } };
+        c.alignment = { horizontal: "center", vertical: "middle" };
+      });
+      supTotalRow.getCell(3).numFmt = "#,##0";
+      supTotalRow.getCell(4).numFmt = "0.0%";
+
+      // Spacer
+      ws2.addRow([]);
+
+      // Section 3: Status Breakdown
+      const staStartRow = ws2.rowCount + 1;
+      ws2.mergeCells(`A${staStartRow}:D${staStartRow}`);
+      const staTitle = ws2.getCell(`A${staStartRow}`);
+      staTitle.value = "3. COMPLETION STATUS SUMMARY";
+      staTitle.font = { name: "Segoe UI", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      staTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4338CA" } };
+      staTitle.alignment = { horizontal: "left", vertical: "middle" };
+      ws2.getRow(staStartRow).height = 26;
+
+      const staHeader = ws2.addRow(["Status", "Total Lots", "Total Pieces (Qty)", "Share %"]);
+      staHeader.height = 22;
+      staHeader.eachCell((c) => {
+        c.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF312E81" } };
+        c.alignment = { horizontal: "center", vertical: "middle" };
+        c.border = thinBorder;
+      });
+
+      const statusData = [
+        { name: "Completed", lots: compCount, pcs: compPcs, bg: "FFDCFCE7", fg: "FF15803D" },
+        { name: "Pending In Feed Up", lots: pendCount, pcs: pendPcs, bg: "FFE0E7FF", fg: "FF3730A3" },
+      ];
+
+      statusData.forEach((item) => {
+        const pct = totalPiecesCount > 0 ? item.pcs / totalPiecesCount : 0;
+        const r = ws2.addRow([item.name, item.lots, item.pcs, pct]);
+        r.height = 20;
+        r.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(2).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(3).numFmt = "#,##0";
+        r.getCell(4).alignment = { horizontal: "center", vertical: "middle" };
+        r.getCell(4).numFmt = "0.0%";
+        r.eachCell((c) => {
+          c.font = { name: "Segoe UI", size: 9, bold: true, color: { argb: item.fg } };
+          c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: item.bg } };
+          c.border = thinBorder;
+        });
+      });
+
+      const staTotalRow = ws2.addRow(["TOTAL", totalLotsCount, totalPiecesCount, 1]);
+      staTotalRow.height = 22;
+      staTotalRow.eachCell((c) => {
+        c.font = { name: "Segoe UI", size: 9.5, bold: true };
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+        c.border = { top: { style: "thin" }, bottom: { style: "double" }, left: { style: "thin" }, right: { style: "thin" } };
+        c.alignment = { horizontal: "center", vertical: "middle" };
+      });
+      staTotalRow.getCell(3).numFmt = "#,##0";
+      staTotalRow.getCell(4).numFmt = "0.0%";
+
+      ws2.getColumn(1).width = 34;
+      ws2.getColumn(2).width = 16;
+      ws2.getColumn(3).width = 22;
+      ws2.getColumn(4).width = 16;
+
+      // ================= SHEET 3: APPLIED FILTERS =================
+      const ws3 = workbook.addWorksheet("Applied Filters", {
+        views: [{ showGridLines: true }],
+      });
+
+      ws3.mergeCells("A1:B1");
+      const fTitle = ws3.getCell("A1");
+      fTitle.value = "APPLIED FILTERS & METADATA";
+      fTitle.font = { name: "Segoe UI", size: 12, bold: true, color: { argb: "FFFFFFFF" } };
+      fTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+      fTitle.alignment = { horizontal: "left", vertical: "middle" };
+      ws3.getRow(1).height = 28;
+
+      const filterItems = [
+        ["Report Generated", `${new Date().toLocaleDateString("en-IN")} ${new Date().toLocaleTimeString("en-IN")}`],
+        ["Total Lots Exported", totalLotsCount],
+        ["Total Pieces Exported", totalPiecesCount.toLocaleString()],
+        ["Status Filter", selectedStatuses.length ? selectedStatuses.join(", ") : "All Statuses"],
+        ["Supervisor Filter", selectedSupervisors.length ? selectedSupervisors.join(", ") : "All Supervisors"],
+        ["Garment Type Filter", selectedGarments.length ? selectedGarments.join(", ") : "All Types"],
+        ["Fabric Filter", selectedFabrics.length ? selectedFabrics.join(", ") : "All Fabrics"],
+        ["Brand Filter", selectedBrands.length ? selectedBrands.join(", ") : "All Brands"],
+        ["Date Filter", dateFilter || "All Dates"],
+        ["Search Query", searchTerm || "None"],
+      ];
+
+      filterItems.forEach(([k, v], idx) => {
+        const r = ws3.addRow([k, v]);
+        r.height = 20;
+        r.getCell(1).font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E293B" } };
+        r.getCell(2).font = { name: "Segoe UI", size: 9.5, color: { argb: "FF334155" } };
+        r.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
+        r.getCell(2).alignment = { horizontal: "left", vertical: "middle" };
+        r.eachCell((c) => {
+          c.border = thinBorder;
+          if (idx % 2 === 1) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+        });
+      });
+
+      ws3.getColumn(1).width = 24;
+      ws3.getColumn(2).width = 50;
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const ts = new Date().toISOString().slice(0, 10);
+      saveAs(new Blob([buffer]), `Feed_Up_Report_${ts}.xlsx`);
+    } catch (e) {
+      console.error("Excel export error:", e);
+      alert(`Excel export failed: ${e.message}`);
+    }
+  };
+
   // CSV Export
   const exportToCSV = () => {
     if (filteredData.length === 0) return;
-    const headers = ["Timestamp", "Lot Number", "Garment Type", "Fabric", "Style", "Brand", "Feed Up Supervisor", "Feed Up Date", "Total Pcs", "WIP Remarks", "Status", "Completion Date"];
+    const headers = ["Timestamp", "Lot Number", "Garment Type", "Fabric", "Style", "Brand", "Season", "Section", "Feed Up Supervisor", "Feed Up Date", "Total Pcs", "WIP Remarks", "Status", "Completion Date"];
     const rows = filteredData.map((d) => [
       `"${d.timestamp}"`,
       `"${d.lotNumber}"`,
@@ -397,6 +895,8 @@ export default function FeedUpReport() {
       `"${d.fabric}"`,
       `"${d.style}"`,
       `"${d.brand}"`,
+      `"${d.season || ''}"`,
+      `"${d.section || ''}"`,
       `"${d.supervisor}"`,
       `"${d.feedUpDate}"`,
       d.totalPcs,
@@ -412,6 +912,549 @@ export default function FeedUpReport() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // PDF Export Function - 14 columns spacious & centered layout
+  // --- Professional PDF Export (A3 Landscape - Matching Factory Suite Pro Standard) ---
+  const handleDownloadPDF = () => {
+    if (filteredData.length === 0) {
+      alert("No data available to download PDF.");
+      return;
+    }
+
+    try {
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "pt",
+        format: "a3"
+      });
+
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const totalPieces = filteredData.reduce((sum, item) => sum + (item.totalPcs || 0), 0);
+      const totalLots = filteredData.length;
+
+      // Grouping for 4-Column Side-by-Side Executive Summary
+      const garmentMap = {};
+      const supervisorMap = {};
+      const seasonMap = {};
+      let completedLotsCount = 0, completedPcsCount = 0;
+      let pendingLotsCount = 0, pendingPcsCount = 0;
+
+      filteredData.forEach(item => {
+        const pcs = item.totalPcs || 0;
+        const gType = (item.garmentType || 'Unknown').trim();
+        const sup = (item.supervisor || 'Unassigned').trim();
+        const season = (item.season || 'Other / NA').trim();
+        const isComp = item.isCompleted;
+
+        if (!garmentMap[gType]) garmentMap[gType] = { totalLots: 0, totalPcs: 0 };
+        garmentMap[gType].totalLots += 1;
+        garmentMap[gType].totalPcs += pcs;
+
+        if (!supervisorMap[sup]) supervisorMap[sup] = { totalLots: 0, totalPcs: 0 };
+        supervisorMap[sup].totalLots += 1;
+        supervisorMap[sup].totalPcs += pcs;
+
+        if (!seasonMap[season]) seasonMap[season] = { totalLots: 0, totalPcs: 0 };
+        seasonMap[season].totalLots += 1;
+        seasonMap[season].totalPcs += pcs;
+
+        if (isComp) {
+          completedLotsCount += 1;
+          completedPcsCount += pcs;
+        } else {
+          pendingLotsCount += 1;
+          pendingPcsCount += pcs;
+        }
+      });
+
+      const sortedGarments = Object.keys(garmentMap).map(name => ({
+        name,
+        totalLots: garmentMap[name].totalLots,
+        totalPcs: garmentMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedSupervisors = Object.keys(supervisorMap).map(name => ({
+        name,
+        totalLots: supervisorMap[name].totalLots,
+        totalPcs: supervisorMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      const sortedSeasons = Object.keys(seasonMap).map(name => ({
+        name,
+        totalLots: seasonMap[name].totalLots,
+        totalPcs: seasonMap[name].totalPcs
+      })).sort((a, b) => b.totalPcs - a.totalPcs);
+
+      // 1. Main Header Block
+      doc.setFillColor(15, 23, 42); // Dark Navy #0F172A
+      doc.rect(15, 12, pageW - 30, 48, 'F');
+
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      const isPendingView = selectedStatuses.length === 1 && selectedStatuses[0] === "pending";
+      const isCompletedView = selectedStatuses.length === 1 && selectedStatuses[0] === "completed";
+      let reportTitle = "FACTORY SUITE PRO - FEED UP DEPARTMENT REPORT";
+      if (isPendingView) reportTitle = "FACTORY SUITE PRO - FEED UP DEPARTMENT REPORT (PENDING LOTS)";
+      else if (isCompletedView) reportTitle = "FACTORY SUITE PRO - FEED UP DEPARTMENT REPORT (COMPLETED LOTS)";
+      doc.text(reportTitle, pageW / 2, 30, { align: 'center' });
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(199, 210, 254);
+      const subText = `Total Lots: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()}   |   Completed Lots: ${completedLotsCount}   |   Pending Lots: ${pendingLotsCount}   |   Supervisors: ${sortedSupervisors.length}`;
+      doc.text(subText, pageW / 2, 48, { align: 'center' });
+
+      // 2. Filter Banner
+      doc.setFillColor(241, 245, 249);
+      doc.rect(15, 63, pageW - 30, 16, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(0, 0, 0);
+      const filterSummary = `Filters: Status: ${selectedStatuses.length ? selectedStatuses.join(', ') : 'All'} | Brands: ${selectedBrands.length ? selectedBrands.join(', ') : 'All'} | Garments: ${selectedGarments.length ? selectedGarments.join(', ') : 'All'} | Fabrics: ${selectedFabrics.length ? selectedFabrics.join(', ') : 'All'} | Seasons: ${selectedSeasons.length ? selectedSeasons.join(', ') : 'All'} | Sections: ${selectedSections.length ? selectedSections.join(', ') : 'All'} | Supervisors: ${selectedSupervisors.length ? selectedSupervisors.join(', ') : 'All'} | Search: ${searchTerm || 'None'}`;
+      doc.text(filterSummary, pageW / 2, 74, { align: 'center' });
+
+      // 3. Main Data Table
+      const tableColumns = [
+        '#',
+        'Lot Number',
+        'Garment Type',
+        'Style',
+        'Fabric',
+        'Brand',
+        'Total Pcs',
+        'Section',
+        'Season',
+        'Party Name',
+        'Direct Stitching',
+        'Feed Up Date',
+        'WIP Remarks',
+        'Feed Up Sup',
+        'Status',
+        'Completed At'
+      ];
+
+      const tableBody = filteredData.map((item, idx) => {
+        const isComp = item.isCompleted;
+        return [
+          (idx + 1).toString(),
+          item.lotNumber || '—',
+          item.garmentType || '—',
+          item.style || '—',
+          item.fabric || '—',
+          item.brand || '—',
+          (item.totalPcs || 0).toLocaleString(),
+          item.section || '—',
+          item.season || '—',
+          item.partyName || '—',
+          item.directStitching || '—',
+          formatDisplayDate(item.feedUpDate) || '—',
+          isComp ? "Done" : (item.wip || '—'),
+          item.supervisor || '—',
+          isComp ? 'Completed' : 'In Progress',
+          isComp ? (formatDisplayDate(item.completeDate) || 'Completed') : '—'
+        ];
+      });
+
+      // Total Row
+      tableBody.push([
+        '',
+        `TOTAL (${totalLots})`,
+        '',
+        '',
+        '',
+        '',
+        totalPieces.toLocaleString(),
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        `${sortedSupervisors.length} Sups`,
+        `${completedLotsCount} Comp | ${pendingLotsCount} Pend`,
+        ''
+      ]);
+
+      const columnStyles = {
+        0: { cellWidth: 25, halign: 'center' },
+        1: { cellWidth: 70, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: 85, halign: 'center' },
+        3: { cellWidth: 85, halign: 'center' },
+        4: { cellWidth: 85, halign: 'center' },
+        5: { cellWidth: 70, halign: 'center' },
+        6: { cellWidth: 60, halign: 'center', fontStyle: 'bold' },
+        7: { cellWidth: 50, halign: 'center' },
+        8: { cellWidth: 55, halign: 'center' },
+        9: { cellWidth: 85, halign: 'center' },
+        10: { cellWidth: 55, halign: 'center' },
+        11: { cellWidth: 70, halign: 'center' },
+        12: { cellWidth: 175, halign: 'center' },
+        13: { cellWidth: 80, halign: 'center' },
+        14: { cellWidth: 70, halign: 'center' },
+        15: { cellWidth: 80, halign: 'center' }
+      };
+
+      autoTable(doc, {
+        head: [tableColumns],
+        body: tableBody,
+        startY: 85,
+        tableWidth: pageW - 30,
+        margin: { top: 85, right: 15, bottom: 25, left: 15 },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0], // Pure Black
+          lineColor: [0, 0, 0], // Black grid lines
+          lineWidth: 0.3,
+          fontStyle: 'normal',
+          minCellHeight: 12,
+        },
+        headStyles: {
+          fillColor: [15, 23, 42],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          lineColor: [0, 0, 0],
+          lineWidth: 0.5,
+          halign: 'center',
+          fontSize: 9,
+          valign: 'middle',
+          cellPadding: { top: 5, right: 3, bottom: 5, left: 3 },
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+        columnStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
+
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [226, 232, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.halign = 'center';
+              return;
+            }
+
+            const item = filteredData[rowIndex];
+            if (!item) return;
+
+            // Lot number styling
+            if (data.column.index === 1) {
+              data.cell.styles.textColor = [220, 38, 38];
+              data.cell.styles.fontStyle = 'bold';
+            }
+
+            // Total Pcs styling
+            if (data.column.index === 6) {
+              data.cell.styles.textColor = [220, 38, 38];
+              data.cell.styles.fontStyle = 'bold';
+            }
+
+            // Status styling
+            if (data.column.index === 14) {
+              if (item.isCompleted) {
+                data.cell.styles.fillColor = [220, 252, 231];
+                data.cell.styles.textColor = [21, 128, 61];
+                data.cell.styles.fontStyle = 'bold';
+              } else {
+                data.cell.styles.fillColor = [254, 243, 199];
+                data.cell.styles.textColor = [180, 83, 9];
+                data.cell.styles.fontStyle = 'bold';
+              }
+            }
+          }
+        }
+      });
+
+      // --- 4-COLUMN SIDE-BY-SIDE EXECUTIVE SUMMARY ---
+      const gBody = sortedGarments.map(item => {
+        const pct = totalPieces > 0 ? ((item.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [item.name, item.totalLots.toString(), item.totalPcs.toLocaleString(), `${pct}%`];
+      });
+      gBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const supBody = sortedSupervisors.map(item => {
+        const pct = totalPieces > 0 ? ((item.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [item.name, item.totalLots.toString(), item.totalPcs.toLocaleString(), `${pct}%`];
+      });
+      supBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const seasonBody = sortedSeasons.map(item => {
+        const pct = totalPieces > 0 ? ((item.totalPcs / totalPieces) * 100).toFixed(1) : "0.0";
+        return [item.name, item.totalLots.toString(), item.totalPcs.toLocaleString(), `${pct}%`];
+      });
+      seasonBody.push(["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]);
+
+      const statBody = [
+        ["Completed Lots", completedLotsCount.toString(), completedPcsCount.toLocaleString(), `${totalPieces > 0 ? ((completedPcsCount / totalPieces) * 100).toFixed(1) : 0}%`],
+        ["Pending Lots", pendingLotsCount.toString(), pendingPcsCount.toLocaleString(), `${totalPieces > 0 ? ((pendingPcsCount / totalPieces) * 100).toFixed(1) : 0}%`],
+        ["TOTAL", totalLots.toString(), totalPieces.toLocaleString(), "100.0%"]
+      ];
+
+      const maxRows = Math.max(gBody.length, supBody.length, seasonBody.length, statBody.length);
+      const approxSummaryHeight = 55 + (maxRows * 18);
+
+      let summaryStartY = doc.lastAutoTable.finalY + 22;
+      const neededSpace = approxSummaryHeight + 35;
+      if (summaryStartY + neededSpace > pageH - 30) {
+        doc.addPage();
+        summaryStartY = 40;
+      } else {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.8);
+        doc.line(15, summaryStartY - 8, pageW - 15, summaryStartY - 8);
+      }
+
+      // Title & KPI Subtitle
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("EXECUTIVE SUMMARY & PRODUCTION BREAKDOWN", pageW / 2, summaryStartY + 4, { align: 'center' });
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(0, 0, 0);
+      const summarySub = `Total Lots: ${totalLots}   |   Total Pieces: ${totalPieces.toLocaleString()} Pcs   |   Supervisors: ${sortedSupervisors.length}   |   Garments: ${sortedGarments.length}   |   Seasons: ${sortedSeasons.length}`;
+      doc.text(summarySub, pageW / 2, summaryStartY + 16, { align: 'center' });
+
+      const sectionTitleY = summaryStartY + 30;
+      const tableStartY = sectionTitleY + 6;
+
+      // 4 Columns Side-by-Side Configuration (Exactly matching full page width)
+      const colWidth = 278;
+      const gap = 16;
+      const col1X = 15;
+      const col2X = col1X + colWidth + gap; // 309
+      const col3X = col2X + colWidth + gap; // 603
+      const col4X = col3X + colWidth + gap; // 897
+
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("1. GARMENT BREAKDOWN", col1X, sectionTitleY);
+      doc.text("2. SUPERVISOR BREAKDOWN", col2X, sectionTitleY);
+      doc.text("3. SEASON BREAKDOWN", col3X, sectionTitleY);
+      doc.text("4. STATUS DISTRIBUTION", col4X, sectionTitleY);
+
+      const summaryColStyles = {
+        0: { cellWidth: 110, halign: 'center' },
+        1: { cellWidth: 45, halign: 'center' },
+        2: { cellWidth: 68, halign: 'center' },
+        3: { cellWidth: 55, halign: 'center' },
+      };
+
+      // Column 1 Table: Garment Breakdown
+      autoTable(doc, {
+        head: [['Garment Type', 'Lots', 'Total Pcs', 'Share %']],
+        body: gBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col1X, right: pageW - (col1X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === gBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY1 = doc.lastAutoTable.finalY;
+
+      // Column 2 Table: Supervisor Breakdown
+      autoTable(doc, {
+        head: [['Supervisor', 'Lots', 'Total Pcs', 'Share %']],
+        body: supBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col2X, right: pageW - (col2X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [67, 56, 202], // Indigo
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === supBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY2 = doc.lastAutoTable.finalY;
+
+      // Column 3 Table: Season Breakdown
+      autoTable(doc, {
+        head: [['Season', 'Lots', 'Total Pcs', 'Share %']],
+        body: seasonBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col3X, right: pageW - (col3X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [30, 64, 175], // Royal Blue
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === seasonBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY3 = doc.lastAutoTable.finalY;
+
+      // Column 4 Table: Status Breakdown
+      autoTable(doc, {
+        head: [['Status Category', 'Lots', 'Total Pcs', 'Share %']],
+        body: statBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col4X, right: pageW - (col4X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [180, 83, 9], // Amber
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === 0) {
+              data.cell.styles.fillColor = [220, 252, 231]; // Soft Green
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 1) {
+              data.cell.styles.fillColor = [254, 243, 199]; // Soft Amber
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 2) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY4 = doc.lastAutoTable.finalY;
+
+      const maxEndY = Math.max(endY1, endY2, endY3, endY4);
+      const finalY = maxEndY + 16;
+      if (finalY <= pageH - 22) {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.5);
+        doc.line(15, finalY, pageW - 15, finalY);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(0, 0, 0);
+        doc.text("Feed Up Department Report — Factory Suite Pro", 15, finalY + 12);
+      }
+
+      // Page Numbering Loop
+      const totalPages = doc.internal.getNumberOfPages();
+      const timeStr = `${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN')}`;
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(0, 0, 0);
+
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.5);
+        doc.line(15, pageH - 22, pageW - 15, pageH - 22);
+
+        doc.text(`Page ${i} of ${totalPages}`, pageW / 2, pageH - 12, { align: 'center' });
+        doc.text(`Generated: ${timeStr}`, pageW - 18, pageH - 12, { align: 'right' });
+      }
+
+      const fileDate = new Date().toISOString().slice(0, 10);
+      doc.save(`Feed_Up_Report_${fileDate}.pdf`);
+
+    } catch (error) {
+      console.error("Error generating Feed Up Report PDF:", error);
+      alert("Failed to generate PDF. Please try again.");
+    }
   };
 
   const formatDisplayDate = (val) => {
@@ -449,6 +1492,34 @@ export default function FeedUpReport() {
           color: white;
           box-shadow: 0 10px 25px -5px rgba(2, 132, 199, 0.25);
           margin-bottom: 24px;
+        }
+        .header-btn {
+          background: rgba(255, 255, 255, 0.15);
+          backdrop-filter: blur(8px);
+          border: 1px solid rgba(255, 255, 255, 0.25);
+          color: white;
+          padding: 8px 16px;
+          border-radius: 12px;
+          font-weight: 700;
+          font-size: 0.85rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .header-btn:hover {
+          background: rgba(255, 255, 255, 0.25);
+          transform: translateY(-1px);
+        }
+        .header-btn-pdf {
+          background: #ef4444 !important;
+          border-color: #dc2626 !important;
+          box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+        }
+        .header-btn-pdf:hover {
+          background: #dc2626 !important;
+          box-shadow: 0 6px 16px rgba(220, 38, 38, 0.45);
         }
         .header-btn {
           background: rgba(255, 255, 255, 0.15);
@@ -610,7 +1681,7 @@ export default function FeedUpReport() {
             </p>
           </div>
 
-          <div style={{ display: "flex", gap: "10px" }}>
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
             <button className="header-btn" onClick={() => history.push("/dashboard")}>
               ← Dashboard
             </button>
@@ -620,7 +1691,17 @@ export default function FeedUpReport() {
             <button className="header-btn" onClick={fetchData}>
               ↻ Refresh
             </button>
-            <button className="header-btn" onClick={exportToCSV}>
+            <button
+              className="header-btn header-btn-pdf"
+              onClick={handleDownloadPDF}
+              disabled={filteredData.length === 0}
+            >
+              📄 Download PDF
+            </button>
+            <button className="header-btn" onClick={exportToExcel} disabled={filteredData.length === 0}>
+              📊 Export Excel
+            </button>
+            <button className="header-btn" onClick={exportToCSV} disabled={filteredData.length === 0}>
               📥 Export CSV
             </button>
             <button className="header-btn" onClick={() => window.print()}>
@@ -720,6 +1801,22 @@ export default function FeedUpReport() {
               onChange={setSelectedFabrics}
             />
 
+            {/* Season Filter (Multi-Select) */}
+            <MultiSelectDropdown
+              label="Season"
+              options={seasonOptions}
+              selectedValues={selectedSeasons}
+              onChange={setSelectedSeasons}
+            />
+
+            {/* Section Filter (Multi-Select) */}
+            <MultiSelectDropdown
+              label="Section"
+              options={sectionOptions}
+              selectedValues={selectedSections}
+              onChange={setSelectedSections}
+            />
+
             {/* Supervisor Filter (Multi-Select) */}
             <MultiSelectDropdown
               label="Supervisor"
@@ -772,12 +1869,16 @@ export default function FeedUpReport() {
                     <th>#</th>
                     <th>Lot Number</th>
                     <th>Garment Type</th>
-                    <th>Fabric</th>
                     <th>Style</th>
+                    <th>Fabric</th>
                     <th>Brand</th>
+                    <th>Total Pcs</th>
+                    <th>Section</th>
+                    <th>Season</th>
+                    <th>Party Name</th>
+                    <th>Direct Stitching</th>
                     <th>Feed Up Supervisor</th>
                     <th>Feed Up Date</th>
-                    <th>Total Pcs</th>
                     <th>WIP Status / Remarks</th>
                     <th>Status</th>
                     <th>Completion Date</th>
@@ -799,9 +1900,26 @@ export default function FeedUpReport() {
                         </span>
                       </td>
                       <td>{item.garmentType || "—"}</td>
-                      <td>{item.fabric || "—"}</td>
                       <td style={{ fontWeight: 700 }}>{item.style || "—"}</td>
+                      <td>{item.fabric || "—"}</td>
                       <td>{item.brand || "—"}</td>
+                      <td>
+                        <span style={{ fontWeight: 800, color: "#0f172a" }}>
+                          {item.totalPcs.toLocaleString()}
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{ background: "#f1f5f9", padding: "2px 8px", borderRadius: "6px", fontSize: "0.8rem", fontWeight: 700, color: "#475569" }}>
+                          {item.section || "—"}
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{ background: "#f1f5f9", padding: "2px 8px", borderRadius: "6px", fontSize: "0.8rem", fontWeight: 700, color: "#475569" }}>
+                          {item.season || "—"}
+                        </span>
+                      </td>
+                      <td>{item.partyName || "—"}</td>
+                      <td>{item.directStitching || "—"}</td>
                       <td>
                         <span style={{
                           display: "inline-flex",
@@ -813,11 +1931,6 @@ export default function FeedUpReport() {
                         </span>
                       </td>
                       <td>{formatDisplayDate(item.feedUpDate)}</td>
-                      <td>
-                        <span style={{ fontWeight: 800, color: "#0f172a" }}>
-                          {item.totalPcs.toLocaleString()}
-                        </span>
-                      </td>
                       <td>
                         <span style={{
                           fontSize: "0.78rem",

@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 import jsPDF from "jspdf";
-import { autoTable } from "jspdf-autotable";
+import autoTable from "jspdf-autotable";
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend } from "./config";
+import { store } from "./store.js";
+import { fetchRemarksForTab, saveRemarkForLot } from "./embPrintRemarksService";
 
 /** ====== CONFIG ====== */
 const JOB_SHEET_ID = SPREADSHEET_IDS.JOBORDER;
@@ -18,26 +22,32 @@ const INDEX_RANGE = `${INDEX_SHEET_NAME}!A:AG`;
 // One big read to avoid 429s
 const CUTTING_BIG_RANGE = `${CUTTING_SHEET_NAME}!A1:ZZ400000`;
 
+// Cutting Scans Spreadsheet
+const CUTTING_SCANS_SHEET_ID = SPREADSHEET_IDS.CUTTING_SCANS || "1UU9P1IOjuUYpm3Ojx06V5L-r6K2QRb4mpFQmlGblgDA";
+const CUTTING_SCANS_RANGE = "CuttingScanss!A:C";
+
 // Canonical output columns (order)
 const OUTPUT_COLS = [
-  "Job Order No",
-  "Date",
+  "Lot No",
+  "Garment Type",
+  "Style",
   "Fabric",
   "Brand",
-  "Style",
-  "Party Name",
-  "Garment Type",
+  "Total Qty",
   "Section",
   "Season",
-  "Priority",
+  "Party Name",
   "Direct Stitching",
-  "Lot No",
+  "Job Order No",
+  "Date",
   "Image",
   "Days after PO issue",
-  "Total Qty",
   "Pending Shade",
   "Cutting Date",
+  "Cutting Scanned",
+  "Priority",
   "Remarks",
+  "💬 User Remarks",
 ];
 
 
@@ -110,7 +120,7 @@ function formatSavedAtToYMD(savedAt) {
   return `${day} ${monthName} ${year}`;
 }
 
-function daysAfter(poDateStr, cuttingDateVal) {
+function daysAfter(poDateStr, cuttingDateVal, isCuttingDone = false) {
   if (!poDateStr) return "";
 
   const parseDate = (val) => {
@@ -118,12 +128,45 @@ function daysAfter(poDateStr, cuttingDateVal) {
     if (val instanceof Date && !isNaN(val.getTime())) {
       return new Date(val.getFullYear(), val.getMonth(), val.getDate());
     }
+    if (typeof val === "number" && !isNaN(val)) {
+      if (val > 30000 && val < 70000) {
+        const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+        if (!isNaN(d.getTime())) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      }
+      const d = new Date(val);
+      if (!isNaN(d.getTime())) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
     const str = String(val).trim();
     if (!str) return null;
 
-    const ymdParts = str.split("-");
-    if (ymdParts.length === 3) {
-      const [y, m, d] = ymdParts.map((p) => parseInt(p, 10));
+    // DD MMM YYYY (e.g., "27 Aug 2025" or "27-Aug-2025")
+    const mmmMatch = str.match(/^(\d{1,2})[\s\-]+([A-Za-z]{3,9})[\s\-]+(\d{4})/);
+    if (mmmMatch) {
+      const day = parseInt(mmmMatch[1], 10);
+      const monthStr = mmmMatch[2].toLowerCase().slice(0, 3);
+      const year = parseInt(mmmMatch[3], 10);
+      const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+      const monthIdx = months.indexOf(monthStr);
+      if (monthIdx !== -1 && !isNaN(day) && !isNaN(year)) {
+        return new Date(year, monthIdx, day);
+      }
+    }
+
+    // YYYY-MM-DD or YYYY/MM/DD
+    const ymdMatch = str.match(/^(\d{4})[-\/\s](\d{1,2})[-\/\s](\d{1,2})/);
+    if (ymdMatch) {
+      const y = parseInt(ymdMatch[1], 10);
+      const m = parseInt(ymdMatch[2], 10);
+      const d = parseInt(ymdMatch[3], 10);
+      if (y && m && d) return new Date(y, m - 1, d);
+    }
+
+    // DD-MM-YYYY or DD/MM/YYYY
+    const dmyMatch = str.match(/^(\d{1,2})[-\/\s](\d{1,2})[-\/\s](\d{4})/);
+    if (dmyMatch) {
+      const d = parseInt(dmyMatch[1], 10);
+      const m = parseInt(dmyMatch[2], 10);
+      const y = parseInt(dmyMatch[3], 10);
       if (y && m && d) return new Date(y, m - 1, d);
     }
 
@@ -138,11 +181,12 @@ function daysAfter(poDateStr, cuttingDateVal) {
   if (!start) return "";
 
   let end = null;
-  if (cuttingDateVal) {
+  // If cutting is DONE for the lot and Cutting Date is available, calculate days from Cut Date - Job Date
+  if (isCuttingDone && cuttingDateVal) {
     end = parseDate(cuttingDateVal);
   }
 
-  // If cutting is NOT done for the lot, use Today's date
+  // If cutting is NOT done (or cutting date is missing), dynamically calculate days up to Today
   if (!end) {
     const now = new Date();
     end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -151,6 +195,47 @@ function daysAfter(poDateStr, cuttingDateVal) {
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
   const diff = Math.floor((end.getTime() - start.getTime()) / MS_PER_DAY);
   return Number.isFinite(diff) ? String(diff) : "";
+}
+
+function formatScannedDate(ts) {
+  if (!ts) return "";
+  const s = String(ts).trim();
+  if (!s) return "";
+
+  const slashParts = s.split(/[\s,T]+/)[0].split(/[-/]/);
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  if (slashParts.length === 3) {
+    let p1 = parseInt(slashParts[0], 10);
+    let p2 = parseInt(slashParts[1], 10);
+    let p3 = parseInt(slashParts[2], 10);
+
+    // YYYY-MM-DD
+    if (slashParts[0].length === 4) {
+      if (p2 >= 1 && p2 <= 12 && p3 >= 1 && p3 <= 31) {
+        return `${p3} ${monthNames[p2 - 1]} ${p1}`;
+      }
+    }
+    // M/D/YYYY (e.g. 7/16/2026)
+    if (slashParts[2].length === 4 && p1 <= 12 && p2 > 12) {
+      return `${p2} ${monthNames[p1 - 1]} ${p3}`;
+    }
+    // D/M/YYYY (e.g. 16/7/2026)
+    if (slashParts[2].length === 4 && p1 > 12 && p2 <= 12) {
+      return `${p1} ${monthNames[p2 - 1]} ${p3}`;
+    }
+    // Standard M/D/YYYY
+    if (slashParts[2].length === 4 && p1 >= 1 && p1 <= 12 && p2 >= 1 && p2 <= 31) {
+      return `${p2} ${monthNames[p1 - 1]} ${p3}`;
+    }
+  }
+
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    return `${d.getDate()} ${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+  }
+
+  return s;
 }
 
 function formatCancellationDate(ts) {
@@ -250,6 +335,8 @@ function convertValuesToObjects(values) {
     obj["Remarks 2"] = "";
     obj["Remarks 3"] = "";
     obj["Cutting Date"] = "";
+    obj["Cutting Scanned"] = "";
+    obj["Cutting Scanned Status"] = "";
     return obj;
   });
 }
@@ -892,6 +979,86 @@ export default function CuttingStatsReport() {
   const [selectedRemarks, setSelectedRemarks] = useState(new Set());
   const [viewImageSrc, setViewImageSrc] = useState(null);
 
+  // Remarks States & Realtime Synchronization
+  const [remarksMap, setRemarksMap] = useState({});
+  const [remarksModalOpen, setRemarksModalOpen] = useState(false);
+  const [selectedRemarksLot, setSelectedRemarksLot] = useState(null);
+  const [newRemarkInputText, setNewRemarkInputText] = useState("");
+  const [savingRemark, setSavingRemark] = useState(false);
+  const [manualRemarksFilter, setManualRemarksFilter] = useState("all");
+
+  // Fetch Cutting Remarks from Google Sheets & Subscribe to updates
+  useEffect(() => {
+    fetchRemarksForTab('CUTTING').then(map => {
+      if (map && typeof map === 'object') {
+        setRemarksMap(map);
+      }
+    });
+
+    const handleRemarkUpdated = (e) => {
+      if (e.detail && (e.detail.tabType === 'CUTTING' || !e.detail.tabType)) {
+        setRemarksMap(prev => ({
+          ...prev,
+          [e.detail.lotNumber]: e.detail.history
+        }));
+      }
+    };
+
+    window.addEventListener('emb_print_remark_updated', handleRemarkUpdated);
+    return () => {
+      window.removeEventListener('emb_print_remark_updated', handleRemarkUpdated);
+    };
+  }, []);
+
+  const handleOpenRemarksModal = (item) => {
+    setSelectedRemarksLot(item);
+    setNewRemarkInputText('');
+    setRemarksModalOpen(true);
+  };
+
+  const handleCloseRemarksModal = () => {
+    setRemarksModalOpen(false);
+    setSelectedRemarksLot(null);
+    setNewRemarkInputText('');
+  };
+
+  const handleSaveRemark = async () => {
+    if (!selectedRemarksLot || !newRemarkInputText.trim()) return;
+
+    try {
+      setSavingRemark(true);
+      const lotNumber = String(selectedRemarksLot["Lot No"] || selectedRemarksLot.lotNumber || '').trim();
+      const updatedHistory = await saveRemarkForLot({
+        tabType: 'CUTTING',
+        lotNumber: lotNumber,
+        partyName: selectedRemarksLot["Party Name"] || '',
+        fabric: selectedRemarksLot["Fabric"] || '',
+        style: selectedRemarksLot["Style"] || selectedRemarksLot["Garment Type"] || '',
+        remarkText: newRemarkInputText.trim()
+      });
+
+      if (updatedHistory) {
+        setRemarksMap(prev => ({
+          ...prev,
+          [lotNumber]: updatedHistory
+        }));
+      }
+
+      setNewRemarkInputText('');
+      setRemarksModalOpen(false);
+    } catch (err) {
+      console.error('Error saving remark:', err);
+      alert('Failed to save remark. Please try again.');
+    } finally {
+      setSavingRemark(false);
+    }
+  };
+
+  const distinctManualRemarks = useMemo(() => {
+    const list = Object.values(remarksMap).flat().map(r => r.text).filter(Boolean);
+    return Array.from(new Set(list));
+  }, [remarksMap]);
+
   const abortRef = useRef(null);
 
   const splitRemarks = (raw) =>
@@ -961,6 +1128,8 @@ export default function CuttingStatsReport() {
       splitRemarks(r.Remarks).forEach((t) => {
         if (norm(t).startsWith("cancel") || norm(t).includes("cancel")) {
           set.add("Cancel");
+        } else if (norm(t).includes("fabricissued") || norm(t) === "fabricissued") {
+          set.add("Fabric Issued");
         } else {
           set.add(t);
         }
@@ -1033,6 +1202,7 @@ export default function CuttingStatsReport() {
     setStartDate("");
     setEndDate("");
     setDaysFilter("all");
+    setManualRemarksFilter("all");
     clearRemarks();
   };
 
@@ -1064,14 +1234,37 @@ export default function CuttingStatsReport() {
     abortRef.current = ctrl;
 
     try {
-      const job = await fetchSheet(
-        {
+      const [job, idxRes, cuttingRes, fabricRes, scansRes] = await Promise.all([
+        fetchSheet({
           sheetId: JOB_SHEET_ID,
           range: JOB_RANGE,
           apiKey: API_KEY,
           signal: ctrl.signal,
-        }
-      );
+        }),
+        fetchSheet({
+          sheetId: BUDGET_SHEET_ID,
+          range: INDEX_RANGE,
+          apiKey: API_KEY,
+          signal: ctrl.signal,
+        }),
+        fetchSheet({
+          sheetId: BUDGET_SHEET_ID,
+          range: CUTTING_BIG_RANGE,
+          apiKey: API_KEY,
+          signal: ctrl.signal,
+        }),
+        store.getDailyFabricIssuanceReport("", "").catch((err) => {
+          console.warn("Fabric issuance fetch error:", err);
+          return null;
+        }),
+        fetchSheetDataFromBackend(CUTTING_SCANS_SHEET_ID, CUTTING_SCANS_RANGE)
+          .then(res => (res && res.ok && res.values && res.values.length > 0) ? res : fetchSheetDataFromBackend(CUTTING_SCANS_SHEET_ID, "CuttingScans!A:C"))
+          .catch(err => {
+            console.warn("Cutting scans fetch error:", err);
+            return { ok: false, values: [] };
+          }),
+      ]);
+
       let jobRows = convertValuesToObjects(job.values);
 
       const isCancel = (s) => {
@@ -1080,14 +1273,6 @@ export default function CuttingStatsReport() {
         return sn.startsWith("cancel") || sn.includes("cancel");
       };
 
-      const idxRes = await fetchSheet(
-        {
-          sheetId: BUDGET_SHEET_ID,
-          range: INDEX_RANGE,
-          apiKey: API_KEY,
-          signal: ctrl.signal,
-        }
-      );
       const idxValues = idxRes.values || [];
       const idxHeader = idxValues[0] || [];
       const indexMap = new Map();
@@ -1104,15 +1289,76 @@ export default function CuttingStatsReport() {
         if (entry) indexMap.set(entry.lot, entry);
       }
 
-      const cuttingRes = await fetchSheet(
-        {
-          sheetId: BUDGET_SHEET_ID,
-          range: CUTTING_BIG_RANGE,
-          apiKey: API_KEY,
-          signal: ctrl.signal,
-        }
-      );
       const bigCuttingValues = cuttingRes.values || [];
+
+      // Parse fabric issuance records
+      let fabricIssuances = [];
+      if (Array.isArray(fabricRes)) {
+        fabricIssuances = fabricRes;
+      } else if (fabricRes && Array.isArray(fabricRes.data)) {
+        fabricIssuances = fabricRes.data;
+      } else if (fabricRes && fabricRes.success && Array.isArray(fabricRes.data)) {
+        fabricIssuances = fabricRes.data;
+      }
+
+      const fabricIssuedMap = new Map();
+      fabricIssuances.forEach((item) => {
+        const rawLot = String(item.lotNumber || item.lotNo || item.lot || "").trim();
+        if (!rawLot) return;
+        const keyNorm = norm(rawLot);
+        const keyLower = rawLot.toLowerCase();
+        const rawDate = item.date || item.issueDate || item.createdAt || item.timestamp || "";
+        let formattedDate = "";
+        if (rawDate) {
+          if (/^\d{4}-\d{2}-\d{2}/.test(String(rawDate))) {
+            formattedDate = formatDateYMDToDDMMMYYYY(String(rawDate).slice(0, 10));
+          } else {
+            formattedDate = formatSavedAtToYMD(rawDate) || String(rawDate);
+          }
+        }
+        const dataObj = {
+          lotNumber: rawLot,
+          issueDate: formattedDate,
+          rawDate: rawDate,
+        };
+        if (!fabricIssuedMap.has(keyNorm)) fabricIssuedMap.set(keyNorm, dataObj);
+        if (!fabricIssuedMap.has(keyLower)) fabricIssuedMap.set(keyLower, dataObj);
+      });
+
+      // Parse cutting scans records
+      const cuttingScansMap = new Map();
+      const scansValues = scansRes?.values || [];
+      if (scansValues.length > 1) {
+        const sHeader = (scansValues[0] || []).map(h => normalizeKey(String(h || "")));
+        let tsIdx = sHeader.findIndex(h => h.includes("timestamp") || h.includes("time") || h.includes("date"));
+        let lotIdx = sHeader.findIndex(h => h.includes("lot") || h.includes("lotno") || h.includes("lotnumber"));
+        let statusIdx = sHeader.findIndex(h => h.includes("status"));
+
+        if (tsIdx === -1) tsIdx = 0;
+        if (lotIdx === -1) lotIdx = 1;
+        if (statusIdx === -1) statusIdx = 2;
+
+        for (let i = 1; i < scansValues.length; i++) {
+          const sRow = scansValues[i] || [];
+          const rawLot = String(sRow[lotIdx] || "").trim();
+          if (!rawLot) continue;
+          const rawTs = sRow[tsIdx] || "";
+          const rawStatus = sRow[statusIdx] || "";
+
+          let formattedDate = formatScannedDate(rawTs);
+
+          const scanObj = {
+            lotNumber: rawLot,
+            timestamp: rawTs,
+            scannedDate: formattedDate,
+            status: rawStatus
+          };
+
+          cuttingScansMap.set(norm(rawLot), scanObj);
+          cuttingScansMap.set(rawLot.toLowerCase(), scanObj);
+          cuttingScansMap.set(rawLot, scanObj);
+        }
+      }
 
       const lots = Array.from(
         new Set(jobRows.map((r) => String(r["Lot No"] || "").trim()).filter(Boolean))
@@ -1123,11 +1369,17 @@ export default function CuttingStatsReport() {
       for (const lot of lots) {
         const ix = indexMap.get(lot);
         if (!ix) {
+          const fabricInfo = fabricIssuedMap.get(norm(lot)) || fabricIssuedMap.get(lot.toLowerCase().trim());
+          const isFabricIssued = !!fabricInfo;
+          const issueDate = fabricInfo?.issueDate || "";
+
           lotToSummary.set(lot, {
             totalQty: 0,
             remarks: "",
             remarks2: "",
-            remarks3: lot ? "Fabric Issue Pending" : "",
+            remarks3: lot ? (isFabricIssued ? "Fabric Issued" : "Fabric Issue Pending") : "",
+            isCuttingDone: false,
+            fabricIssueDate: isFabricIssued ? issueDate : "",
             cuttingDate: "",
             cuttingTables: [],
             imageUrl: ""
@@ -1153,6 +1405,8 @@ export default function CuttingStatsReport() {
         let remarks2 = "";
         let remarks3 = "";
 
+        const isCuttingDone = pendingShadeKeys.size === 0 && totalQty > 0;
+
         if (pendingShadeKeys.size > 0) {
           remarks2 = "Colour Pending";
         } else {
@@ -1164,6 +1418,8 @@ export default function CuttingStatsReport() {
           remarks,
           remarks2,
           remarks3,
+          isCuttingDone,
+          fabricIssueDate: "",
           cuttingDate,
           cuttingTables,
           imageUrl: ix.imageUrl || ""
@@ -1182,11 +1438,18 @@ export default function CuttingStatsReport() {
             remarks: "",
             remarks2: "",
             remarks3: lot ? "Fabric Issue Pending" : "",
+            isCuttingDone: false,
+            fabricIssueDate: "",
             cuttingDate: "",
             cuttingTables: [],
             imageUrl: ""
           };
-        const days = daysAfter(r["PO Date"] || r["Date"], sum.cuttingDate);
+        const isDone = sum.isCuttingDone || sum.remarks === "Cutting Done";
+        const days = daysAfter(r["PO Date"] || r["Date"], sum.cuttingDate, isDone);
+
+        const scanInfo = cuttingScansMap.get(norm(lot)) || cuttingScansMap.get(lot.toLowerCase()) || cuttingScansMap.get(lot);
+        const cuttingScanned = scanInfo ? scanInfo.scannedDate : "";
+        const cuttingScannedStatus = scanInfo ? scanInfo.status : "";
 
         let mergedRemarks = "";
         if (isCancelled) {
@@ -1208,8 +1471,11 @@ export default function CuttingStatsReport() {
           "Total Qty": isCancelled ? (r["Total Qty"] || r.Quantity || sum.totalQty || 0) : sum.totalQty,
           "Pending Shade": "",
           "Cutting Date": sum.cuttingDate || "",
+          "Cutting Scanned": cuttingScanned || "",
+          "Cutting Scanned Status": cuttingScannedStatus || "",
           "Cutting Table": cuttingTablesDisplay,
           Remarks: mergedRemarks,
+          fabricIssueDate: sum.fabricIssueDate || "",
           imageUrl: sum.imageUrl || r.imageUrl || ""
         };
       });
@@ -1337,10 +1603,15 @@ export default function CuttingStatsReport() {
         const tokens = splitRemarks(r.Remarks);
         const tokenSet = new Set(tokens);
         const hasCancel = tokens.some(t => norm(t).startsWith("cancel") || norm(t).includes("cancel"));
+        const hasFabricIssued = tokens.some(t => norm(t).includes("fabricissued") || norm(t) === "fabricissued");
 
         let matchesAny = false;
         for (const sel of selected) {
           if (sel === "Cancel" && hasCancel) {
+            matchesAny = true;
+            break;
+          }
+          if (sel === "Fabric Issued" && hasFabricIssued) {
             matchesAny = true;
             break;
           }
@@ -1350,6 +1621,23 @@ export default function CuttingStatsReport() {
           }
         }
         if (!matchesAny) return false;
+      }
+
+      // Manual Remarks filter
+      if (manualRemarksFilter && manualRemarksFilter !== "all") {
+        const lot = String(r["Lot No"] || '').trim();
+        const lotRemarks = remarksMap[lot] || [];
+        const hasRemark = lotRemarks.length > 0 && Boolean(lotRemarks[lotRemarks.length - 1].text);
+        const latestText = hasRemark ? lotRemarks[lotRemarks.length - 1].text : '';
+
+        if (manualRemarksFilter === 'WITH_REMARKS') {
+          if (!hasRemark) return false;
+        } else if (manualRemarksFilter === 'WITHOUT_REMARKS') {
+          if (hasRemark) return false;
+        } else {
+          const match = latestText === manualRemarksFilter || lotRemarks.some(rem => rem.text === manualRemarksFilter);
+          if (!match) return false;
+        }
       }
 
       return true;
@@ -1371,6 +1659,8 @@ export default function CuttingStatsReport() {
     startDate,
     endDate,
     selectedRemarks,
+    manualRemarksFilter,
+    remarksMap
   ]);
 
   const redZoneCount = useMemo(() => {
@@ -1394,217 +1684,1125 @@ export default function CuttingStatsReport() {
     return sourceRows.map((r) => {
       const lot = String(r["Lot No"] || "").trim();
       const pending = (pendingListByLot[lot] || []).join(", ");
+      const lotRemarks = remarksMap[lot] || [];
+      const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1] : null;
       const obj = {};
       OUTPUT_COLS.forEach((col) => {
         if (col === "Pending Shade") obj[col] = pending;
         else if (col === "Image") obj[col] = r.imageUrl || "";
+        else if (col === "💬 User Remarks") obj[col] = latestRemark ? latestRemark.text : "—";
         else obj[col] = r[col] ?? "";
       });
       return obj;
     });
   };
 
-  const handleExportExcel = () => {
-    const exportRows = buildExportRows(filtered);
-    const ws = XLSX.utils.json_to_sheet(exportRows, { header: OUTPUT_COLS });
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Cutting Stats");
-    XLSX.writeFile(wb, `Cutting_Stats_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  const handleExportExcel = async () => {
+    try {
+      setLoading(true);
+      const exportRows = buildExportRows(filtered);
+      if (exportRows.length === 0) {
+        alert("No data available to export.");
+        return;
+      }
+
+      const now = new Date();
+      const reportDateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      const totalLots = exportRows.length;
+      let totalQty = 0;
+      let mohitCount = 0;
+      let highPriorityCount = 0;
+      let redZoneLots = 0;
+      let redZoneQty = 0;
+      let normalLots = 0;
+      let normalQty = 0;
+      const parties = new Set();
+      const garmentAnalysis = {};
+      const partyAnalysis = {};
+      const sectionAnalysis = {};
+
+      exportRows.forEach(row => {
+        const qty = parseInt(row["Total Qty"], 10) || 0;
+        totalQty += qty;
+
+        const pn = (row["Party Name"] || "").toString().trim();
+        if (pn) {
+          parties.add(pn);
+          if (pn.toLowerCase().includes("mohit")) mohitCount++;
+          partyAnalysis[pn] = (partyAnalysis[pn] || { lots: 0, qty: 0 });
+          partyAnalysis[pn].lots += 1;
+          partyAnalysis[pn].qty += qty;
+        }
+
+        const isRepeated = (row["Priority"] || "").toString().toUpperCase().includes("REPEATED_LOT");
+        if (isRepeated) highPriorityCount++;
+
+        const days = parseFloat(row["Days after PO issue"]);
+        if (!isNaN(days) && days > 2) {
+          redZoneLots++;
+          redZoneQty += qty;
+        } else {
+          normalLots++;
+          normalQty += qty;
+        }
+
+        const garment = (row["Garment Type"] || "Unassigned").toString().trim() || "Unassigned";
+        garmentAnalysis[garment] = (garmentAnalysis[garment] || { lots: 0, qty: 0 });
+        garmentAnalysis[garment].lots += 1;
+        garmentAnalysis[garment].qty += qty;
+
+        const section = (row["Section"] || "Unassigned").toString().trim() || "Unassigned";
+        sectionAnalysis[section] = (sectionAnalysis[section] || { lots: 0, qty: 0 });
+        sectionAnalysis[section].lots += 1;
+        sectionAnalysis[section].qty += qty;
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = "Factory Suite Pro";
+      workbook.created = now;
+
+      // Styling Helpers
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'CBD5E1' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'CBD5E1' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      const headerBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: '0F172A' } },
+        bottom: { style: 'medium', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: '0F172A' } }
+      };
+
+      const totalBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'double', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      // ==========================================
+      // SHEET 1: CUTTING PRODUCTION STATS
+      // ==========================================
+      const ws1 = workbook.addWorksheet("Cutting Stats", {
+        views: [{ showGridLines: true, state: 'frozen', xSplit: 0, ySplit: 6 }]
+      });
+
+      const cols1 = [
+        { header: "Sr.No", key: "sr", width: 8 },
+        { header: "Lot No", key: "lotNo", width: 16 },
+        { header: "Garment Type", key: "garmentType", width: 18 },
+        { header: "Style", key: "style", width: 16 },
+        { header: "Fabric", key: "fabric", width: 22 },
+        { header: "Brand", key: "brand", width: 16 },
+        { header: "Total Qty", key: "totalQty", width: 14 },
+        { header: "Section", key: "section", width: 14 },
+        { header: "Season", key: "season", width: 12 },
+        { header: "Party Name", key: "partyName", width: 20 },
+        { header: "Direct Stitching", key: "directStitching", width: 16 },
+        { header: "Job Order No", key: "jobOrderNo", width: 16 },
+        { header: "Date", key: "date", width: 14 },
+        { header: "Days after PO issue", key: "daysAfterPO", width: 18 },
+        { header: "Pending Shade", key: "pendingShade", width: 24 },
+        { header: "Cutting Date", key: "cuttingDate", width: 16 },
+        { header: "Cutting Scanned", key: "cuttingScanned", width: 18 },
+        { header: "Priority", key: "priority", width: 16 },
+        { header: "Remarks", key: "remarks", width: 32 },
+        { header: "Manual Remarks", key: "userRemarks", width: 28 }
+      ];
+
+      const numCols1 = cols1.length;
+      ws1.columns = cols1;
+
+      // Row 1: Title Banner
+      const titleRow1 = ws1.getRow(1);
+      titleRow1.values = ["FACTORY SUITE PRO - CUTTING PRODUCTION STATS REPORT"];
+      ws1.mergeCells(1, 1, 1, numCols1);
+      titleRow1.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F4C81" } };
+      titleRow1.alignment = { vertical: "middle", horizontal: "center" };
+      titleRow1.height = 34;
+
+      // Row 2: Metadata Banner
+      const metaRow1 = ws1.getRow(2);
+      metaRow1.values = [`Exported on: ${reportDateStr}  |  Total Lots: ${totalLots}  |  Total Quantity: ${totalQty.toLocaleString()}  |  Unique Parties: ${parties.size}  |  MH Lots: ${mohitCount}  |  Repeated Lots: ${highPriorityCount}`];
+      ws1.mergeCells(2, 1, 2, numCols1);
+      metaRow1.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E293B" } };
+      metaRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      metaRow1.alignment = { vertical: "middle", horizontal: "center" };
+      metaRow1.height = 22;
+
+      // Row 3: Blank Row
+      const blankRow3 = ws1.getRow(3);
+      blankRow3.values = [];
+      blankRow3.height = 6;
+
+      // Row 4: KPI Summary Row
+      const kpiRow1 = ws1.getRow(4);
+      kpiRow1.values = [`KPI SUMMARY  |  TOTAL LOTS: ${totalLots}  |  TOTAL QTY: ${totalQty.toLocaleString()}  |  NORMAL (<=2d): ${normalLots} (${totalLots > 0 ? Math.round((normalLots / totalLots) * 100) : 0}%)  |  RED ZONE (>2d): ${redZoneLots} (${totalLots > 0 ? Math.round((redZoneLots / totalLots) * 100) : 0}%)  |  REPEATED LOTS: ${highPriorityCount}`];
+      ws1.mergeCells(4, 1, 4, numCols1);
+      kpiRow1.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FF0369A1" } };
+      kpiRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0F2FE" } };
+      kpiRow1.alignment = { vertical: "middle", horizontal: "center" };
+      kpiRow1.height = 24;
+
+      // Row 5: Blank Row
+      const blankRow5 = ws1.getRow(5);
+      blankRow5.values = [];
+      blankRow5.height = 6;
+
+      // Row 6: Table Headers Row
+      const headerRow1 = ws1.getRow(6);
+      headerRow1.values = cols1.map(c => c.header);
+      headerRow1.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      headerRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F4C81" } };
+      headerRow1.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      headerRow1.height = 30;
+      for (let c = 1; c <= numCols1; c++) {
+        headerRow1.getCell(c).border = headerBorder;
+      }
+
+      // Add Data Rows
+      let rIdx1 = 7;
+      exportRows.forEach((row, index) => {
+        const lotNo = (row["Lot No"] || "").toString().trim();
+        const partyRaw = (row["Party Name"] || "").toString().trim();
+        const partyDisplay = partyRaw.toLowerCase().includes("mohit") ? "MH" : partyRaw;
+        const totalQtyVal = parseInt(row["Total Qty"], 10) || 0;
+        const days = parseFloat(row["Days after PO issue"]);
+        const isRepeated = (row["Priority"] || "").toString().toUpperCase().includes("REPEATED_LOT");
+        const lotRemarks = remarksMap[lotNo] || [];
+        const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1] : null;
+
+        const rowValues = [
+          index + 1,
+          lotNo || "—",
+          row["Garment Type"] || "—",
+          row["Style"] || "—",
+          row["Fabric"] || "—",
+          row["Brand"] || "—",
+          totalQtyVal,
+          row["Section"] || "—",
+          row["Season"] || "—",
+          partyDisplay || "—",
+          row["Direct Stitching"] ? (String(row["Direct Stitching"]).toLowerCase() === "yes" ? "Yes" : "No") : "No",
+          row["Job Order No"] || "—",
+          row["Date"] || "—",
+          !isNaN(days) ? days : "—",
+          row["Pending Shade"] || "—",
+          row["Cutting Date"] || "—",
+          row["Cutting Scanned"] || "—",
+          row["Priority"] || "—",
+          row["Remarks"] || "—",
+          latestRemark ? latestRemark.text : (row["💬 User Remarks"] || "—")
+        ];
+
+        const dataRow = ws1.getRow(rIdx1);
+        dataRow.values = rowValues;
+        dataRow.height = 24;
+
+        const isEven = index % 2 === 0;
+        const defaultBg = isEven ? "FFFFFFFF" : "FFF8FAFC";
+
+        for (let c = 1; c <= numCols1; c++) {
+          const cell = dataRow.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: defaultBg } };
+
+          // Lot No Bold
+          if (c === 2) {
+            cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF0F172A" } };
+          }
+          // Total Qty format
+          if (c === 7) {
+            cell.numFmt = "#,##0";
+            cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF0F172A" } };
+          }
+          // Days after PO issue highlight
+          if (c === 14 && !isNaN(days)) {
+            cell.font = { name: "Segoe UI", size: 10, bold: true };
+            if (days > 2) {
+              cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+              cell.font.color = { argb: "FF991B1B" };
+            } else {
+              cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
+              cell.font.color = { argb: "FF166534" };
+            }
+          }
+          // Priority highlight
+          if (c === 18 && isRepeated) {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+            cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF92400E" } };
+          }
+        }
+
+        rIdx1++;
+      });
+
+      // Total Row for Sheet 1
+      const totalRow1 = ws1.getRow(rIdx1);
+      const totalValues1 = new Array(numCols1).fill("");
+      totalValues1[0] = "TOTAL";
+      totalValues1[6] = totalQty;
+      totalValues1[numCols1 - 1] = `${totalLots} Lots`;
+      totalRow1.values = totalValues1;
+      totalRow1.height = 26;
+
+      for (let c = 1; c <= numCols1; c++) {
+        const cell = totalRow1.getCell(c);
+        cell.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FF0F172A" } };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        cell.border = totalBorder;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+        if (c === 7) cell.numFmt = "#,##0";
+      }
+
+      // ==========================================
+      // SHEET 2: CUTTING BREAKDOWN & SUMMARY
+      // ==========================================
+      const ws2 = workbook.addWorksheet("Cutting Summary", {
+        views: [{ showGridLines: true }]
+      });
+
+      ws2.columns = [
+        { width: 32 },
+        { width: 18 },
+        { width: 18 },
+        { width: 22 }
+      ];
+
+      // Sheet 2 Title Banner
+      const titleRow2 = ws2.getRow(1);
+      titleRow2.values = ["FACTORY SUITE PRO - CUTTING EXECUTIVE SUMMARY & BREAKDOWN"];
+      ws2.mergeCells(1, 1, 1, 4);
+      titleRow2.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleRow2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+      titleRow2.alignment = { vertical: "middle", horizontal: "center" };
+      titleRow2.height = 32;
+
+      const subRow2 = ws2.getRow(2);
+      subRow2.values = [`Report Date: ${reportDateStr}  |  Total Lots: ${totalLots}  |  Total Quantity: ${totalQty.toLocaleString()}`];
+      ws2.mergeCells(2, 1, 2, 4);
+      subRow2.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E293B" } };
+      subRow2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      subRow2.alignment = { vertical: "middle", horizontal: "center" };
+      subRow2.height = 20;
+
+      let r2 = 4;
+
+      // Section 1: Garment Type Breakdown
+      const gTitle = ws2.getRow(r2);
+      gTitle.values = ["1. GARMENT TYPE BREAKDOWN"];
+      ws2.mergeCells(r2, 1, r2, 4);
+      gTitle.font = { name: "Segoe UI", size: 10.5, bold: true, color: { argb: "FFFFFFFF" } };
+      gTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+      gTitle.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      gTitle.height = 24;
+      r2++;
+
+      const gHeaders = ws2.getRow(r2);
+      gHeaders.values = ["Garment Type", "Total Lots", "Percentage (%)", "Total Quantity"];
+      gHeaders.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+      gHeaders.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF14B8A6" } };
+      gHeaders.alignment = { vertical: "middle", horizontal: "center" };
+      gHeaders.height = 24;
+      for (let c = 1; c <= 4; c++) gHeaders.getCell(c).border = headerBorder;
+      r2++;
+
+      const garmentArr = Object.entries(garmentAnalysis).map(([g, d]) => ({
+        name: g,
+        lots: d.lots,
+        pct: totalLots > 0 ? Math.round((d.lots / totalLots) * 100) : 0,
+        qty: d.qty
+      })).sort((a, b) => b.lots - a.lots);
+
+      garmentArr.forEach((g, idx) => {
+        const row = ws2.getRow(r2);
+        row.values = [g.name, g.lots, `${g.pct}%`, g.qty];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = "#,##0";
+        }
+        r2++;
+      });
+
+      const totalGRow = ws2.getRow(r2);
+      totalGRow.values = ["TOTAL", totalLots, "100%", totalQty];
+      totalGRow.height = 24;
+      for (let c = 1; c <= 4; c++) {
+        const cell = totalGRow.getCell(c);
+        cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF115E59" } };
+        cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+        cell.border = totalBorder;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCCFBF1" } };
+        if (c === 4) cell.numFmt = "#,##0";
+      }
+      r2 += 2;
+
+      // Section 2: Days Aging Breakdown
+      const aTitle = ws2.getRow(r2);
+      aTitle.values = ["2. DAYS AFTER PO ISSUE (AGING & RED ZONE ANALYSIS)"];
+      ws2.mergeCells(r2, 1, r2, 4);
+      aTitle.font = { name: "Segoe UI", size: 10.5, bold: true, color: { argb: "FFFFFFFF" } };
+      aTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFB45309" } };
+      aTitle.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      aTitle.height = 24;
+      r2++;
+
+      const aHeaders = ws2.getRow(r2);
+      aHeaders.values = ["Aging Category", "Total Lots", "Percentage (%)", "Total Quantity"];
+      aHeaders.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+      aHeaders.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF59E0B" } };
+      aHeaders.alignment = { vertical: "middle", horizontal: "center" };
+      aHeaders.height = 24;
+      for (let c = 1; c <= 4; c++) aHeaders.getCell(c).border = headerBorder;
+      r2++;
+
+      const agingData = [
+        { name: "Normal (<= 2 Days)", lots: normalLots, pct: totalLots > 0 ? Math.round((normalLots / totalLots) * 100) : 0, qty: normalQty, bg: "FFDCFCE7", fg: "FF166534" },
+        { name: "Red Zone (> 2 Days)", lots: redZoneLots, pct: totalLots > 0 ? Math.round((redZoneLots / totalLots) * 100) : 0, qty: redZoneQty, bg: "FFFEE2E2", fg: "FF991B1B" }
+      ];
+
+      agingData.forEach(a => {
+        const row = ws2.getRow(r2);
+        row.values = [a.name, a.lots, `${a.pct}%`, a.qty];
+        row.height = 22;
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: a.fg } };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: a.bg } };
+          if (c === 4) cell.numFmt = "#,##0";
+        }
+        r2++;
+      });
+
+      const totalARow = ws2.getRow(r2);
+      totalARow.values = ["TOTAL", totalLots, "100%", totalQty];
+      totalARow.height = 24;
+      for (let c = 1; c <= 4; c++) {
+        const cell = totalARow.getCell(c);
+        cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF78350F" } };
+        cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+        cell.border = totalBorder;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+        if (c === 4) cell.numFmt = "#,##0";
+      }
+      r2 += 2;
+
+      // Section 3: Party Name Breakdown
+      const pTitle = ws2.getRow(r2);
+      pTitle.values = ["3. PARTY-WISE PRODUCTION SUMMARY"];
+      ws2.mergeCells(r2, 1, r2, 4);
+      pTitle.font = { name: "Segoe UI", size: 10.5, bold: true, color: { argb: "FFFFFFFF" } };
+      pTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E40AF" } };
+      pTitle.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      pTitle.height = 24;
+      r2++;
+
+      const pHeaders = ws2.getRow(r2);
+      pHeaders.values = ["Party Name", "Total Lots", "Percentage (%)", "Total Quantity"];
+      pHeaders.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FFFFFFFF" } };
+      pHeaders.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF3B82F6" } };
+      pHeaders.alignment = { vertical: "middle", horizontal: "center" };
+      pHeaders.height = 24;
+      for (let c = 1; c <= 4; c++) pHeaders.getCell(c).border = headerBorder;
+      r2++;
+
+      const partyArr = Object.entries(partyAnalysis).map(([p, d]) => ({
+        name: p,
+        lots: d.lots,
+        pct: totalLots > 0 ? Math.round((d.lots / totalLots) * 100) : 0,
+        qty: d.qty
+      })).sort((a, b) => b.lots - a.lots);
+
+      partyArr.forEach((p, idx) => {
+        const row = ws2.getRow(r2);
+        row.values = [p.name, p.lots, `${p.pct}%`, p.qty];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+          if (c === 4) cell.numFmt = "#,##0";
+        }
+        r2++;
+      });
+
+      const totalPRow = ws2.getRow(r2);
+      totalPRow.values = ["TOTAL", totalLots, "100%", totalQty];
+      totalPRow.height = 24;
+      for (let c = 1; c <= 4; c++) {
+        const cell = totalPRow.getCell(c);
+        cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E3A8A" } };
+        cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+        cell.border = totalBorder;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDBEAFE" } };
+        if (c === 4) cell.numFmt = "#,##0";
+      }
+
+      // ==========================================
+      // SHEET 3: APPLIED FILTERS (AUDIT SHEET)
+      // ==========================================
+      const ws3 = workbook.addWorksheet("Applied Filters", {
+        views: [{ showGridLines: true }]
+      });
+      ws3.columns = [{ width: 28 }, { width: 65 }];
+
+      const fTitle = ws3.getRow(1);
+      fTitle.values = ["REPORT FILTERS & AUDIT PARAMETERS"];
+      ws3.mergeCells(1, 1, 1, 2);
+      fTitle.font = { name: "Segoe UI", size: 12, bold: true, color: { argb: "FFFFFFFF" } };
+      fTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF334155" } };
+      fTitle.alignment = { vertical: "middle", horizontal: "center" };
+      fTitle.height = 28;
+
+      const fHead = ws3.getRow(2);
+      fHead.values = ["Filter Parameter", "Selected Value / Criteria"];
+      fHead.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      fHead.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF475569" } };
+      fHead.alignment = { vertical: "middle", horizontal: "center" };
+      fHead.height = 24;
+      fHead.getCell(1).border = headerBorder;
+      fHead.getCell(2).border = headerBorder;
+
+      const filterAudit = [
+        ["Export Timestamp", reportDateStr],
+        ["Financial Year", financialYearFilter || "All"],
+        ["Date Range", startDate || endDate ? `${startDate || ""} to ${endDate || ""}` : "All"],
+        ["Lot Filter", lotFilter || "All"],
+        ["Party Filter", Array.isArray(partyFilter) && partyFilter.length > 0 ? partyFilter.join(", ") : (partyFilter || "All")],
+        ["Garment Filter", Array.isArray(garmentFilter) && garmentFilter.length > 0 ? garmentFilter.join(", ") : (garmentFilter || "All")],
+        ["Season Filter", Array.isArray(seasonFilter) && seasonFilter.length > 0 ? seasonFilter.join(", ") : (seasonFilter || "All")],
+        ["Section Filter", Array.isArray(sectionFilter) && sectionFilter.length > 0 ? sectionFilter.join(", ") : (sectionFilter || "All")],
+        ["Brand Filter", Array.isArray(brandFilter) && brandFilter.length > 0 ? brandFilter.join(", ") : (brandFilter || "All")],
+        ["Style Filter", Array.isArray(styleFilter) && styleFilter.length > 0 ? styleFilter.join(", ") : (styleFilter || "All")],
+        ["Fabric Filter", Array.isArray(fabricFilter) && fabricFilter.length > 0 ? fabricFilter.join(", ") : (fabricFilter || "All")],
+        ["Days Filter", daysFilter || "All"],
+        ["Priority Filter", priorityFilter || "All"],
+        ["Manual Remarks Filter", manualRemarksFilter || "All"]
+      ];
+
+      filterAudit.forEach(([param, val], idx) => {
+        const row = ws3.getRow(idx + 3);
+        row.values = [param, val];
+        row.height = 22;
+        const bg = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+        for (let c = 1; c <= 2; c++) {
+          const cell = row.getCell(c);
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" }, bold: c === 1 };
+          cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center", indent: c === 1 ? 1 : 0 };
+          cell.border = thinBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+        }
+      });
+
+      const fileName = `Cutting_Stats_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      saveAs(blob, `${fileName}.xlsx`);
+    } catch (err) {
+      console.error("Error exporting Excel:", err);
+      alert(`Failed to export Excel: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleExportPDF = () => {
-    const exportRows = buildExportRows(filtered);
-    const HEADER_ORDER = [
-      "Job Order No", "Date", "Lot No", "Fabric", "Brand", "Style",
-      "Garment Type", "Party Name", "Section", "Season", "Direct Stitching",
-      "Days after PO issue", "Total Qty", "Pending Shade", "Cutting Date", "Remarks"
-    ];
-    const finalHeaders = HEADER_ORDER.filter(h => OUTPUT_COLS.includes(h));
-
-    // Summary stats
-    let totalQty = 0;
-    let mohitCount = 0;
-    let highPriorityCount = 0;
-    const parties = new Set();
-    exportRows.forEach(row => {
-      totalQty += parseInt(row["Total Qty"]) || 0;
-      const pn = (row["Party Name"] || "").toString().trim();
-      if (pn) {
-        parties.add(pn);
-        if (pn.toLowerCase().includes("mohit")) mohitCount++;
+    try {
+      const exportRows = buildExportRows(filtered);
+      if (!exportRows || exportRows.length === 0) {
+        alert("No data available to export.");
+        return;
       }
-      if ((row["Priority"] || "").toString().toUpperCase().includes("REPEATED_LOT")) {
-        highPriorityCount++;
-      }
-    });
 
-    const generatedDate = new Date().toLocaleString("en-IN", {
-      weekday: "short", year: "numeric", month: "short",
-      day: "numeric", hour: "2-digit", minute: "2-digit"
-    });
+      const totalLots = exportRows.length;
+      let totalQty = 0;
+      let normalLots = 0;
+      let redZoneLots = 0;
+      let highPriorityCount = 0;
 
-    // Build remarks badges HTML
-    const buildRemarksBadges = (rawRemarks) => {
-      if (!rawRemarks) return "";
-      const parts = String(rawRemarks).split("|")
-        .map(p => p.trim())
-        .filter(p => p && !p.includes("undefined"));
-      const seen = new Set();
-      const unique = [];
-      parts.forEach(p => {
-        const k = p.toLowerCase();
-        if (!seen.has(k)) { seen.add(k); unique.push(p); }
-      });
-      return unique.map(part => {
-        let cls = "badge-default";
-        if (/done|completed|finished/i.test(part)) cls = "badge-done";
-        else if (/cancel/i.test(part)) cls = "badge-cancel";
-        else if (/issue|problem|error|fabric/i.test(part)) cls = "badge-issue";
-        else if (/pending|waiting|hold/i.test(part)) cls = "badge-pending";
-        else if (/cutting/i.test(part)) cls = "badge-cutting";
-        return `<span class="badge ${cls}">${part}</span>`;
-      }).join("");
-    };
+      const garmentMap = {};
+      const partyMap = {};
+      const sectionMap = {};
 
-    // Build table rows
-    const tableRowsHtml = exportRows.map((row, i) => {
-      const isRepeated = (row["Priority"] || "").toString().toUpperCase().includes("REPEATED_LOT");
-      const partyRaw = (row["Party Name"] || "").toString().trim();
-      const partyDisplay = partyRaw.toLowerCase().includes("mohit") ? "MH" : partyRaw;
-      const lotNo = (row["Lot No"] || "").toString().trim();
-      const pending = (pendingListByLot[lotNo] || []).join(", ");
+      exportRows.forEach(row => {
+        const qty = parseInt(row["Total Qty"], 10) || 0;
+        totalQty += qty;
 
-      const cells = finalHeaders.map(h => {
-        if (h === "Lot No") {
-          const star = isRepeated ? `<span class="star">&#9733;</span> ` : "";
-          return `<td class="lot-cell">${star}<strong style="color:#dc2626">${lotNo}</strong></td>`;
+        const days = parseFloat(row["Days after PO issue"]);
+        if (!isNaN(days)) {
+          if (days > 2) redZoneLots++;
+          else normalLots++;
         }
-        if (h === "Party Name") return `<td>${partyDisplay}</td>`;
-        if (h === "Total Qty") return `<td><strong>${fmtNum(row[h])}</strong></td>`;
-        if (h === "Pending Shade") return `<td class="shade-cell">${pending}</td>`;
-        if (h === "Remarks") return `<td class="remarks-cell">${buildRemarksBadges(row[h])}</td>`;
-        const val = String(row[h] ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        return `<td>${val}</td>`;
-      }).join("");
 
-      return `<tr class="${i % 2 === 1 ? "alt-row" : ""}">${cells}</tr>`;
-    }).join("");
+        const isRepeated = (row["Priority"] || "").toString().toUpperCase().includes("REPEATED_LOT");
+        if (isRepeated) highPriorityCount++;
 
-    const headerRowHtml = finalHeaders.map(h => `<th>${h}</th>`).join("");
+        // Garment grouping
+        const gName = (row["Garment Type"] || "Unspecified").toString().trim() || "Unspecified";
+        if (!garmentMap[gName]) garmentMap[gName] = { lots: 0, qty: 0 };
+        garmentMap[gName].lots += 1;
+        garmentMap[gName].qty += qty;
 
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<title>Cutting Report ${todayYMD()}</title>
-<style>
-@page { size: A3 landscape; margin: 10mm; }
-*{ box-sizing:border-box; margin:0; padding:0; }
-body{ font-family:'Times New Roman',Times,serif; font-size:8.5pt; color:#000; background:#fff; }
+        // Party grouping
+        let pName = (row["Party Name"] || "Unassigned").toString().trim() || "Unassigned";
+        if (pName.toLowerCase().includes("mohit")) pName = "MH (Mohit Hosiery)";
+        if (!partyMap[pName]) partyMap[pName] = { lots: 0, qty: 0 };
+        partyMap[pName].lots += 1;
+        partyMap[pName].qty += qty;
 
-.report-header{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
-.report-title{ font-size:15pt; font-weight:bold; color:#1e2950; }
-.report-date{ font-size:7.5pt; color:#475569; margin-top:2px; }
+        // Section grouping
+        const sName = (row["Section"] || "Unassigned").toString().trim() || "Unassigned";
+        if (!sectionMap[sName]) sectionMap[sName] = { lots: 0, qty: 0 };
+        sectionMap[sName].lots += 1;
+        sectionMap[sName].qty += qty;
+      });
 
-.summary-box{ display:flex; gap:24px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:5px; padding:7px 14px; margin-bottom:7px; flex-wrap:wrap; align-items:center; }
-.summary-item{ display:flex; flex-direction:column; }
-.summary-label{ font-size:6.5pt; color:#64748b; text-transform:uppercase; letter-spacing:0.3px; }
-.summary-value{ font-size:12pt; font-weight:bold; color:#1e40af; line-height:1.2; }
-.legend{ margin-left:auto; font-size:7pt; color:#64748b; display:flex; align-items:center; gap:4px; }
-.star{ color:#f59e0b; font-size:10pt; }
+      const sortedGarments = Object.keys(garmentMap).map(name => ({
+        name,
+        lots: garmentMap[name].lots,
+        qty: garmentMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
 
-table{ width:100%; border-collapse:collapse; table-layout:fixed; }
-thead{ display:table-header-group; }
-tr{ page-break-inside:avoid; }
+      const sortedParties = Object.keys(partyMap).map(name => ({
+        name,
+        lots: partyMap[name].lots,
+        qty: partyMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
 
-th{ background:#4f46e5; color:#fff; font-size:7pt; font-weight:bold; padding:5px 2px; text-align:center; border:0.4px solid #a5b4fc; word-break:break-word; }
-td{ font-size:7.5pt; padding:3px 2px; text-align:center; vertical-align:middle; border:0.4px solid #cbd5e1; word-break:break-word; }
-tr.alt-row td{ background:#f8fafc; }
+      const sortedSections = Object.keys(sectionMap).map(name => ({
+        name,
+        lots: sectionMap[name].lots,
+        qty: sectionMap[name].qty
+      })).sort((a, b) => b.qty - a.qty);
 
-th:nth-child(1), td:nth-child(1) { width:42px; }
-th:nth-child(2), td:nth-child(2) { width:58px; }
-th:nth-child(3), td:nth-child(3) { width:52px; }
-th:nth-child(4), td:nth-child(4) { width:80px; }
-th:nth-child(5), td:nth-child(5) { width:78px; }
-th:nth-child(6), td:nth-child(6) { width:86px; }
-th:nth-child(7), td:nth-child(7) { width:70px; }
-th:nth-child(8), td:nth-child(8) { width:32px; }
-th:nth-child(9), td:nth-child(9) { width:42px; }
-th:nth-child(10),td:nth-child(10){ width:46px; }
-th:nth-child(11),td:nth-child(11){ width:50px; }
-th:nth-child(12),td:nth-child(12){ width:44px; }
-th:nth-child(13),td:nth-child(13){ width:44px; }
-th:nth-child(14),td:nth-child(14){ width:128px; }
-th:nth-child(15),td:nth-child(15){ width:66px; }
-th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
+      // Create PDF in A3 Landscape
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "pt",
+        format: "a3"
+      });
 
-.lot-cell{ vertical-align:middle; }
-.shade-cell{ font-size:6.5pt; color:#b45309; text-align:left; padding:3px 3px; }
-.remarks-cell{ vertical-align:top; text-align:left; padding:3px 3px; }
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
 
-.badge{ display:inline-block; font-size:6pt; font-weight:bold; padding:1px 3px; border-radius:3px; margin:1px; white-space:nowrap; }
-.badge-done   { background:#dcfce7; color:#166534; }
-.badge-cancel { background:#fee2e2; color:#991b1b; font-weight:bold; }
-.badge-issue  { background:#fee2e2; color:#991b1b; }
-.badge-pending{ background:#fef9c3; color:#854d0e; }
-.badge-cutting{ background:#dbeafe; color:#1e40af; }
-.badge-default{ background:#f1f5f9; color:#334155; }
+      // 1. Top Header Banner
+      doc.setFillColor(15, 23, 42); // Dark Navy #0F172A
+      doc.rect(15, 12, pageW - 30, 48, 'F');
 
-.footer{ margin-top:5px; display:flex; justify-content:space-between; font-size:6.5pt; color:#94a3b8; border-top:0.4px solid #cbd5e1; padding-top:3px; }
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text("FACTORY SUITE PRO - CUTTING DEPARTMENT REPORT", pageW / 2, 30, { align: 'center' });
 
-@media print{
-  .no-print{ display:none !important; }
-  body{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-}
-.print-btn{ display:inline-flex; align-items:center; gap:6px; padding:8px 18px; background:#4f46e5; color:#fff; border:none; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer; margin-bottom:10px; }
-.print-btn:hover{ background:#4338ca; }
-</style>
-</head>
-<body>
-<div class="no-print" style="padding:10px;">
-  <button class="print-btn" onclick="window.print()">&#128424; Print / Save as PDF</button>
-  <span style="font-size:11px;color:#64748b;margin-left:8px;">
-    In print dialog &rarr; <strong>Destination: Save as PDF</strong> &rarr; Paper: A3 &rarr; Layout: Landscape
-  </span>
-</div>
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(199, 210, 254);
+      const subText = `Total Lots: ${totalLots}   |   Total Qty: ${totalQty.toLocaleString()} Pcs   |   Normal (<=2d): ${normalLots}   |   Red Zone (>2d): ${redZoneLots}   |   Repeated Lots: ${highPriorityCount}   |   Parties: ${sortedParties.length}`;
+      doc.text(subText, pageW / 2, 48, { align: 'center' });
 
-<div class="report-header">
-  <div>
-    <div class="report-title">Cutting Report</div>
-    <div class="report-date">Generated: ${generatedDate}</div>
-  </div>
-  <div style="font-size:7.5pt;color:#475569;text-align:right;">Total Rows: ${exportRows.length}</div>
-</div>
+      // 2. Filter Banner
+      doc.setFillColor(241, 245, 249);
+      doc.rect(15, 63, pageW - 30, 16, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(0, 0, 0);
+      const filterSummary = `Filters: Financial Year: ${financialYearFilter || 'All'} | Garments: ${Array.isArray(garmentFilter) && garmentFilter.length ? garmentFilter.join(', ') : (garmentFilter || 'All')} | Fabrics: ${Array.isArray(fabricFilter) && fabricFilter.length ? fabricFilter.join(', ') : (fabricFilter || 'All')} | Brands: ${Array.isArray(brandFilter) && brandFilter.length ? brandFilter.join(', ') : (brandFilter || 'All')} | Parties: ${Array.isArray(partyFilter) && partyFilter.length ? partyFilter.join(', ') : (partyFilter || 'All')} | Sections: ${Array.isArray(sectionFilter) && sectionFilter.length ? sectionFilter.join(', ') : (sectionFilter || 'All')} | Seasons: ${Array.isArray(seasonFilter) && seasonFilter.length ? seasonFilter.join(', ') : (seasonFilter || 'All')} | Days: ${daysFilter || 'All'} | Search: ${lotFilter || 'None'}`;
+      doc.text(filterSummary, pageW / 2, 74, { align: 'center' });
 
-<div class="summary-box">
-  <div class="summary-item"><span class="summary-label">Total Lots</span><span class="summary-value">${exportRows.length}</span></div>
-  <div class="summary-item"><span class="summary-label">Total Quantity</span><span class="summary-value">${fmtNum(totalQty)}</span></div>
-  <div class="summary-item"><span class="summary-label">Unique Parties</span><span class="summary-value">${parties.size}</span></div>
-  <div class="summary-item"><span class="summary-label">MH Lots</span><span class="summary-value">${mohitCount}</span></div>
-  <div class="legend"><span class="star">&#9733;</span> Repeated Lots (${highPriorityCount})</div>
-</div>
+      // 3. Main Data Table
+      const tableColumns = [
+        '#',
+        'Lot No',
+        'Garment Type',
+        'Style',
+        'Fabric',
+        'Brand',
+        'Total Qty',
+        'Section',
+        'Season',
+        'Party Name',
+        'Direct Stitching',
+        'Job Order No',
+        'PO Date',
+        'Days',
+        'Pending Shade',
+        'Cutting Date',
+        'Cutting Scanned',
+        'Remarks',
+        'User Remarks'
+      ];
 
-<table>
-  <thead><tr>${headerRowHtml}</tr></thead>
-  <tbody>${tableRowsHtml}</tbody>
-</table>
+      const cleanRemarksText = (rawRemarks) => {
+        if (!rawRemarks) return '—';
+        return String(rawRemarks)
+          .split('|')
+          .map(p => p.trim())
+          .filter(p => p && !p.includes('undefined'))
+          .join(', ') || '—';
+      };
 
-<div class="footer">
-  <span>Cutting Stats Report</span>
-  <span>${generatedDate}</span>
-</div>
-</body>
-</html>`;
+      const tableBody = exportRows.map((row, idx) => {
+        const lotNo = (row["Lot No"] || "").toString().trim();
+        const partyRaw = (row["Party Name"] || "").toString().trim();
+        const partyDisplay = partyRaw.toLowerCase().includes("mohit") ? "MH" : (partyRaw || "—");
+        const totalQtyVal = parseInt(row["Total Qty"], 10) || 0;
+        const days = parseFloat(row["Days after PO issue"]);
+        const pending = (pendingListByLot[lotNo] || []).join(", ") || (row["Pending Shade"] || "—");
+        const lotRemarks = remarksMap[lotNo] || [];
+        const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1] : null;
+        const userRem = latestRemark ? latestRemark.text : (row["💬 User Remarks"] || "—");
+        const isRepeated = (row["Priority"] || "").toString().toUpperCase().includes("REPEATED_LOT");
+        const lotDisplay = isRepeated ? `* ${lotNo}` : (lotNo || "—");
 
-    const printWindow = window.open("", "_blank", "width=1400,height=900");
-    if (!printWindow) {
-      alert("Popup blocked! Please allow popups for this site and try again.");
-      return;
+        return [
+          (idx + 1).toString(),
+          lotDisplay,
+          row["Garment Type"] || "—",
+          row["Style"] || "—",
+          row["Fabric"] || "—",
+          row["Brand"] || "—",
+          totalQtyVal.toLocaleString(),
+          row["Section"] || "—",
+          row["Season"] || "—",
+          partyDisplay,
+          row["Direct Stitching"] ? (String(row["Direct Stitching"]).toLowerCase() === "yes" ? "Yes" : "No") : "No",
+          row["Job Order No"] || "—",
+          row["Date"] || "—",
+          !isNaN(days) ? days.toString() : "—",
+          pending,
+          row["Cutting Date"] || "—",
+          row["Cutting Scanned"] || "—",
+          cleanRemarksText(row["Remarks"]),
+          userRem
+        ];
+      });
+
+      // Total Row
+      tableBody.push([
+        '',
+        `TOTAL (${totalLots})`,
+        '',
+        '',
+        '',
+        '',
+        totalQty.toLocaleString(),
+        '',
+        '',
+        `${sortedParties.length} Parties`,
+        '',
+        '',
+        '',
+        `${redZoneLots} Red | ${normalLots} Norm`,
+        '',
+        '',
+        '',
+        '',
+        ''
+      ]);
+
+      const columnStyles = {
+        0: { cellWidth: 22, halign: 'center' },
+        1: { cellWidth: 60, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: 70, halign: 'center' },
+        3: { cellWidth: 75, halign: 'center' },
+        4: { cellWidth: 75, halign: 'center' },
+        5: { cellWidth: 50, halign: 'center' },
+        6: { cellWidth: 50, halign: 'center', fontStyle: 'bold' },
+        7: { cellWidth: 45, halign: 'center' },
+        8: { cellWidth: 45, halign: 'center' },
+        9: { cellWidth: 55, halign: 'center' },
+        10: { cellWidth: 45, halign: 'center' },
+        11: { cellWidth: 55, halign: 'center' },
+        12: { cellWidth: 55, halign: 'center' },
+        13: { cellWidth: 38, halign: 'center' },
+        14: { cellWidth: 80, halign: 'left' },
+        15: { cellWidth: 60, halign: 'center' },
+        16: { cellWidth: 65, halign: 'center' },
+        17: { cellWidth: 100, halign: 'left' },
+        18: { cellWidth: 100, halign: 'left' }
+      };
+
+      autoTable(doc, {
+        head: [tableColumns],
+        body: tableBody,
+        startY: 85,
+        tableWidth: pageW - 30,
+        margin: { top: 85, right: 15, bottom: 25, left: 15 },
+        theme: "grid",
+        styles: {
+          fontSize: 8,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+          fontStyle: 'normal',
+          minCellHeight: 12,
+        },
+        headStyles: {
+          fillColor: [15, 23, 42],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          lineColor: [0, 0, 0],
+          lineWidth: 0.5,
+          halign: 'center',
+          fontSize: 8.5,
+          valign: 'middle',
+          cellPadding: { top: 5, right: 2, bottom: 5, left: 2 },
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+        columnStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0]; // Pure black text
+
+            const rowIndex = data.row.index;
+            const isTotalRow = rowIndex === tableBody.length - 1;
+
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [226, 232, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.halign = 'center';
+              return;
+            }
+
+            const item = exportRows[rowIndex];
+            if (!item) return;
+
+            // Lot number bold black
+            if (data.column.index === 1) {
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.fontStyle = 'bold';
+            }
+
+            // Total Qty bold black
+            if (data.column.index === 6) {
+              data.cell.styles.textColor = [0, 0, 0];
+              data.cell.styles.fontStyle = 'bold';
+            }
+
+            // Days after PO issue soft highlight with pure black text
+            if (data.column.index === 13) {
+              const days = parseFloat(item["Days after PO issue"]);
+              if (!isNaN(days)) {
+                data.cell.styles.textColor = [0, 0, 0];
+                data.cell.styles.fontStyle = 'bold';
+                if (days > 2) {
+                  data.cell.styles.fillColor = [254, 226, 226]; // Soft red
+                } else {
+                  data.cell.styles.fillColor = [220, 252, 231]; // Soft green
+                }
+              }
+            }
+          }
+        }
+      });
+
+      // --- 4-COLUMN SIDE-BY-SIDE EXECUTIVE SUMMARY ---
+      const gBody = sortedGarments.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      gBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const pBody = sortedParties.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      pBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const sBody = sortedSections.map(item => {
+        const pct = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        return [item.name, item.lots.toString(), item.qty.toLocaleString(), `${pct}%`];
+      });
+      sBody.push(["TOTAL", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]);
+
+      const aBody = [
+        ["Normal (<= 2 Days)", normalLots.toString(), "—", `${totalLots > 0 ? ((normalLots / totalLots) * 100).toFixed(1) : 0}%`],
+        ["Red Zone (> 2 Days)", redZoneLots.toString(), "—", `${totalLots > 0 ? ((redZoneLots / totalLots) * 100).toFixed(1) : 0}%`],
+        ["Repeated Lots", highPriorityCount.toString(), "—", `${totalLots > 0 ? ((highPriorityCount / totalLots) * 100).toFixed(1) : 0}%`],
+        ["TOTAL LOTS", totalLots.toString(), totalQty.toLocaleString(), "100.0%"]
+      ];
+
+      const maxRows = Math.max(gBody.length, pBody.length, sBody.length, aBody.length);
+      const approxSummaryHeight = 55 + (maxRows * 18);
+
+      let summaryStartY = doc.lastAutoTable.finalY + 22;
+      const neededSpace = approxSummaryHeight + 35;
+      if (summaryStartY + neededSpace > pageH - 30) {
+        doc.addPage();
+        summaryStartY = 40;
+      } else {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.8);
+        doc.line(15, summaryStartY - 8, pageW - 15, summaryStartY - 8);
+      }
+
+      // Title & KPI Subtitle
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("EXECUTIVE SUMMARY & PRODUCTION BREAKDOWN", pageW / 2, summaryStartY + 4, { align: 'center' });
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(0, 0, 0);
+      const summarySub = `Total Lots: ${totalLots}   |   Total Quantity: ${totalQty.toLocaleString()} Pcs   |   Parties: ${sortedParties.length}   |   Garments: ${sortedGarments.length}   |   Sections: ${sortedSections.length}`;
+      doc.text(summarySub, pageW / 2, summaryStartY + 16, { align: 'center' });
+
+      const sectionTitleY = summaryStartY + 30;
+      const tableStartY = sectionTitleY + 6;
+
+      const colWidth = 278;
+      const gap = 16;
+      const col1X = 15;
+      const col2X = col1X + colWidth + gap; // 309
+      const col3X = col2X + colWidth + gap; // 603
+      const col4X = col3X + colWidth + gap; // 897
+
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("1. GARMENT BREAKDOWN", col1X, sectionTitleY);
+      doc.text("2. PARTY BREAKDOWN", col2X, sectionTitleY);
+      doc.text("3. SECTION BREAKDOWN", col3X, sectionTitleY);
+      doc.text("4. AGING & PRIORITY BREAKDOWN", col4X, sectionTitleY);
+
+      const summaryColStyles = {
+        0: { cellWidth: 110, halign: 'center' },
+        1: { cellWidth: 45, halign: 'center' },
+        2: { cellWidth: 68, halign: 'center' },
+        3: { cellWidth: 55, halign: 'center' },
+      };
+
+      // Column 1 Table: Garment Breakdown
+      autoTable(doc, {
+        head: [['Garment Type', 'Lots', 'Total Qty', 'Share %']],
+        body: gBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col1X, right: pageW - (col1X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === gBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY1 = doc.lastAutoTable.finalY;
+
+      // Column 2 Table: Party Breakdown
+      autoTable(doc, {
+        head: [['Party Name', 'Lots', 'Total Qty', 'Share %']],
+        body: pBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col2X, right: pageW - (col2X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [67, 56, 202], // Indigo
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === pBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY2 = doc.lastAutoTable.finalY;
+
+      // Column 3 Table: Section Breakdown
+      autoTable(doc, {
+        head: [['Section', 'Lots', 'Total Qty', 'Share %']],
+        body: sBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col3X, right: pageW - (col3X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [30, 64, 175], // Royal Blue
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === sBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY3 = doc.lastAutoTable.finalY;
+
+      // Column 4 Table: Aging & Priority Breakdown
+      autoTable(doc, {
+        head: [['Category', 'Lots', 'Total Qty', 'Share %']],
+        body: aBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col4X, right: pageW - (col4X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 2, bottom: 3.5, left: 2 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [180, 83, 9], // Amber
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 8.5,
+          halign: 'center',
+          cellPadding: { top: 4, right: 2, bottom: 4, left: 2 },
+        },
+        columnStyles: summaryColStyles,
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            data.cell.styles.halign = 'center';
+            if (data.row.index === 0) {
+              data.cell.styles.fillColor = [220, 252, 231]; // Soft Green
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 1) {
+              data.cell.styles.fillColor = [254, 226, 226]; // Soft Red
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 2) {
+              data.cell.styles.fillColor = [254, 243, 199]; // Soft Amber
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 3) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY4 = doc.lastAutoTable.finalY;
+
+      const maxEndY = Math.max(endY1, endY2, endY3, endY4);
+      const finalY = maxEndY + 16;
+      if (finalY <= pageH - 22) {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.5);
+        doc.line(15, finalY, pageW - 15, finalY);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(0, 0, 0);
+        doc.text("Cutting Department Report — Factory Suite Pro", 15, finalY + 12);
+      }
+
+      // Page Numbering Loop
+      const totalPages = doc.internal.getNumberOfPages();
+      const timeStr = `${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString('en-IN')}`;
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(0, 0, 0);
+
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.5);
+        doc.line(15, pageH - 22, pageW - 15, pageH - 22);
+
+        doc.text(`Page ${i} of ${totalPages}`, pageW / 2, pageH - 12, { align: 'center' });
+        doc.text(`Generated: ${timeStr}`, pageW - 18, pageH - 12, { align: 'right' });
+      }
+
+      const fileDate = new Date().toISOString().slice(0, 10);
+      doc.save(`Cutting_Department_Report_${fileDate}.pdf`);
+    } catch (error) {
+      console.error("Error generating Cutting Report PDF:", error);
+      alert(`Failed to generate PDF: ${error.message}`);
     }
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.onload = () => { setTimeout(() => printWindow.print(), 400); };
   };
 
   const goBack = () => {
@@ -2495,6 +3693,13 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
           font-weight: 800;
         }
 
+        .fabric-issued-badge {
+          background: #ecfdf5;
+          color: #047857;
+          border: 1px solid #a7f3d0;
+          font-weight: 700;
+        }
+
         .issue-badge {
           background: #fee2e2;
           color: #dc2626;
@@ -2626,6 +3831,448 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
           font-weight: 700;
           font-size: 0.82rem;
           cursor: pointer;
+        }
+
+        /* Remarks Table Cell & Inline UI */
+        .remarks-table-cell {
+          vertical-align: middle;
+        }
+
+        .remarks-cell-container {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 6px;
+          min-width: 190px;
+          max-width: 280px;
+        }
+
+        .remark-bubble {
+          background: #f1f5f9;
+          border: 1px solid #cbd5e1;
+          border-left: 3.5px solid #6366f1;
+          border-radius: 8px;
+          padding: 6px 10px;
+          font-size: 0.82rem;
+          color: #1e293b;
+          width: 100%;
+          box-sizing: border-box;
+          text-align: left;
+          transition: all 0.2s ease;
+          cursor: pointer;
+        }
+
+        .remark-bubble:hover {
+          background: #eef2ff;
+          border-color: #a5b4fc;
+          border-left-color: #4f46e5;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+        }
+
+        .remark-text-preview {
+          font-weight: 600;
+          line-height: 1.35;
+          word-break: break-word;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
+        .remark-meta-preview {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-top: 4px;
+          font-size: 0.72rem;
+          color: #64748b;
+          font-weight: 500;
+        }
+
+        .remarks-actions-row {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          width: 100%;
+        }
+
+        .btn-add-remark-inline {
+          background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+          color: #4338ca;
+          border: 1px dashed #818cf8;
+          border-radius: 8px;
+          padding: 5px 12px;
+          font-size: 0.78rem;
+          font-weight: 700;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          transition: all 0.2s ease;
+        }
+
+        .btn-add-remark-inline:hover {
+          background: #4338ca;
+          color: #ffffff;
+          border-style: solid;
+          border-color: #4338ca;
+          transform: translateY(-1px);
+          box-shadow: 0 4px 10px rgba(67, 56, 202, 0.2);
+        }
+
+        .btn-remark-history-badge {
+          background: #ffffff;
+          color: #6366f1;
+          border: 1px solid #c7d2fe;
+          border-radius: 6px;
+          padding: 3px 8px;
+          font-size: 0.72rem;
+          font-weight: 700;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          transition: all 0.15s ease;
+        }
+
+        .btn-remark-history-badge:hover {
+          background: #6366f1;
+          color: #ffffff;
+        }
+
+        .no-remarks-placeholder {
+          color: #94a3b8;
+          font-size: 0.8rem;
+          font-style: italic;
+        }
+
+        /* Remarks Modal Dialog */
+        .remarks-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(15, 23, 42, 0.65);
+          backdrop-filter: blur(8px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 99999;
+          padding: 16px;
+          animation: modalFadeIn 0.2s ease;
+        }
+
+        @keyframes modalFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        .remarks-modal-box {
+          background: #ffffff;
+          border-radius: 24px;
+          max-width: 580px;
+          width: 100%;
+          max-height: 88vh;
+          display: flex;
+          flex-direction: column;
+          box-shadow: 0 25px 60px -15px rgba(15, 23, 42, 0.35);
+          border: 1px solid rgba(226, 232, 240, 0.8);
+          overflow: hidden;
+          animation: modalSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes modalSlideUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px) scale(0.97);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+
+        .remarks-modal-header {
+          background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 100%);
+          color: #ffffff;
+          padding: 20px 24px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .remarks-modal-header-title {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .remarks-modal-header-title h3 {
+          margin: 0;
+          font-size: 1.25rem;
+          font-weight: 800;
+          color: #ffffff;
+          letter-spacing: -0.01em;
+        }
+
+        .remarks-modal-lot-tag {
+          background: rgba(255, 255, 255, 0.2);
+          color: #ffd700;
+          padding: 3px 10px;
+          border-radius: 12px;
+          font-size: 0.85rem;
+          font-weight: 800;
+          letter-spacing: 0.02em;
+        }
+
+        .remarks-modal-close-btn {
+          background: rgba(255, 255, 255, 0.15);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          color: #ffffff;
+          font-size: 1.1rem;
+          border-radius: 12px;
+          width: 36px;
+          height: 36px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s ease;
+        }
+
+        .remarks-modal-close-btn:hover {
+          background: #ef4444;
+          border-color: #ef4444;
+          transform: rotate(90deg);
+        }
+
+        .remarks-modal-body {
+          padding: 22px 24px;
+          overflow-y: auto;
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 18px;
+        }
+
+        .remarks-lot-card {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 16px;
+          padding: 12px 16px;
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 10px;
+        }
+
+        .remarks-lot-field {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .remarks-lot-field-label {
+          font-size: 0.68rem;
+          font-weight: 800;
+          text-transform: uppercase;
+          color: #64748b;
+          letter-spacing: 0.04em;
+        }
+
+        .remarks-lot-field-value {
+          font-size: 0.86rem;
+          font-weight: 700;
+          color: #1e293b;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .remarks-history-section {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .remarks-history-title {
+          font-size: 0.82rem;
+          font-weight: 800;
+          color: #475569;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin: 0;
+        }
+
+        .remarks-history-list {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          max-height: 180px;
+          overflow-y: auto;
+          padding-right: 4px;
+        }
+
+        .remarks-history-item {
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          border-left: 4px solid #6366f1;
+          border-radius: 12px;
+          padding: 10px 14px;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .remarks-history-item.latest {
+          background: #f5f7ff;
+          border-color: #c7d2fe;
+          border-left-color: #4338ca;
+        }
+
+        .remarks-history-text {
+          font-size: 0.88rem;
+          color: #0f172a;
+          font-weight: 600;
+          line-height: 1.4;
+          word-break: break-word;
+        }
+
+        .remarks-history-time {
+          font-size: 0.72rem;
+          color: #64748b;
+          font-weight: 600;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .remarks-input-section {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .remarks-input-label {
+          font-size: 0.82rem;
+          font-weight: 800;
+          color: #1e1b4b;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin: 0;
+        }
+
+        .remarks-quick-presets {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+
+        .remark-preset-tag {
+          background: #f1f5f9;
+          border: 1px solid #cbd5e1;
+          color: #334155;
+          padding: 4px 10px;
+          border-radius: 16px;
+          font-size: 0.74rem;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          user-select: none;
+        }
+
+        .remark-preset-tag:hover {
+          background: #e0e7ff;
+          color: #4338ca;
+          border-color: #a5b4fc;
+          transform: translateY(-1px);
+        }
+
+        .remarks-textarea {
+          width: 100%;
+          min-height: 85px;
+          padding: 12px 14px;
+          border: 1.5px solid #cbd5e1;
+          border-radius: 14px;
+          font-family: inherit;
+          font-size: 0.9rem;
+          color: #0f172a;
+          box-sizing: border-box;
+          resize: vertical;
+          transition: all 0.2s ease;
+          outline: none;
+        }
+
+        .remarks-textarea:focus {
+          border-color: #6366f1;
+          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+          background: #ffffff;
+        }
+
+        .remarks-textarea::placeholder {
+          color: #94a3b8;
+        }
+
+        .remarks-modal-footer {
+          padding: 16px 24px;
+          background: #f8fafc;
+          border-top: 1px solid #e2e8f0;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 12px;
+        }
+
+        .btn-cancel-remark {
+          padding: 10px 20px;
+          background: #ffffff;
+          color: #475569;
+          border: 1.5px solid #cbd5e1;
+          border-radius: 14px;
+          font-size: 0.88rem;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .btn-cancel-remark:hover {
+          background: #f1f5f9;
+          color: #0f172a;
+        }
+
+        .btn-save-remark {
+          padding: 10px 24px;
+          background: linear-gradient(135deg, #4338ca 0%, #3730a3 100%);
+          color: #ffffff;
+          border: none;
+          border-radius: 14px;
+          font-size: 0.88rem;
+          font-weight: 800;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          transition: all 0.2s;
+          box-shadow: 0 4px 14px rgba(67, 56, 202, 0.3);
+        }
+
+        .btn-save-remark:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 20px rgba(67, 56, 202, 0.4);
+        }
+
+        .btn-save-remark:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+          transform: none;
         }
       `}</style>
 
@@ -2906,6 +4553,26 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
                   placeholder="Select..."
                   disabled={loading}
                 />
+              </div>
+
+              {/* Manual Remarks filter */}
+              <div className="filter-group">
+                <label className="filter-label">💬 Manual Remarks</label>
+                <select
+                  className="filter-select"
+                  value={manualRemarksFilter}
+                  onChange={(e) => setManualRemarksFilter(e.target.value)}
+                  disabled={loading}
+                >
+                  <option value="all">All (With & Without Remarks)</option>
+                  <option value="WITH_REMARKS">📌 With Remarks Only</option>
+                  <option value="WITHOUT_REMARKS">⚪ Without Remarks Only</option>
+                  {distinctManualRemarks.map((rem, idx) => (
+                    <option key={idx} value={rem}>
+                      💬 {rem.length > 35 ? rem.substring(0, 35) + "..." : rem}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>
@@ -3188,6 +4855,33 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
                             </td>
                           );
                         }
+                        if (h === "Cutting Scanned") {
+                          const scannedDate = row["Cutting Scanned"];
+                          return (
+                            <td key={h} className="table-cell">
+                              {scannedDate ? (
+                                <span style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '2px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '0.78rem',
+                                  fontWeight: '700',
+                                  background: '#dcfce7',
+                                  color: '#15803d',
+                                  border: '1px solid #86efac',
+                                  whiteSpace: 'nowrap'
+                                }} title={`Scanned: ${scannedDate}${row["Cutting Scanned Status"] ? ` (${row["Cutting Scanned Status"]})` : ''}`}>
+                                  📷 {scannedDate}
+                                </span>
+                              ) : (
+                                <span style={{ color: '#9ca3af', fontSize: '12px' }}>—</span>
+                              )}
+                            </td>
+                          );
+                        }
+
                         if (h === "Cutting Table") {
                           const cuttingTableValue = row[h] || "";
                           const isMultiple = cuttingTableValue && cuttingTableValue.includes(',');
@@ -3206,27 +4900,115 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
 
                         if (h === "Remarks") {
                           const remarks = String(row[h] || "");
+                          const fabricIssueDate = row.fabricIssueDate || "";
                           return (
                             <td key={h} className="table-cell">
                               <div className="remarks-badges">
-                                {splitRemarks(remarks).map((remark, idx) => (
-                                  <span
-                                    key={idx}
-                                    className={`remark-badge ${
-                                      remark.includes("Cancel")
-                                        ? "cancel-badge"
-                                        : remark.includes("Done")
-                                          ? "done-badge"
-                                          : remark.includes("Pending")
-                                            ? "pending-badge"
-                                            : remark.includes("Issue")
-                                              ? "issue-badge"
-                                              : "default-badge"
-                                    }`}
+                                {splitRemarks(remarks).map((remark, idx) => {
+                                  const isFabricIssued = remark.toLowerCase().includes("fabric issued") || remark.toLowerCase() === "fabric issued";
+                                  return (
+                                    <div
+                                      key={idx}
+                                      style={{
+                                        display: 'inline-flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        gap: '2px'
+                                      }}
+                                    >
+                                      <span
+                                        className={`remark-badge ${
+                                          remark.includes("Cancel")
+                                            ? "cancel-badge"
+                                            : isFabricIssued
+                                              ? "fabric-issued-badge"
+                                              : remark.includes("Done")
+                                                ? "done-badge"
+                                                : remark.includes("Pending")
+                                                  ? "pending-badge"
+                                                  : remark.includes("Issue")
+                                                    ? "issue-badge"
+                                                    : "default-badge"
+                                        }`}
+                                      >
+                                        {remark}
+                                      </span>
+                                      {isFabricIssued && fabricIssueDate && (
+                                        <span
+                                          className="fabric-issue-date-sub"
+                                          style={{
+                                            fontSize: '0.68rem',
+                                            fontWeight: '700',
+                                            color: '#065f46',
+                                            backgroundColor: '#d1fae5',
+                                            border: '1px solid #6ee7b7',
+                                            padding: '1px 6px',
+                                            borderRadius: '6px',
+                                            whiteSpace: 'nowrap',
+                                            marginTop: '1px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '3px'
+                                          }}
+                                          title={`Fabric Issued on ${fabricIssueDate}`}
+                                        >
+                                          📅 {fabricIssueDate}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                          );
+                        }
+
+                        if (h === "💬 User Remarks") {
+                          const lot = String(row["Lot No"] || "").trim();
+                          const lotRemarks = remarksMap[lot] || [];
+                          const latestRemark = lotRemarks.length > 0 ? lotRemarks[lotRemarks.length - 1] : null;
+
+                          return (
+                            <td key={h} className="table-cell remarks-table-cell">
+                              <div className="remarks-cell-container">
+                                {latestRemark ? (
+                                  <div
+                                    className="remark-bubble"
+                                    onClick={() => handleOpenRemarksModal(row)}
+                                    title="Click to view history or add new remark"
                                   >
-                                    {remark}
-                                  </span>
-                                ))}
+                                    <div className="remark-text-preview">
+                                      {latestRemark.text}
+                                    </div>
+                                    <div className="remark-meta-preview">
+                                      <span>🕒 {latestRemark.timestamp}</span>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="no-remarks-placeholder">No remarks yet</span>
+                                )}
+
+                                <div className="remarks-actions-row">
+                                  <button
+                                    type="button"
+                                    className="btn-add-remark-inline"
+                                    onClick={() => handleOpenRemarksModal(row)}
+                                    title="Add or update remark for this lot"
+                                  >
+                                    {latestRemark ? '✏️ Remark' : '+ Add Remark'}
+                                  </button>
+
+                                  {lotRemarks.length > 1 && (
+                                    <button
+                                      type="button"
+                                      className="btn-remark-history-badge"
+                                      onClick={() => handleOpenRemarksModal(row)}
+                                      title="View all remarks history"
+                                    >
+                                      📜 ({lotRemarks.length})
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </td>
                           );
@@ -3350,6 +5132,157 @@ th:nth-child(16),td:nth-child(16){ width:86px; vertical-align:top; }
               <div className="dialog-footer">
                 <button className="dialog-action-btn" onClick={closeDialog} type="button">
                   Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Interactive Remarks Modal */}
+        {remarksModalOpen && selectedRemarksLot && (
+          <div className="remarks-modal-overlay" onClick={handleCloseRemarksModal}>
+            <div className="remarks-modal-box" onClick={(e) => e.stopPropagation()}>
+              <div className="remarks-modal-header">
+                <div className="remarks-modal-header-title">
+                  <span style={{ fontSize: '1.4rem' }}>💬</span>
+                  <h3>Cutting Lot Remarks</h3>
+                  <span className="remarks-modal-lot-tag">#{selectedRemarksLot["Lot No"]}</span>
+                </div>
+                <button
+                  type="button"
+                  className="remarks-modal-close-btn"
+                  onClick={handleCloseRemarksModal}
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="remarks-modal-body">
+                {/* Lot Information Summary */}
+                <div className="remarks-lot-card">
+                  <div className="remarks-lot-field">
+                    <span className="remarks-lot-field-label">Party</span>
+                    <span className="remarks-lot-field-value">{selectedRemarksLot["Party Name"] || '-'}</span>
+                  </div>
+                  <div className="remarks-lot-field">
+                    <span className="remarks-lot-field-label">Fabric</span>
+                    <span className="remarks-lot-field-value">{selectedRemarksLot["Fabric"] || '-'}</span>
+                  </div>
+                  <div className="remarks-lot-field">
+                    <span className="remarks-lot-field-label">Style</span>
+                    <span className="remarks-lot-field-value">{selectedRemarksLot["Style"] || selectedRemarksLot["Garment Type"] || '-'}</span>
+                  </div>
+                  <div className="remarks-lot-field">
+                    <span className="remarks-lot-field-label">Total Qty</span>
+                    <span className="remarks-lot-field-value" style={{ color: '#0f766e', fontWeight: '800' }}>
+                      {fmtNum(selectedRemarksLot["Total Qty"]) || '0'} pcs
+                    </span>
+                  </div>
+                  <div className="remarks-lot-field">
+                    <span className="remarks-lot-field-label">Section</span>
+                    <span className="remarks-lot-field-value">{selectedRemarksLot["Section"] || '-'}</span>
+                  </div>
+                  <div className="remarks-lot-field">
+                    <span className="remarks-lot-field-label">Days after PO</span>
+                    <span className="remarks-lot-field-value" style={{ color: '#dc2626' }}>
+                      {selectedRemarksLot["Days after PO issue"] || 0} days
+                    </span>
+                  </div>
+                </div>
+
+                {/* Remarks History */}
+                <div className="remarks-history-section">
+                  <h4 className="remarks-history-title">
+                    <span>📜</span> Remarks History ({(remarksMap[String(selectedRemarksLot["Lot No"] || '').trim()] || []).length})
+                  </h4>
+                  <div className="remarks-history-list">
+                    {(() => {
+                      const lotKey = String(selectedRemarksLot["Lot No"] || '').trim();
+                      const history = remarksMap[lotKey] || [];
+                      if (history.length === 0) {
+                        return (
+                          <div style={{ textAlign: 'center', padding: '16px', color: '#94a3b8', fontSize: '0.85rem' }}>
+                            No previous remarks for this lot. Add the first remark below!
+                          </div>
+                        );
+                      }
+                      return history.map((item, i) => (
+                        <div
+                          key={i}
+                          className={`remarks-history-item ${i === history.length - 1 ? 'latest' : ''}`}
+                        >
+                          <div className="remarks-history-text">{item.text}</div>
+                          <div className="remarks-history-time">
+                            <span>🕒</span> {item.timestamp}
+                            {i === history.length - 1 && (
+                              <span style={{ marginLeft: 'auto', color: '#4338ca', fontWeight: '700', fontSize: '0.7rem', background: '#e0e7ff', padding: '2px 6px', borderRadius: '4px' }}>
+                                Latest
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </div>
+
+                {/* Enter New Remark Input */}
+                <div className="remarks-input-section">
+                  <h4 className="remarks-input-label">
+                    <span>✏️</span> Enter Your Remark
+                  </h4>
+
+                  {/* Quick Cutting Presets */}
+                  <div className="remarks-quick-presets">
+                    {[
+                      "Cutting in Progress",
+                      "Fabric Issue Pending",
+                      "Fabric Shortage",
+                      "Sample / Pattern Pending",
+                      "Urgent Cutting Required",
+                      "Hold for Quality Check",
+                      "Cutting Completed",
+                      "Ready for Numbering / Fusing"
+                    ].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        className="remark-preset-tag"
+                        onClick={() => setNewRemarkInputText(preset)}
+                      >
+                        + {preset}
+                      </button>
+                    ))}
+                  </div>
+
+                  <textarea
+                    className="remarks-textarea"
+                    placeholder="Type your custom cutting remark here..."
+                    value={newRemarkInputText}
+                    onChange={(e) => setNewRemarkInputText(e.target.value)}
+                    rows={3}
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <div className="remarks-modal-footer">
+                <button
+                  type="button"
+                  className="btn-cancel-remark"
+                  onClick={handleCloseRemarksModal}
+                  disabled={savingRemark}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-save-remark"
+                  onClick={handleSaveRemark}
+                  disabled={savingRemark || !newRemarkInputText.trim()}
+                >
+                  {savingRemark ? '⏳ Saving...' : '💾 Save Remark'}
                 </button>
               </div>
             </div>

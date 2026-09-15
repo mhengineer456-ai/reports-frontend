@@ -78,18 +78,18 @@ const [filters, setFilters] = useState({
   const HEADERS = [
     'Sr.No',
     'Lot Number',
-    'Fabric',
     'Garment Type',
     'Style',
+    'Fabric',
     'BRAND',
-    'PARTY NAME',
-    'Season',
+    'Total PCS',
     'M/W/K',
+    'Season',
+    'PARTY NAME',
     'Direct Stitching',
     'Stitching Days',
     'Emb/Print Date',
     'WIP Status',
-    'Total PCS',
     'Completion Date',
     'Status'
   ];
@@ -2403,20 +2403,20 @@ const downloadPDF = useCallback(async () => {
     const PDF_HEADERS = filters.lotStatus === 'Pending' ? [
       'Sr',
       'Lot No',
-      'Fabric',
       'Garment',
       'Style',
+      'Fabric',
       'Brand',
-      'Party',
-      'Supervisor',
-      'Season',
+      'Total PCS',
       'M/W/K',
+      'Season',
+      'Party',
       'Direct',
+      'Supervisor',
       'Issue Date',
       'Days',
       'Emb/Print',
       'WIP Status',
-      'Total PCS',
       'Color Status',
       'Pintu',
       'EA',
@@ -2424,20 +2424,20 @@ const downloadPDF = useCallback(async () => {
     ] : [
       'Sr',
       'Lot No',
-      'Fabric',
       'Garment',
       'Style',
+      'Fabric',
       'Brand',
-      'Party',
-      'Supervisor',
-      'Season',
+      'Total PCS',
       'M/W/K',
+      'Season',
+      'Party',
       'Direct',
+      'Supervisor',
       'Issue Date',
       'Days',
       'Emb/Print',
       'WIP Status',
-      'Total PCS',
       'Complete Date',
       'Color Status',
       'Pintu',
@@ -2449,20 +2449,20 @@ const downloadPDF = useCallback(async () => {
     const columnWidths = filters.lotStatus === 'Pending' ? {
       0: 9,    // Sr
       1: 20,   // Lot No
-      2: 28,   // Fabric
-      3: 28,   // Garment
-      4: 31,   // Style
+      2: 28,   // Garment
+      3: 31,   // Style
+      4: 28,   // Fabric
       5: 25,   // Brand
-      6: 14,   // Party
-      7: 21,   // Supervisor
+      6: 18,   // Total PCS
+      7: 12,   // M/W/K
       8: 9,    // Season
-      9: 12,   // M/W/K
+      9: 14,   // Party
       10: 12,  // Direct
-      11: 20,  // Issue Date
-      12: 15,  // Days
-      13: 20,  // Emb/Print
-      14: 40,  // WIP Status
-      15: 18,  // Total PCS
+      11: 21,  // Supervisor
+      12: 20,  // Issue Date
+      13: 15,  // Days
+      14: 20,  // Emb/Print
+      15: 40,  // WIP Status
       16: 25,  // Color Status
       17: 20,  // Pintu
       18: 22,  // EA
@@ -2470,20 +2470,20 @@ const downloadPDF = useCallback(async () => {
     } : {
       0: 9,    // Sr
       1: 20,   // Lot No
-      2: 28,   // Fabric
-      3: 29,   // Garment
-      4: 31,   // Style
+      2: 29,   // Garment
+      3: 31,   // Style
+      4: 28,   // Fabric
       5: 31,   // Brand
-      6: 16,   // Party
-      7: 29,   // Supervisor
+      6: 25,   // Total PCS
+      7: 12,   // M/W/K
       8: 9,    // Season
-      9: 12,   // M/W/K
+      9: 16,   // Party
       10: 12,  // Direct
-      11: 20,  // Issue Date
-      12: 15,  // Days
-      13: 20,  // Emb/Print
-      14: 48,  // WIP Status
-      15: 25,  // Total PCS
+      11: 29,  // Supervisor
+      12: 20,  // Issue Date
+      13: 15,  // Days
+      14: 20,  // Emb/Print
+      15: 48,  // WIP Status
       16: 25,  // Complete Date
       17: 25,  // Color Status
       18: 15,  // Pintu
@@ -2583,7 +2583,7 @@ const downloadPDF = useCallback(async () => {
       // Build row cells
       const rowCells = [];
       
-      // Sr.No - Add star indicator for repeated lots
+      // 0: Sr.No - Add star indicator for repeated lots
       const srNoContent = isRepeatedLot ? `★ ${rowIndex + 1}` : (rowIndex + 1).toString();
       rowCells.push({
         content: srNoContent,
@@ -2598,7 +2598,7 @@ const downloadPDF = useCallback(async () => {
         }
       });
       
-      // Lot No
+      // 1: Lot No
       rowCells.push({
         content: item.lotNumber || 'N/A',
         styles: {
@@ -2612,9 +2612,9 @@ const downloadPDF = useCallback(async () => {
         }
       });
 
-      // Fabric
+      // 2: Garment
       rowCells.push({
-        content: item.fabric || 'N/A',
+        content: item.garmentType || 'N/A',
         styles: {
           cellWidth: columnWidths[2],
           fontSize: 10,
@@ -2624,9 +2624,9 @@ const downloadPDF = useCallback(async () => {
         }
       });
 
-      // Garment
+      // 3: Style
       rowCells.push({
-        content: item.garmentType || 'N/A',
+        content: item.style || 'N/A',
         styles: {
           cellWidth: columnWidths[3],
           fontSize: 10,
@@ -2636,9 +2636,9 @@ const downloadPDF = useCallback(async () => {
         }
       });
 
-      // Style
+      // 4: Fabric
       rowCells.push({
-        content: item.style || 'N/A',
+        content: item.fabric || 'N/A',
         styles: {
           cellWidth: columnWidths[4],
           fontSize: 10,
@@ -2648,7 +2648,7 @@ const downloadPDF = useCallback(async () => {
         }
       });
 
-      // Brand
+      // 5: Brand
       rowCells.push({
         content: item.brand || 'N/A',
         styles: {
@@ -2659,36 +2659,41 @@ const downloadPDF = useCallback(async () => {
           cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
         }
       });
-      
-      // Party
+
+      // 6: Total PCS
       rowCells.push({
-        content: abbreviatedParty,
+        content: totalPCS > 0 ? totalPCS.toLocaleString() : 'N/A',
         styles: {
           cellWidth: columnWidths[6],
-          fontSize: 10,
+          fontSize: 9,
           halign: 'center',
           fontStyle: 'bold',
           fillColor: rowBgColor,
-          textColor: partyColor,
+          textColor: pcsColor,
           cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
         }
       });
       
-      // Supervisor
+      // 7: M/W/K - abbreviated
+      const abbreviatedMWK = abbreviateMWKForPDF(item.mwk);
       rowCells.push({
-        content: truncateText(item.supervisor || 'N/A', 15),
+        content: abbreviatedMWK,
         styles: {
           cellWidth: columnWidths[7],
           fontSize: 10,
           halign: 'center',
           fontStyle: 'bold',
           fillColor: rowBgColor,
-          textColor: [59, 130, 246],
+          textColor: abbreviatedMWK === 'M' ? [59, 130, 246] :
+                     abbreviatedMWK === 'W' ? [239, 68, 68] :
+                     abbreviatedMWK === 'K' ? [16, 185, 129] :
+                     abbreviatedMWK === 'G' ? [168, 85, 247] :
+                     [100, 100, 100],
           cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
         }
       });
-      
-      // Season
+
+      // 8: Season
       rowCells.push({
         content: abbreviatedSeason,
         styles: {
@@ -2704,27 +2709,22 @@ const downloadPDF = useCallback(async () => {
           cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
         }
       });
-      
-      // M/W/K - abbreviated
-      const abbreviatedMWK = abbreviateMWKForPDF(item.mwk);
+
+      // 9: Party
       rowCells.push({
-        content: abbreviatedMWK,
+        content: abbreviatedParty,
         styles: {
           cellWidth: columnWidths[9],
           fontSize: 10,
           halign: 'center',
           fontStyle: 'bold',
           fillColor: rowBgColor,
-          textColor: abbreviatedMWK === 'M' ? [59, 130, 246] :
-                     abbreviatedMWK === 'W' ? [239, 68, 68] :
-                     abbreviatedMWK === 'K' ? [16, 185, 129] :
-                     abbreviatedMWK === 'G' ? [168, 85, 247] :
-                     [100, 100, 100],
+          textColor: partyColor,
           cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
         }
       });
       
-      // Direct
+      // 10: Direct
       rowCells.push({
         content: truncateText(item.directStitching || 'N/A', 8),
         styles: {
@@ -2735,12 +2735,26 @@ const downloadPDF = useCallback(async () => {
           cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
         }
       });
+
+      // 11: Supervisor
+      rowCells.push({
+        content: truncateText(item.supervisor || 'N/A', 15),
+        styles: {
+          cellWidth: columnWidths[11],
+          fontSize: 10,
+          halign: 'center',
+          fontStyle: 'bold',
+          fillColor: rowBgColor,
+          textColor: [59, 130, 246],
+          cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
+        }
+      });
       
-      // Issue Date
+      // 12: Issue Date
       rowCells.push({
         content: truncateText(issueDate, 12),
         styles: {
-          cellWidth: columnWidths[11],
+          cellWidth: columnWidths[12],
           fontSize: 10,
           halign: 'center',
           fillColor: rowBgColor,
@@ -2750,11 +2764,11 @@ const downloadPDF = useCallback(async () => {
         }
       });
       
-      // Days
+      // 13: Days
       rowCells.push({
         content: stitchingDays.toString(),
         styles: {
-          cellWidth: columnWidths[12],
+          cellWidth: columnWidths[13],
           fontSize: 10,
           halign: 'center',
           fontStyle: 'bold',
@@ -2764,12 +2778,12 @@ const downloadPDF = useCallback(async () => {
         }
       });
       
-      // Emb/Print - formatted date
+      // 14: Emb/Print - formatted date
       const formattedEmbPrintDate = embPrintDate !== '-' ? formatDateToDDMMYYForPDF(embPrintDate) : '-';
       rowCells.push({
         content: truncateText(formattedEmbPrintDate, 14),
         styles: {
-          cellWidth: columnWidths[13],
+          cellWidth: columnWidths[14],
           fontSize: 10,
           halign: 'center',
           fillColor: rowBgColor,
@@ -2779,11 +2793,11 @@ const downloadPDF = useCallback(async () => {
         }
       });
       
-      // WIP Status - UPDATED with not updated highlighting
+      // 15: WIP Status - UPDATED with not updated highlighting
       rowCells.push({
         content: wipRemarks || 'N/A',
         styles: {
-          cellWidth: columnWidths[14],
+          cellWidth: columnWidths[15],
           fontSize: 10,
           halign: 'center',
           fillColor: !isStatusUpdated ? [255, 235, 235] : rowBgColor, // Light red background if not updated
@@ -2793,20 +2807,6 @@ const downloadPDF = useCallback(async () => {
         }
       });
 
-      // Total PCS
-      rowCells.push({
-        content: totalPCS > 0 ? totalPCS.toLocaleString() : 'N/A',
-        styles: {
-          cellWidth: columnWidths[15],
-          fontSize: 9,
-          halign: 'center',
-          fontStyle: 'bold',
-          fillColor: rowBgColor,
-          textColor: pcsColor,
-          cellPadding: { top: 2, right: 1, bottom: 2, left: 1 }
-        }
-      });
-      
       // Conditional: Complete Date column
       if (filters.lotStatus !== 'Pending') {
         const formattedCompletionDate = completionDate ? formatDateToDDMMYYForPDF(completionDate) : '-';
@@ -4346,13 +4346,18 @@ const downloadPDF = useCallback(async () => {
     {item.priority?.includes('REPEATED_LOT') && ' ★'}
   </span>
 </td>
-                        <td className="text-center">{item.fabric || 'N/A'}</td>
                         <td className="text-center">{item.garmentType || 'N/A'}</td>
                         <td className="text-center">{item.style || 'N/A'}</td>
+                        <td className="text-center">{item.fabric || 'N/A'}</td>
                         <td className="text-center">{item.brand || 'N/A'}</td>
-                        <td className="text-center">{item.partyName || 'N/A'}</td>
-                        <td className="text-center">{item.season || 'N/A'}</td>
+                        <td className="text-center font-semibold">
+                          <span className="total-pcs">
+                            {item.totalPCS > 0 ? item.totalPCS.toLocaleString() : 'N/A'}
+                          </span>
+                        </td>
                         <td className="text-center">{item.mwk || 'N/A'}</td>
+                        <td className="text-center">{item.season || 'N/A'}</td>
+                        <td className="text-center">{item.partyName || 'N/A'}</td>
                         <td className="text-center">{item.directStitching || 'N/A'}</td>
                         <td className="text-center">
                           <span 
@@ -4373,11 +4378,6 @@ const downloadPDF = useCallback(async () => {
                         <td className="text-center">
                           <span className="wip-status">
                             {getLatestWipRemarks(item.wipStatus)}
-                          </span>
-                        </td>
-                        <td className="text-center font-semibold">
-                          <span className="total-pcs">
-                            {item.totalPCS > 0 ? item.totalPCS.toLocaleString() : 'N/A'}
                           </span>
                         </td>
                         <td className="text-center">

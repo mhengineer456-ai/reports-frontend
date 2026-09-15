@@ -47,6 +47,64 @@ const CustomTooltip = ({ active, payload, label }) => {
   return null;
 };
 
+const norm = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const isCancel = (s) => {
+  if (!s) return false;
+  const sn = norm(s);
+  return sn.startsWith("cancel") || sn.includes("cancel");
+};
+
+// Fetch Cancelled Lots exactly as done in Cuttingreport.js (referencing JobOrder sheet)
+const getCancelledLotsSet = async () => {
+  const cancelledLotsSet = new Set();
+  try {
+    const jobRes = await fetchSheetDataFromBackend(SPREADSHEET_IDS.JOBORDER, "JobOrder!A:AZ");
+    if (jobRes && jobRes.ok && Array.isArray(jobRes.values) && jobRes.values.length > 0) {
+      const rows = jobRes.values;
+      const headers = rows[0].map((h) => norm(h));
+      let lotColIdx = headers.findIndex((h) => h === "lotno" || h === "lotnumber" || h.includes("lot"));
+      let statusColIdx = headers.findIndex((h) => h === "status");
+
+      if (lotColIdx !== -1 && statusColIdx !== -1) {
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row) continue;
+          const statusVal = String(row[statusColIdx] || "").trim();
+          if (isCancel(statusVal)) {
+            const lotVal = String(row[lotColIdx] || "").trim();
+            if (lotVal) {
+              cancelledLotsSet.add(norm(lotVal));
+              cancelledLotsSet.add(lotVal.toLowerCase());
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Error fetching JobOrder for cancelled lots:", e);
+  }
+
+  try {
+    if (store.getCancelledLots) {
+      const res = await store.getCancelledLots().catch(() => null);
+      if (res && Array.isArray(res.data)) {
+        res.data.forEach((item) => {
+          const l = String(item.lotNumber || item.lotNo || item.lot || "").trim();
+          if (l) {
+            cancelledLotsSet.add(norm(l));
+            cancelledLotsSet.add(l.toLowerCase());
+          }
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("Backend getCancelledLots fetch error:", e);
+  }
+
+  return cancelledLotsSet;
+};
+
 export default function DailyFabricIssueReport() {
   const history = useHistory();
   const [startDate, setStartDate] = useState(() => {
@@ -69,16 +127,29 @@ export default function DailyFabricIssueReport() {
     setLoading(true);
     setIsPendingCuttingFilter(false);
     try {
-      const response = await store.getDailyFabricIssuanceReport(startDate, endDate);
+      const [response, cancelledLotsSet] = await Promise.all([
+        store.getDailyFabricIssuanceReport(startDate, endDate),
+        getCancelledLotsSet().catch(() => new Set())
+      ]);
+
+      let list = [];
       if (Array.isArray(response)) {
-        setReportData(response);
+        list = response;
       } else if (response && response.success && Array.isArray(response.data)) {
-        setReportData(response.data);
+        list = response.data;
       } else if (response && Array.isArray(response.data)) {
-        setReportData(response.data);
-      } else {
-        setReportData([]);
+        list = response.data;
       }
+
+      if (cancelledLotsSet && cancelledLotsSet.size > 0) {
+        list = list.filter(item => {
+          const rawLot = String(item.lotNumber || item.lotNo || item.lot || '').trim();
+          if (!rawLot) return true;
+          return !cancelledLotsSet.has(rawLot.toLowerCase()) && !cancelledLotsSet.has(norm(rawLot));
+        });
+      }
+
+      setReportData(list);
     } catch (err) {
       console.error("Error loading daily fabric issue report:", err);
       alert("Failed to load report: " + err.message);
@@ -94,8 +165,13 @@ export default function DailyFabricIssueReport() {
     setStartDate(jul1Date);
 
     try {
-      // 1. Fetch fabric issuance data from 1 July 2026 onwards
-      const response = await store.getDailyFabricIssuanceReport(jul1Date, endDate);
+      // 1. Fetch in parallel: fabric issuance, index sheet, and cancelled lots from JobOrder
+      const [response, indexRes, cancelledLotsSet] = await Promise.all([
+        store.getDailyFabricIssuanceReport(jul1Date, endDate),
+        fetchSheetDataFromBackend(SPREADSHEET_IDS.MAIN, 'Index!A:Z').catch(() => null),
+        getCancelledLotsSet().catch(() => new Set())
+      ]);
+
       let allIssuances = [];
       if (Array.isArray(response)) {
         allIssuances = response;
@@ -107,73 +183,54 @@ export default function DailyFabricIssueReport() {
 
       // 2. Fetch completed lot numbers from Index Sheet
       const completedLotsSet = new Set();
+      if (indexRes && indexRes.ok && Array.isArray(indexRes.values) && indexRes.values.length > 0) {
+        const headers = indexRes.values[0].map(h => String(h || '').trim().toLowerCase());
+        let lotColIdx = headers.findIndex(h => h.includes('lot') || h.includes('lot no') || h.includes('lot number'));
+        if (lotColIdx === -1) lotColIdx = 0;
 
-      // Fallback A: Try Store completed report endpoint
-      try {
-        if (store.getDailyCuttingCompletedReport) {
-          const completedRes = await store.getDailyCuttingCompletedReport(true).catch(() => null);
-          if (completedRes && Array.isArray(completedRes.data)) {
-            completedRes.data.forEach(item => {
-              const l = String(item.lotNo || item.lotNumber || item.lot || '').trim().toLowerCase();
-              if (l) completedLotsSet.add(l);
-            });
-          }
-        }
-      } catch (e) {
-        console.warn("Backend completed report fetch error:", e);
-      }
-
-      // Fallback B: Fetch directly from Index sheet (Index!A:Z)
-      try {
-        const indexRes = await fetchSheetDataFromBackend(SPREADSHEET_IDS.MAIN, 'Index!A:Z');
-        if (indexRes && indexRes.ok && Array.isArray(indexRes.values) && indexRes.values.length > 0) {
-          const headers = indexRes.values[0].map(h => String(h || '').trim().toLowerCase());
-          let lotColIdx = headers.findIndex(h => h.includes('lot') || h.includes('lot no') || h.includes('lot number'));
-          if (lotColIdx === -1) lotColIdx = 0;
-
-          for (let i = 1; i < indexRes.values.length; i++) {
-            const row = indexRes.values[i];
-            if (row && row[lotColIdx]) {
-              const val = String(row[lotColIdx]).trim().toLowerCase();
-              if (val && val !== '-' && val !== 'null') {
-                completedLotsSet.add(val);
-              }
+        for (let i = 1; i < indexRes.values.length; i++) {
+          const row = indexRes.values[i];
+          if (row && row[lotColIdx]) {
+            const val = String(row[lotColIdx]).trim().toLowerCase();
+            if (val && val !== '-' && val !== 'null') {
+              completedLotsSet.add(val);
+              completedLotsSet.add(norm(val));
             }
           }
         }
-      } catch (e) {
-        console.warn("Index sheet direct fetch error:", e);
       }
 
-      // 3. Filter Fabric Issuance Lots where Lot Number is NOT in Index Sheet & DEDUPLICATE (Single Lot = Single Entry)
+      // 3. Filter Fabric Issuance Lots where Lot Number is NOT in Index Sheet AND NOT CANCELLED (Single Lot = Single Entry)
       const lotMap = new Map();
 
       allIssuances.forEach(item => {
         const rawLot = String(item.lotNumber || item.lotNo || item.lot || '').trim();
         if (!rawLot) return;
         const key = rawLot.toLowerCase();
+        const keyNorm = norm(rawLot);
 
-        // Include ONLY if Lot Number is NOT in Index sheet
-        if (!completedLotsSet.has(key)) {
-          const tbl = item.tableNumber || item.table || item.tableName || item.tableNo || item.section || '—';
-          if (!lotMap.has(key)) {
-            lotMap.set(key, {
-              ...item,
-              lotNumber: rawLot,
-              date: item.date || item.issueDate || '-',
-              fabric: item.fabric || item.fabricDescription || item.fabricName || '—',
-              tableNumber: tbl,
-              rolls: item.rolls || 1,
-              weight: item.weight || 0
-            });
-          } else {
-            // Aggregate rolls & weight for identical lot number
-            const existing = lotMap.get(key);
-            existing.rolls += (item.rolls || 1);
-            existing.weight += (item.weight || 0);
-            if (!existing.tableNumber || existing.tableNumber === '—') {
-              existing.tableNumber = tbl;
-            }
+        // Exclude if Lot is in Index sheet (Cutting Done) OR if Lot is Cancelled in JobOrder
+        if (completedLotsSet.has(key) || completedLotsSet.has(keyNorm)) return;
+        if (cancelledLotsSet.has(key) || cancelledLotsSet.has(keyNorm)) return;
+
+        const tbl = item.tableNumber || item.table || item.tableName || item.tableNo || item.section || '—';
+        if (!lotMap.has(key)) {
+          lotMap.set(key, {
+            ...item,
+            lotNumber: rawLot,
+            date: item.date || item.issueDate || '-',
+            fabric: item.fabric || item.fabricDescription || item.fabricName || '—',
+            tableNumber: tbl,
+            rolls: item.rolls || 1,
+            weight: item.weight || 0
+          });
+        } else {
+          // Aggregate rolls & weight for identical lot number
+          const existing = lotMap.get(key);
+          existing.rolls += (item.rolls || 1);
+          existing.weight += (item.weight || 0);
+          if (!existing.tableNumber || existing.tableNumber === '—') {
+            existing.tableNumber = tbl;
           }
         }
       });
@@ -478,7 +535,7 @@ export default function DailyFabricIssueReport() {
 
     setFont("bold", 15);
     doc.setTextColor(255, 255, 255);
-    doc.text("FABRIC ISSUED BUT NOT ENTERED IN SYSTEM", M, 34);
+    doc.text("FABRIC ISSUED BUT NOT ENTERED CUTTING IN SYSTEM", M, 34);
 
     setFont("normal", 9);
     doc.setTextColor(199, 210, 254);

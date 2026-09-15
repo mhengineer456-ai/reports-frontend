@@ -454,16 +454,17 @@ export default function CancelledLotsReport() {
     const exportRows = filteredData.map((item, idx) => ({
       "S.No": idx + 1,
       "Lot No": item.lotNumber || "-",
-      "Job Order No": item.jobOrderNo || "-",
-      "Date (PO Date)": item.date || "-",
-      "Party Name": item.partyName || "-",
-      "Brand": item.brand || "-",
+      "Garment Type": item.garmentType || "-",
       "Style": item.style || "-",
       "Fabric": item.fabric || "-",
-      "Garment Type": item.garmentType || "-",
+      "Brand": item.brand || "-",
+      "Pcs": item.quantity || "0",
       "Section": item.section || "-",
       "Season": item.season || "-",
-      "Quantity": item.quantity || "0",
+      "Party Name": item.partyName || "-",
+      "Direct Stitching": item.directStitching || "-",
+      "Job Order No": item.jobOrderNo || "-",
+      "PO Date": item.date || "-",
       "Unit": item.unit || "-",
       "Shade": item.shade || "-",
       "Size": item.size || "-",
@@ -472,7 +473,6 @@ export default function CancelledLotsReport() {
       "Cancelled By": item.cancelledBy || "-",
       "Cancellation Timestamp": item.cancellationTimestamp || "-",
       "Priority": item.priority || "-",
-      "Direct Stitching": item.directStitching || "-",
       "Emb": item.emb || "-",
       "Emb Details": item.embDetails || "-",
       "Printing": item.printing || "-",
@@ -516,13 +516,15 @@ export default function CancelledLotsReport() {
     const tableRows = filteredData.map((item, idx) => [
       idx + 1,
       item.lotNumber || "-",
-      item.jobOrderNo || "-",
-      item.date || "-",
-      item.partyName || "-",
-      item.brand || "-",
+      item.garmentType || "-",
       item.style || "-",
       item.fabric || "-",
+      item.brand || "-",
       `${item.quantity || "0"} ${item.unit || ""}`,
+      item.section || "-",
+      item.season || "-",
+      item.partyName || "-",
+      item.directStitching || "-",
       item.cancellationReason || "-",
       item.cancellationApprovedFrom || item.cancelledBy || "-",
       item.status || "Cancel"
@@ -531,7 +533,7 @@ export default function CancelledLotsReport() {
     autoTable(doc, {
       startY: 26,
       head: [[
-        "#", "Lot No", "Job Order No", "Date", "Party Name", "Brand", "Style", "Fabric", "Qty", "Cancellation Reason", "Approved / By", "Status"
+        "#", "Lot No", "Garment Type", "Style", "Fabric", "Brand", "Pcs", "Section", "Season", "Party Name", "Direct Stitching", "Cancellation Reason", "Approved / By", "Status"
       ]],
       body: tableRows,
       theme: "grid",
@@ -1149,14 +1151,19 @@ export default function CancelledLotsReport() {
                 <thead>
                   <tr>
                     <th style={{ width: "40px", textAlign: "center" }}>#</th>
-                    <th>Lot No</th>
-                    <th>Job Order No</th>
                     <th>Image</th>
-                    <th>PO Date</th>
-                    <th>Party Name</th>
-                    <th>Brand & Style</th>
+                    <th>Lot No</th>
+                    <th>Garment Type</th>
+                    <th>Style</th>
                     <th>Fabric</th>
-                    <th style={{ textAlign: "right" }}>Quantity</th>
+                    <th>Brand</th>
+                    <th style={{ textAlign: "right" }}>Pcs</th>
+                    <th>Section</th>
+                    <th>Season</th>
+                    <th>Party Name</th>
+                    <th>Direct Stitching</th>
+                    <th>Job Order No</th>
+                    <th>PO Date</th>
                     <th>Shade & Size</th>
                     <th>Cancellation Reason</th>
                     <th>Approved / By</th>
@@ -1174,10 +1181,6 @@ export default function CancelledLotsReport() {
                       <tr key={`${row.jobOrderNo}-${row.lotNumber}-${idx}`}>
                         <td style={{ textAlign: "center", fontWeight: 800, color: "#94a3b8" }}>{globalIdx}</td>
                         <td>
-                          <span className="clr-badge-lot">{row.lotNumber || "-"}</span>
-                        </td>
-                        <td style={{ fontWeight: 800, color: "#be123c" }}>{row.jobOrderNo || "-"}</td>
-                        <td>
                           {directImg ? (
                             <img
                               src={directImg}
@@ -1190,19 +1193,27 @@ export default function CancelledLotsReport() {
                             <span style={{ fontSize: "10px", color: "#94a3b8" }}>N/A</span>
                           )}
                         </td>
-                        <td style={{ whiteSpace: "nowrap" }}>{formatDate(row.date)}</td>
-                        <td style={{ fontWeight: 700, color: "#0f172a" }}>{row.partyName || "-"}</td>
                         <td>
-                          <div style={{ fontWeight: 800, color: "#0f172a" }}>{row.brand || "-"}</div>
-                          <div style={{ fontSize: "11px", color: "#64748b", maxWidth: "130px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.style}>
+                          <span className="clr-badge-lot">{row.lotNumber || "-"}</span>
+                        </td>
+                        <td style={{ fontWeight: 600 }}>{row.garmentType || "-"}</td>
+                        <td>
+                          <div style={{ fontSize: "11px", color: "#0f172a", fontWeight: 700, maxWidth: "130px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.style}>
                             {row.style || "-"}
                           </div>
                         </td>
                         <td>{row.fabric || "-"}</td>
+                        <td style={{ fontWeight: 800, color: "#0f172a" }}>{row.brand || "-"}</td>
                         <td style={{ textAlign: "right" }}>
                           <div style={{ fontWeight: 900, color: "#be123c", fontSize: "13px" }}>{row.quantity || "0"}</div>
                           <div style={{ fontSize: "9px", textTransform: "uppercase", color: "#94a3b8", fontWeight: 700 }}>{row.unit || "PCS"}</div>
                         </td>
+                        <td>{row.section || "-"}</td>
+                        <td>{row.season || "-"}</td>
+                        <td style={{ fontWeight: 700, color: "#0f172a" }}>{row.partyName || "-"}</td>
+                        <td>{row.directStitching || "-"}</td>
+                        <td style={{ fontWeight: 800, color: "#be123c" }}>{row.jobOrderNo || "-"}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{formatDate(row.date)}</td>
                         <td>
                           <div style={{ fontSize: "11px", fontWeight: 700, maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.shade}>
                             {row.shade || "-"}

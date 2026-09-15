@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend } from './config';
 import { fetchRemarksForTab, saveRemarkForLot } from './embPrintRemarksService';
 
@@ -280,33 +282,35 @@ const API_URL_CUTTING =
 const DISPLAY_HEADERS = [
   "Lot Number",
   "Garment Type",
-  "Section",
   "Style",
   "Fabric",
   "Brand",
+  "Challan Total Qty",
+  "Section",
   "Season",
-  "Emb",
   "Party Name",
+  "Direct Stitching",
   "Priority",
+  "Emb",
   "Challan No",
   "Challan Date",
-  "Challan Total Qty",
 ];
 
 // All Exportable Columns for PDF & Excel
 const ALL_EXPORT_COLUMNS = [
   { id: 'S. No', label: 'S. No', key: 'S. No', defaultSelected: true, baseWidth: 28 },
   { id: 'Lot No.', label: 'Lot No.', key: 'Lot No.', defaultSelected: true, baseWidth: 55 },
+  { id: 'Garment Type', label: 'Garment Type', key: 'Garment Type', defaultSelected: true, baseWidth: 65 },
+  { id: 'Style', label: 'Style', key: 'Style', defaultSelected: true, baseWidth: 70 },
   { id: 'Fabric', label: 'Fabric', key: 'Fabric', defaultSelected: true, baseWidth: 60 },
   { id: 'Brand', label: 'Brand', key: 'Brand', defaultSelected: true, baseWidth: 65 },
-  { id: 'Style', label: 'Style', key: 'Style', defaultSelected: true, baseWidth: 70 },
-  { id: 'Season', label: 'Season', key: 'Season', defaultSelected: true, baseWidth: 45 },
+  { id: 'Challan Total Qty', label: 'Challan Qty', key: 'Challan Total Qty', defaultSelected: true, baseWidth: 45 },
   { id: 'Section', label: 'Section (M/W/K)', key: 'Section', defaultSelected: true, baseWidth: 32 },
-  { id: 'Garment Type', label: 'Garment Type', key: 'Garment Type', defaultSelected: true, baseWidth: 65 },
+  { id: 'Season', label: 'Season', key: 'Season', defaultSelected: true, baseWidth: 45 },
   { id: 'Party Name', label: 'Party Name', key: 'Party Name', defaultSelected: true, baseWidth: 45 },
+  { id: 'Direct Stitching', label: 'Direct Stitching', key: 'Direct Stitching', defaultSelected: true, baseWidth: 45 },
   { id: 'Emb', label: 'Emb Party', key: 'Emb', defaultSelected: true, baseWidth: 45 },
   { id: 'Challan Date', label: 'Challan Date', key: 'Challan Date', defaultSelected: true, baseWidth: 55 },
-  { id: 'Challan Total Qty', label: 'Challan Qty', key: 'Challan Total Qty', defaultSelected: true, baseWidth: 45 },
   { id: 'Emb Status', label: 'Emb Status', key: 'Emb Status', defaultSelected: true, baseWidth: 58 },
   { id: 'Pending Challan Shade', label: 'Pending Shade', key: 'Pending Challan Shade', defaultSelected: true, baseWidth: 70 },
   { id: 'Remarks', label: 'Remarks', key: 'Remarks', defaultSelected: true, baseWidth: 60 },
@@ -773,13 +777,15 @@ const RemarksHistoryModal = ({ isOpen, onClose, lotNumber, remarksHistory }) => 
 // Desired front-order
 const PRIORITY_HEADERS = [
   "Lot Number",
+  "Garment Type",
+  "Style",
   "Fabric",
   "Brand",
-  "Style",
-  "Season",
+  "Challan Total Qty",
   "Section",
-  "Garment Type",
+  "Season",
   "Party Name",
+  "Direct Stitching",
   "Priority",
 ];
 
@@ -1775,62 +1781,481 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
   const exportToExcelWithColumns = async (selectedCols) => {
     if (!exportedRows.length || !selectedCols.length) return;
     try {
-      const XLSX = await ensureXLSX();
+      const now = new Date();
+      const reportDateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      const totalLots = exportedRows.length;
+      let totalQty = 0;
+      let repeatedLotsCount = 0;
+      let redZoneLots = 0;
+      let redZoneQty = 0;
+      let normalLots = 0;
+      let normalQty = 0;
+
+      const garmentAnalysis = {};
+      const embPartyAnalysis = {};
+
+      exportedRows.forEach((row) => {
+        const qty = parseFloat(row["Challan Total Qty"]) || 0;
+        totalQty += qty;
+
+        const isRepeated = !!row["_isRepeated"];
+        if (isRepeated) repeatedLotsCount++;
+
+        const days = parseFloat(row["Days"]);
+        if (!isNaN(days) && days > 5) {
+          redZoneLots++;
+          redZoneQty += qty;
+        } else {
+          normalLots++;
+          normalQty += qty;
+        }
+
+        const garment = String(row["Garment Type"] || "Unassigned").trim() || "Unassigned";
+        if (!garmentAnalysis[garment]) {
+          garmentAnalysis[garment] = { name: garment, lots: 0, qty: 0 };
+        }
+        garmentAnalysis[garment].lots += 1;
+        garmentAnalysis[garment].qty += qty;
+
+        const embParty = String(row["Emb"] || "Unassigned").trim() || "Unassigned";
+        if (!embPartyAnalysis[embParty]) {
+          embPartyAnalysis[embParty] = { name: embParty, lots: 0, qty: 0 };
+        }
+        embPartyAnalysis[embParty].lots += 1;
+        embPartyAnalysis[embParty].qty += qty;
+      });
+
+      const sortedGarments = Object.values(garmentAnalysis).sort((a, b) => b.qty - a.qty);
+      const sortedEmbParties = Object.values(embPartyAnalysis).sort((a, b) => b.qty - a.qty);
 
       const activeColumns = selectedCols.map(id => {
         const def = ALL_EXPORT_COLUMNS.find(c => c.id === id);
-        return def || { id, label: id, key: id };
+        return def || { id, label: id, key: id, baseWidth: 50 };
       });
 
-      const filteredExportRows = exportedRows.map((row) => {
-        const rowObj = {};
-        activeColumns.forEach((col) => {
-          if (col.id === 'HOD Remarks') {
-            const lotNum = row["Lot No."] ? String(row["Lot No."]).replace(/★\s*/, '').trim() : "";
-            const lotHist = headRemarksMap[lotNum] || [];
-            rowObj[col.label] = lotHist.length > 0 ? lotHist[lotHist.length - 1].text : "";
-          } else {
-            rowObj[col.label] = row[col.key] ?? "";
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = "Factory Suite Pro";
+      workbook.created = now;
+
+      // Styling Helpers
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'CBD5E1' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'CBD5E1' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      const headerBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: '0F172A' } },
+        bottom: { style: 'medium', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: '0F172A' } }
+      };
+
+      const totalBorder = {
+        top: { style: 'thin', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: 'CBD5E1' } },
+        bottom: { style: 'double', color: { argb: '0F172A' } },
+        right: { style: 'thin', color: { argb: 'CBD5E1' } }
+      };
+
+      // ==========================================
+      // SHEET 1: CHALLAN RECORDS
+      // ==========================================
+      const ws1 = workbook.addWorksheet("Challan Records", {
+        views: [{ showGridLines: true, state: 'frozen', xSplit: 0, ySplit: 6 }]
+      });
+
+      const numCols1 = activeColumns.length;
+      ws1.columns = activeColumns.map(col => ({
+        header: col.label,
+        key: col.id,
+        width: Math.min(Math.max(Math.round((col.baseWidth || 50) / 3.8), 12), 40)
+      }));
+
+      // Row 1: Title Banner
+      const titleRow1 = ws1.getRow(1);
+      titleRow1.values = ["FACTORY SUITE PRO - EMBROIDERY CHALLAN PRODUCTION REPORT"];
+      ws1.mergeCells(1, 1, 1, numCols1);
+      titleRow1.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      titleRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F4C81" } };
+      titleRow1.alignment = { vertical: "middle", horizontal: "center" };
+      titleRow1.height = 34;
+
+      // Row 2: Metadata Banner
+      const metaRow1 = ws1.getRow(2);
+      metaRow1.values = [`Exported on: ${reportDateStr}  |  Total Lots: ${totalLots}  |  Total Quantity: ${totalQty.toLocaleString()}  |  Emb Parties: ${sortedEmbParties.length}  |  Garment Types: ${sortedGarments.length}  |  Repeated Lots: ${repeatedLotsCount}`];
+      ws1.mergeCells(2, 1, 2, numCols1);
+      metaRow1.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E293B" } };
+      metaRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      metaRow1.alignment = { vertical: "middle", horizontal: "center" };
+      metaRow1.height = 22;
+
+      // Row 3: Blank Row
+      const blankRow3 = ws1.getRow(3);
+      blankRow3.values = [];
+      blankRow3.height = 6;
+
+      // Row 4: KPI Summary Banner
+      const normalPct = totalLots > 0 ? Math.round((normalLots / totalLots) * 100) : 0;
+      const redPct = totalLots > 0 ? Math.round((redZoneLots / totalLots) * 100) : 0;
+      const kpiRow1 = ws1.getRow(4);
+      kpiRow1.values = [`KPI SUMMARY  |  TOTAL LOTS: ${totalLots}  |  TOTAL QTY: ${totalQty.toLocaleString()}  |  NORMAL (<=5d): ${normalLots} (${normalPct}%)  |  RED ZONE (>5d): ${redZoneLots} (${redPct}%)  |  REPEATED LOTS: ${repeatedLotsCount}`];
+      ws1.mergeCells(4, 1, 4, numCols1);
+      kpiRow1.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FF0369A1" } };
+      kpiRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0F2FE" } };
+      kpiRow1.alignment = { vertical: "middle", horizontal: "center" };
+      kpiRow1.height = 24;
+
+      // Row 5: Blank Row
+      const blankRow5 = ws1.getRow(5);
+      blankRow5.values = [];
+      blankRow5.height = 6;
+
+      // Row 6: Table Headers Row
+      const headerRow1 = ws1.getRow(6);
+      headerRow1.values = activeColumns.map(c => c.label);
+      headerRow1.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      headerRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F4C81" } };
+      headerRow1.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      headerRow1.height = 30;
+      for (let c = 1; c <= numCols1; c++) {
+        headerRow1.getCell(c).border = headerBorder;
+      }
+
+      // Add Data Rows
+      let rIdx1 = 7;
+      exportedRows.forEach((row, index) => {
+        const lotNum = row["Lot No."] ? String(row["Lot No."]).replace(/★\s*/, '').trim() : "";
+        const isRepeated = !!row["_isRepeated"];
+        const lotHist = headRemarksMap[lotNum] || [];
+        const latestHod = lotHist.length > 0 ? lotHist[lotHist.length - 1].text : "";
+        const days = parseFloat(row["Days"]);
+
+        const rowValues = activeColumns.map(col => {
+          if (col.id === 'S. No') return index + 1;
+          if (col.id === 'Lot No.') return lotNum || "—";
+          if (col.id === 'HOD Remarks') return latestHod || "—";
+          if (col.id === 'Challan Total Qty') {
+            const q = parseFloat(row[col.key]);
+            return isNaN(q) ? 0 : q;
+          }
+          if (col.id === 'Days') {
+            return !isNaN(days) ? days : (row[col.key] || "—");
+          }
+          return row[col.key] || "—";
+        });
+
+        const dataRow = ws1.getRow(rIdx1);
+        dataRow.values = rowValues;
+        dataRow.height = 22;
+
+        activeColumns.forEach((col, colIdx) => {
+          const cell = dataRow.getCell(colIdx + 1);
+          cell.border = thinBorder;
+          cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+
+          if (col.id === 'Challan Total Qty') {
+            cell.numFmt = '#,##0';
+          }
+
+          if (col.id === 'Days' && !isNaN(days)) {
+            if (days > 5) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+              cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF991B1B' } };
+            } else {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+              cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF15803D' } };
+            }
+          }
+
+          if (isRepeated && (col.id === 'Lot No.' || col.id === 'S. No')) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+            cell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFB45309' } };
           }
         });
-        return rowObj;
+
+        rIdx1++;
       });
 
-      const ws = XLSX.utils.json_to_sheet(filteredExportRows);
-      const cols = Object.keys(filteredExportRows[0] || {});
-      ws["!cols"] = cols.map((c) => {
-        const max = Math.max(c.length, ...filteredExportRows.map((r) => String(r[c] ?? "").length));
-        return { wch: Math.min(Math.max(max + 2, 10), 60) };
+      // Total Row on Sheet 1
+      const totalRow1 = ws1.getRow(rIdx1);
+      const totalRowValues1 = activeColumns.map(col => {
+        if (col.id === 'S. No' || col.id === 'Lot No.') return `TOTAL: ${totalLots} LOTS`;
+        if (col.id === 'Challan Total Qty') return totalQty;
+        return "";
       });
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Challans");
-      const wbout = XLSX.write(wb, { type: "array", bookType: "xlsx" });
-      downloadBlob(
-        new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
-        `Embroidery-Challans-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.xlsx`
-      );
+      totalRow1.values = totalRowValues1;
+      totalRow1.height = 26;
+      totalRow1.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      totalRow1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+
+      for (let c = 1; c <= numCols1; c++) {
+        const cell = totalRow1.getCell(c);
+        cell.border = totalBorder;
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        if (activeColumns[c - 1].id === 'Challan Total Qty') {
+          cell.numFmt = '#,##0';
+        }
+      }
+
+      // ==========================================
+      // SHEET 2: EXECUTIVE SUMMARY & BREAKDOWN
+      // ==========================================
+      const ws2 = workbook.addWorksheet("Executive Summary", {
+        views: [{ showGridLines: true }]
+      });
+
+      ws2.columns = [
+        { header: "Category / Name", key: "col1", width: 28 },
+        { header: "Total Lots", key: "col2", width: 16 },
+        { header: "Share %", key: "col3", width: 16 },
+        { header: "Total Pieces (Qty)", key: "col4", width: 22 }
+      ];
+
+      // Row 1: Executive Title
+      const exTitle = ws2.getRow(1);
+      exTitle.values = ["EMBROIDERY PRODUCTION - EXECUTIVE SUMMARY & BREAKDOWN"];
+      ws2.mergeCells(1, 1, 1, 4);
+      exTitle.font = { name: "Segoe UI", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+      exTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F4C81" } };
+      exTitle.alignment = { vertical: "middle", horizontal: "center" };
+      exTitle.height = 32;
+
+      // Row 2: Metadata
+      const exMeta = ws2.getRow(2);
+      exMeta.values = [`Generated on: ${reportDateStr}  |  Total Records: ${totalLots} Lots  |  Total Quantity: ${totalQty.toLocaleString()} Pcs`];
+      ws2.mergeCells(2, 1, 2, 4);
+      exMeta.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E293B" } };
+      exMeta.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      exMeta.alignment = { vertical: "middle", horizontal: "center" };
+      exMeta.height = 22;
+
+      let rIdx2 = 4;
+
+      // --- SECTION 1: GARMENT TYPE BREAKDOWN ---
+      const gHeaderRow = ws2.getRow(rIdx2);
+      gHeaderRow.values = ["🧵 1. GARMENT TYPE BREAKDOWN (LOTS & PIECES)"];
+      ws2.mergeCells(rIdx2, 1, rIdx2, 4);
+      gHeaderRow.font = { name: "Segoe UI", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      gHeaderRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } }; // Deep Teal
+      gHeaderRow.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      gHeaderRow.height = 26;
+      rIdx2++;
+
+      const gColHeaderRow = ws2.getRow(rIdx2);
+      gColHeaderRow.values = ["Garment Type", "Total Lots", "Share %", "Total Pieces"];
+      gColHeaderRow.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      gColHeaderRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF14B8A6" } };
+      gColHeaderRow.alignment = { vertical: "middle", horizontal: "center" };
+      gColHeaderRow.height = 24;
+      for (let c = 1; c <= 4; c++) gColHeaderRow.getCell(c).border = headerBorder;
+      rIdx2++;
+
+      sortedGarments.forEach((item) => {
+        const row = ws2.getRow(rIdx2);
+        const share = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        row.values = [item.name, item.lots, `${share}%`, item.qty];
+        row.height = 20;
+
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.border = thinBorder;
+          cell.alignment = { vertical: "middle", horizontal: "center" };
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+        }
+        row.getCell(4).numFmt = '#,##0';
+        row.getCell(2).numFmt = '#,##0';
+        rIdx2++;
+      });
+
+      const gTotalRow = ws2.getRow(rIdx2);
+      gTotalRow.values = ["TOTAL GARMENTS", totalLots, "100.0%", totalQty];
+      gTotalRow.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      gTotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+      gTotalRow.height = 24;
+      for (let c = 1; c <= 4; c++) {
+        const cell = gTotalRow.getCell(c);
+        cell.border = totalBorder;
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+      }
+      gTotalRow.getCell(4).numFmt = '#,##0';
+      gTotalRow.getCell(2).numFmt = '#,##0';
+      rIdx2 += 3;
+
+      // --- SECTION 2: EMB PARTY SUMMARY ---
+      const pHeaderRow = ws2.getRow(rIdx2);
+      pHeaderRow.values = ["🏢 2. EMB PARTY SUMMARY & WORKLOAD ALLOCATION"];
+      ws2.mergeCells(rIdx2, 1, rIdx2, 4);
+      pHeaderRow.font = { name: "Segoe UI", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      pHeaderRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E40AF" } }; // Royal Blue
+      pHeaderRow.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      pHeaderRow.height = 26;
+      rIdx2++;
+
+      const pColHeaderRow = ws2.getRow(rIdx2);
+      pColHeaderRow.values = ["Emb Party", "Total Lots", "Share %", "Total Pieces"];
+      pColHeaderRow.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      pColHeaderRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF3B82F6" } };
+      pColHeaderRow.alignment = { vertical: "middle", horizontal: "center" };
+      pColHeaderRow.height = 24;
+      for (let c = 1; c <= 4; c++) pColHeaderRow.getCell(c).border = headerBorder;
+      rIdx2++;
+
+      sortedEmbParties.forEach((item) => {
+        const row = ws2.getRow(rIdx2);
+        const share = totalQty > 0 ? ((item.qty / totalQty) * 100).toFixed(1) : "0.0";
+        row.values = [item.name, item.lots, `${share}%`, item.qty];
+        row.height = 20;
+
+        for (let c = 1; c <= 4; c++) {
+          const cell = row.getCell(c);
+          cell.border = thinBorder;
+          cell.alignment = { vertical: "middle", horizontal: "center" };
+          cell.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF0F172A" } };
+        }
+        row.getCell(4).numFmt = '#,##0';
+        row.getCell(2).numFmt = '#,##0';
+        rIdx2++;
+      });
+
+      const pTotalRow = ws2.getRow(rIdx2);
+      pTotalRow.values = ["TOTAL EMB PARTIES", totalLots, "100.0%", totalQty];
+      pTotalRow.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      pTotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E40AF" } };
+      pTotalRow.height = 24;
+      for (let c = 1; c <= 4; c++) {
+        const cell = pTotalRow.getCell(c);
+        cell.border = totalBorder;
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+      }
+      pTotalRow.getCell(4).numFmt = '#,##0';
+      pTotalRow.getCell(2).numFmt = '#,##0';
+      rIdx2 += 3;
+
+      // --- SECTION 3: DAYS AGING BREAKDOWN ---
+      const aHeaderRow = ws2.getRow(rIdx2);
+      aHeaderRow.values = ["⏱️ 3. SLA & DAYS AGING BREAKDOWN"];
+      ws2.mergeCells(rIdx2, 1, rIdx2, 4);
+      aHeaderRow.font = { name: "Segoe UI", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      aHeaderRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFB45309" } }; // Amber
+      aHeaderRow.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      aHeaderRow.height = 26;
+      rIdx2++;
+
+      const aColHeaderRow = ws2.getRow(rIdx2);
+      aColHeaderRow.values = ["Aging Status", "Lot Count", "Share %", "Total Pieces"];
+      aColHeaderRow.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      aColHeaderRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF59E0B" } };
+      aColHeaderRow.alignment = { vertical: "middle", horizontal: "center" };
+      aColHeaderRow.height = 24;
+      for (let c = 1; c <= 4; c++) aColHeaderRow.getCell(c).border = headerBorder;
+      rIdx2++;
+
+      // Row Normal (<=5d)
+      const normRow = ws2.getRow(rIdx2);
+      normRow.values = ["<= 5 Days (On-Time / Normal)", normalLots, `${totalLots > 0 ? ((normalLots / totalLots) * 100).toFixed(1) : 0}%`, normalQty];
+      normRow.height = 20;
+      for (let c = 1; c <= 4; c++) {
+        const cell = normRow.getCell(c);
+        cell.border = thinBorder;
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+        cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF15803D" } };
+      }
+      normRow.getCell(4).numFmt = '#,##0';
+      normRow.getCell(2).numFmt = '#,##0';
+      rIdx2++;
+
+      // Row Red Zone (>5d)
+      const redRow = ws2.getRow(rIdx2);
+      redRow.values = ["> 5 Days (Red Zone / Delayed)", redZoneLots, `${totalLots > 0 ? ((redZoneLots / totalLots) * 100).toFixed(1) : 0}%`, redZoneQty];
+      redRow.height = 20;
+      for (let c = 1; c <= 4; c++) {
+        const cell = redRow.getCell(c);
+        cell.border = thinBorder;
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        cell.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF991B1B" } };
+      }
+      redRow.getCell(4).numFmt = '#,##0';
+      redRow.getCell(2).numFmt = '#,##0';
+      rIdx2++;
+
+      const aTotalRow = ws2.getRow(rIdx2);
+      aTotalRow.values = ["TOTAL SLA PERFORMANCE", totalLots, "100.0%", totalQty];
+      aTotalRow.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+      aTotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFB45309" } };
+      aTotalRow.height = 24;
+      for (let c = 1; c <= 4; c++) {
+        const cell = aTotalRow.getCell(c);
+        cell.border = totalBorder;
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+      }
+      aTotalRow.getCell(4).numFmt = '#,##0';
+      aTotalRow.getCell(2).numFmt = '#,##0';
+
+      // ==========================================
+      // SHEET 3: APPLIED FILTERS AUDIT
+      // ==========================================
+      const ws3 = workbook.addWorksheet("Applied Filters", {
+        views: [{ showGridLines: true }]
+      });
+
+      ws3.columns = [
+        { header: "Filter Parameter", key: "param", width: 28 },
+        { header: "Active Selection", key: "value", width: 50 }
+      ];
+
+      const fTitle = ws3.getRow(1);
+      fTitle.values = ["APPLIED REPORT FILTERS & AUDIT METADATA"];
+      ws3.mergeCells(1, 1, 1, 2);
+      fTitle.font = { name: "Segoe UI", size: 13, bold: true, color: { argb: "FFFFFFFF" } };
+      fTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F4C81" } };
+      fTitle.alignment = { vertical: "middle", horizontal: "center" };
+      fTitle.height = 30;
+
+      const filterList = [
+        { param: "Financial Year", val: financialYearFilter || "ALL" },
+        { param: "Emb Status Filter", val: embFilter.toUpperCase() },
+        { param: "Days SLA Filter", val: daysFilter.toUpperCase() },
+        { param: "Fabric Filter", val: fabricFilter.length > 0 ? fabricFilter.join(", ") : "All Fabrics" },
+        { param: "Brand Filter", val: brandFilter.length > 0 ? brandFilter.join(", ") : "All Brands" },
+        { param: "Style Filter", val: styleFilter.length > 0 ? styleFilter.join(", ") : "All Styles" },
+        { param: "Season Filter", val: seasonFilter.length > 0 ? seasonFilter.join(", ") : "All Seasons" },
+        { param: "Garment Type Filter", val: garmentTypeFilter.length > 0 ? garmentTypeFilter.join(", ") : "All Garments" },
+        { param: "Section Filter", val: sectionFilter.length > 0 ? sectionFilter.join(", ") : "All Sections" },
+        { param: "Party Name Filter", val: partyNameFilter.length > 0 ? partyNameFilter.join(", ") : "All Parties" },
+        { param: "Emb Dropdown Filter", val: embFilterDropdown.length > 0 ? embFilterDropdown.join(", ") : "All Emb Parties" },
+        { param: "Priority Filter", val: priorityFilter.length > 0 ? priorityFilter.join(", ") : "All Priorities" },
+        { param: "Search Query", val: searchTerm || "None" },
+        { param: "Export Timestamp", val: reportDateStr },
+      ];
+
+      let rIdx3 = 3;
+      filterList.forEach(f => {
+        const r = ws3.getRow(rIdx3);
+        r.values = [f.param, f.val];
+        r.height = 20;
+        const cell1 = r.getCell(1);
+        const cell2 = r.getCell(2);
+        cell1.border = thinBorder;
+        cell2.border = thinBorder;
+        cell1.font = { name: "Segoe UI", size: 9.5, bold: true, color: { argb: "FF1E293B" } };
+        cell2.font = { name: "Segoe UI", size: 9.5, color: { argb: "FF334155" } };
+        cell1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        rIdx3++;
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const filename = `Embroidery-Challans-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.xlsx`;
+      saveAs(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), filename);
+
     } catch (e) {
-      console.error(e);
-      const activeColumns = selectedCols.map(id => {
-        const def = ALL_EXPORT_COLUMNS.find(c => c.id === id);
-        return def || { id, label: id, key: id };
-      });
-      const cols = activeColumns.map(c => c.label);
-      const csv =
-        [cols.join(",")]
-          .concat(
-            exportedRows.map((r) => activeColumns.map((col) => {
-              let val = r[col.key] ?? "";
-              if (col.id === 'HOD Remarks') {
-                const lotNum = r["Lot No."] ? String(r["Lot No."]).replace(/★\s*/, '').trim() : "";
-                const lotHist = headRemarksMap[lotNum] || [];
-                val = lotHist.length > 0 ? lotHist[lotHist.length - 1].text : "";
-              }
-              return `"${String(val).replace(/"/g, '""')}"`;
-            }).join(","))
-          )
-          .join("\n") + "\n";
-      downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), "Embroidery-Challans.csv");
+      console.error("ExcelJS export error:", e);
+      alert(`Excel export error: ${e.message}`);
     }
   };
 
@@ -1841,22 +2266,17 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
       const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "A3" });
 
       const COLOR = {
-        headerFill: [15, 76, 129],      // Deep Navy Blue (matching StitchingCompleted.js)
+        headerFill: [15, 76, 129],      // Deep Navy Blue
         headerText: [255, 255, 255],    // White bold text
         grid: [0, 0, 0],                // Solid Black grid lines
         stripe: [248, 250, 252],        // Light slate alternating stripe
-        text: [15, 23, 42],             // Deep Charcoal text
-        accent: [59, 130, 246],         // Vibrant Blue Accent
-        daysGood: [220, 252, 231],      // Soft Green badge (#dcfce7)
-        daysGoodText: [21, 128, 61],    // Green text (#15803d)
-        daysBad: [239, 68, 68],         // Vibrant Solid Red (#ef4444) for Days > 5
-        daysBadText: [255, 255, 255],   // Bold White Text (#ffffff)
-        pageBorder: [0, 0, 0],          // Black page border
+        text: [0, 0, 0],                // Crisp Pure Black Text
+        accent: [0, 0, 0],              // Pure Black Accent
+        pageBorder: [0, 0, 0],          // Pure Black page border
         summaryBg: [239, 246, 255],     // Light blue summary box (#eff6ff)
-        summaryText: [30, 58, 138],     // Navy summary text
+        summaryText: [0, 0, 0],         // Pure Black summary text
         totalBg: [239, 246, 255],       // Soft Navy/Blue total summary banner
         repeatedLotBg: [254, 243, 199], // Light amber highlight (#fef3c7)
-        starColor: [217, 119, 6],       // Gold star
       };
 
       const drawStarSymbol = (doc, x, y, size = 4.5) => {
@@ -1904,23 +2324,42 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
       }, 0);
       const repeatedLotsCount = exportedRows.filter(row => row["_isRepeated"]).length;
 
+      // Garment Type Breakdown Map
+      const garmentMap = {};
       const embParties = {};
+      let normalLotsCount = 0;
+      let normalPcsCount = 0;
+      let redLotsCount = 0;
+      let redPcsCount = 0;
+
       exportedRows.forEach(row => {
+        const garment = row["Garment Type"] || "Unassigned";
         const embParty = row["Emb"] || "Unassigned";
         const qty = parseFloat(row["Challan Total Qty"]) || 0;
+        const days = parseFloat(row["Days"]);
+
+        if (!garmentMap[garment]) {
+          garmentMap[garment] = { name: garment, totalLots: 0, totalPcs: 0 };
+        }
+        garmentMap[garment].totalLots += 1;
+        garmentMap[garment].totalPcs += qty;
 
         if (!embParties[embParty]) {
-          embParties[embParty] = {
-            name: embParty,
-            totalLots: 0,
-            totalPcs: 0
-          };
+          embParties[embParty] = { name: embParty, totalLots: 0, totalPcs: 0 };
         }
-
         embParties[embParty].totalLots += 1;
         embParties[embParty].totalPcs += qty;
+
+        if (!isNaN(days) && days > 5) {
+          redLotsCount++;
+          redPcsCount += qty;
+        } else {
+          normalLotsCount++;
+          normalPcsCount += qty;
+        }
       });
 
+      const sortedGarments = Object.values(garmentMap).sort((a, b) => b.totalPcs - a.totalPcs);
       const sortedEmbParties = Object.values(embParties).sort((a, b) => b.totalPcs - a.totalPcs);
 
       const title = "EMBROIDERY CHALLAN PRODUCTION REPORT";
@@ -1931,12 +2370,12 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
       const pageH = doc.internal.pageSize.getHeight();
 
       doc.setFontSize(20);
-      doc.setTextColor(15, 76, 129);
+      doc.setTextColor(0, 0, 0); // Pure Black Heading
       doc.setFont('helvetica', 'bold');
       doc.text(title, pageW / 2, 38, { align: 'center' });
 
       doc.setFontSize(10);
-      doc.setTextColor(71, 85, 105);
+      doc.setTextColor(50, 50, 50);
       doc.setFont('helvetica', 'normal');
       doc.text(subtitle, pageW / 2, 54, { align: 'center' });
 
@@ -1949,10 +2388,10 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
       doc.roundedRect(30, currentY - 5, pageW - 60, 24, 6, 6, 'D');
 
       doc.setFontSize(11);
-      doc.setTextColor(30, 58, 138);
+      doc.setTextColor(0, 0, 0); // Pure Black
       doc.setFont('helvetica', 'bold');
 
-      const summaryText = `Total Records: ${totalLots}   |   Total Pcs / Qty: ${totalPcs.toLocaleString()}   |   Repeated Lots: ${repeatedLotsCount}`;
+      const summaryText = `Total Records: ${totalLots}   |   Total Pcs / Qty: ${totalPcs.toLocaleString()}   |   Garment Types: ${sortedGarments.length}   |   Emb Parties: ${sortedEmbParties.length}   |   Repeated Lots: ${repeatedLotsCount}`;
       const summaryTextWidth = doc.getTextWidth(summaryText);
       const summaryX = (pageW - summaryTextWidth) / 2;
 
@@ -1985,7 +2424,6 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
       const lotColIdx = columns.indexOf("Lot No.");
 
       const availableWidth = pageW - 30;
-
       const baseWidths = activeColumns.map(c => c.baseWidth || 50);
       const baseSum = baseWidths.reduce((a, b) => a + b, 0);
       const columnStyles = {};
@@ -2002,7 +2440,6 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
         head: [columns],
         body,
         startY: currentY,
-        margin: { left: 15, right: 15 },
         tableWidth: availableWidth,
         theme: "grid",
         styles: {
@@ -2010,8 +2447,8 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
           cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
           overflow: "linebreak",
           valign: 'middle',
-          textColor: COLOR.text,
-          lineColor: [0, 0, 0],
+          textColor: [0, 0, 0], // Pure Black
+          lineColor: [0, 0, 0], // Black grid lines
           lineWidth: 0.5,
           fontStyle: 'normal',
           minCellHeight: 12,
@@ -2046,6 +2483,7 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
               data.cell.styles.fillColor = COLOR.repeatedLotBg;
               data.cell.styles.fontStyle = "bold";
               data.cell.styles.fontSize = 10;
+              data.cell.styles.textColor = [0, 0, 0];
             }
 
             if (data.column.index === daysColIdx && daysColIdx !== -1) {
@@ -2053,12 +2491,12 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
               const n = parseFloat(rawVal);
               if (!isNaN(n) && rawVal !== "") {
                 if (n > 5) {
-                  data.cell.styles.fillColor = [239, 68, 68];   // Solid Vibrant Red (#ef4444)
-                  data.cell.styles.textColor = [255, 255, 255]; // Pure White Bold Text (#ffffff)
+                  data.cell.styles.fillColor = [239, 68, 68];   // Vibrant Red
+                  data.cell.styles.textColor = [255, 255, 255]; // White bold
                   data.cell.styles.fontStyle = "bold";
                 } else {
-                  data.cell.styles.fillColor = [220, 252, 231]; // Soft Green badge (#dcfce7)
-                  data.cell.styles.textColor = [21, 128, 61];   // Dark Green text (#15803d)
+                  data.cell.styles.fillColor = [220, 252, 231]; // Soft Green
+                  data.cell.styles.textColor = [21, 128, 61];   // Green text
                   data.cell.styles.fontStyle = "bold";
                 }
               }
@@ -2143,7 +2581,7 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
           doc.roundedRect(10, 10, pw - 20, ph - 20, 2, 2, "S");
 
           doc.setFontSize(8.5);
-          doc.setTextColor(100, 116, 139);
+          doc.setTextColor(0, 0, 0);
           doc.setFont('helvetica', 'normal');
 
           doc.text(`Factory Suite Pro • Embroidery Challan Report`, 18, ph - 14);
@@ -2159,148 +2597,276 @@ export default function EmbroideryChallan({ initialEmbFilter = "pending", isEmbe
         margin: { top: currentY, right: 15, bottom: 25, left: 15 },
       });
 
-      if (starPositions.length > 0) {
-        starPositions.forEach(({ lotNumber, rowIndex, cell }) => {
-          try {
-            const cellX = cell.x;
-            const cellY = cell.y;
-            const cellWidth = cell.width;
-            const cellHeight = cell.height;
-            const centerX = cellX + (cellWidth / 2);
-            const centerY = cellY + (cellHeight / 2);
+      // --- 3-COLUMN SIDE-BY-SIDE EXECUTIVE SUMMARY ---
+      const gBody = sortedGarments.map(item => {
+        const pct = totalPcs > 0 ? ((item.totalPcs / totalPcs) * 100).toFixed(1) : "0.0";
+        return [
+          item.name,
+          item.totalLots.toString(),
+          item.totalPcs.toLocaleString(),
+          `${pct}%`
+        ];
+      });
+      gBody.push([
+        "TOTAL",
+        totalLots.toString(),
+        totalPcs.toLocaleString(),
+        "100.0%"
+      ]);
 
-            doc.setFontSize(10);
-            doc.setFont(undefined, 'bold');
+      const pBody = sortedEmbParties.map(party => {
+        const pct = totalPcs > 0 ? ((party.totalPcs / totalPcs) * 100).toFixed(1) : "0.0";
+        return [
+          party.name,
+          party.totalLots.toString(),
+          party.totalPcs.toLocaleString(),
+          `${pct}%`
+        ];
+      });
+      pBody.push([
+        "TOTAL",
+        totalLots.toString(),
+        totalPcs.toLocaleString(),
+        "100.0%"
+      ]);
 
-            const textWidth = doc.getTextWidth(lotNumber);
-            const iconSize = 4.5;
-            const starX = centerX - (textWidth / 2) - iconSize - 5;
-            const starY = centerY;
+      const aBody = [
+        [
+          "<= 5 Days (On-Time)",
+          normalLotsCount.toString(),
+          normalPcsCount.toLocaleString(),
+          `${totalLots > 0 ? ((normalLotsCount / totalLots) * 100).toFixed(1) : 0}%`
+        ],
+        [
+          "> 5 Days (Delayed)",
+          redLotsCount.toString(),
+          redPcsCount.toLocaleString(),
+          `${totalLots > 0 ? ((redLotsCount / totalLots) * 100).toFixed(1) : 0}%`
+        ],
+        [
+          "TOTAL",
+          totalLots.toString(),
+          totalPcs.toLocaleString(),
+          "100.0%"
+        ]
+      ];
 
-            drawStarSymbol(doc, starX, starY, iconSize);
+      const maxRows = Math.max(gBody.length, pBody.length, aBody.length);
+      const approxSummaryHeight = 55 + (maxRows * 18);
 
-            const textX = centerX - (textWidth / 2);
-            const textY = centerY + 5;
-            doc.setTextColor(0, 0, 0);
-            doc.text(lotNumber, textX, textY);
-            doc.setFont(undefined, 'normal');
-          } catch (e) {
-            console.warn("Error drawing star for row", rowIndex, e);
-          }
-        });
-      }
-
-      let lastAutoTable = doc.lastAutoTable;
-      let yPosition = lastAutoTable.finalY + 40;
-
-      if (yPosition > pageH - 100) {
+      let summaryStartY = doc.lastAutoTable.finalY + 22;
+      const neededSpace = approxSummaryHeight + 35;
+      if (summaryStartY + neededSpace > pageH - 30) {
         doc.addPage();
-        yPosition = 60;
+        summaryStartY = 40;
       } else {
-        yPosition += 10;
-        doc.setDrawColor(...COLOR.headerFill);
-        doc.setLineWidth(1);
-        doc.line(50, yPosition - 5, pageW - 50, yPosition - 5);
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.8);
+        doc.line(20, summaryStartY - 8, pageW - 20, summaryStartY - 8);
       }
 
-      if (sortedEmbParties.length > 0) {
-        doc.setFontSize(22);
-        doc.setFont(undefined, 'bold');
-        doc.setTextColor(...COLOR.headerFill);
+      // Title & KPI Subtitle
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0); // Pure Black
+      const summaryTitle = "EXECUTIVE SUMMARY & PRODUCTION BREAKDOWN";
+      doc.text(summaryTitle, pageW / 2, summaryStartY + 4, { align: 'center' });
 
-        const summaryTitle = "EMB PARTY SUMMARY REPORT";
-        const titleWidth = doc.getTextWidth(summaryTitle);
-        const titleX = (pageW - titleWidth) / 2;
-        doc.text(summaryTitle, titleX, yPosition);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(0, 0, 0);
+      const summarySub = `Total Records: ${totalLots} Lots   |   Total Pieces: ${totalPcs.toLocaleString()} Pcs   |   Emb Parties: ${sortedEmbParties.length}   |   Garment Types: ${sortedGarments.length}   |   Repeated Lots: ${repeatedLotsCount}`;
+      doc.text(summarySub, pageW / 2, summaryStartY + 16, { align: 'center' });
 
-        yPosition += 25;
+      const sectionTitleY = summaryStartY + 30;
+      const tableStartY = sectionTitleY + 6;
 
-        doc.setFontSize(14);
-        doc.setFont(undefined, 'normal');
-        doc.setTextColor(...COLOR.text);
+      // 3 Columns Side-by-Side Configuration
+      const colWidth = 370;
+      const col1X = 20;
+      const col2X = 410;
+      const col3X = 800;
 
-        const totalText = `Total Emb Parties: ${sortedEmbParties.length}  |  Total Pieces: ${totalPcs.toLocaleString()}  |  Total Lots: ${totalLots}`;
-        const totalTextWidth = doc.getTextWidth(totalText);
-        const totalTextX = (pageW - totalTextWidth) / 2;
-        doc.text(totalText, totalTextX, yPosition);
+      // Section Titles above each Column
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text("1. GARMENT TYPE BREAKDOWN", col1X, sectionTitleY);
+      doc.text("2. EMB PARTY SUMMARY", col2X, sectionTitleY);
+      doc.text("3. SLA & DAYS AGING", col3X, sectionTitleY);
 
-        yPosition += 25;
-
-        const tableColumnWidths = [200, 120, 140, 120];
-        const totalTableWidth = tableColumnWidths.reduce((a, b) => a + b, 0);
-        const tableMarginLeft = (pageW - totalTableWidth) / 2;
-
-        autoTable(doc, {
-          head: [['Emb Party', 'Total Lots', 'Total Pcs', 'Share %']],
-          body: sortedEmbParties.map((party, index) => {
-            const percentage = (party.totalPcs / totalPcs * 100).toFixed(1);
-            return [
-              party.name,
-              party.totalLots.toString(),
-              party.totalPcs.toLocaleString(),
-              `${percentage}%`
-            ];
-          }),
-          startY: yPosition,
-          theme: "grid",
-          styles: {
-            fontSize: 11,
-            cellPadding: 8,
-            overflow: "linebreak",
-            valign: 'middle',
-            halign: 'center',
-            textColor: COLOR.text,
-            lineColor: COLOR.grid,
-            lineWidth: 0.2,
-          },
-          headStyles: {
-            fillColor: [79, 70, 229],
-            textColor: [255, 255, 255],
-            fontStyle: "bold",
-            fontSize: 12,
-            halign: 'center',
-            cellPadding: 10,
-          },
-          columnStyles: {
-            0: { cellWidth: 200, halign: 'left' },
-            1: { cellWidth: 120, halign: 'center' },
-            2: { cellWidth: 140, halign: 'right' },
-            3: { cellWidth: 120, halign: 'center' },
-          },
-          margin: { left: tableMarginLeft, right: tableMarginLeft },
-          didDrawPage: (hookData) => {
-            if (hookData.pageNumber > doc.internal.getNumberOfPages() - 1 || hookData.pageNumber === doc.internal.getNumberOfPages()) {
-              const pw = doc.internal.pageSize.getWidth();
-              const ph = doc.internal.pageSize.getHeight();
-
-              doc.setDrawColor(...COLOR.pageBorder);
-              doc.setLineWidth(0.5);
-              doc.roundedRect(10, 10, pw - 20, ph - 20, 2, 2, "S");
-
-              doc.setFontSize(9);
-              doc.setTextColor(...COLOR.accent);
-              const totalPages = doc.internal.getNumberOfPages();
-              const label = `Page ${hookData.pageNumber} of ${totalPages}`;
-              const textW = doc.getTextWidth(label);
-              doc.text(label, pw - 15 - textW, ph - 15);
-              doc.text("Emb Party Summary", 15, ph - 15);
+      // Column 1 Table: Garment Type Breakdown
+      autoTable(doc, {
+        head: [['Garment Type', 'Lots', 'Total Pcs', 'Share %']],
+        body: gBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col1X, right: pageW - (col1X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 3, bottom: 3.5, left: 3 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 9,
+          halign: 'center',
+          cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
+        },
+        columnStyles: {
+          0: { cellWidth: 145, halign: 'left' },
+          1: { cellWidth: 60, halign: 'center' },
+          2: { cellWidth: 100, halign: 'right' },
+          3: { cellWidth: 65, halign: 'center' },
+        },
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            if (data.row.index === gBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
             }
           }
-        });
+        }
+      });
+      const endY1 = doc.lastAutoTable.finalY;
 
-        const tableEndY = doc.lastAutoTable.finalY + 30;
-        const finalY = tableEndY + 20;
-        doc.setDrawColor(...COLOR.headerFill);
+      // Column 2 Table: Emb Party Summary
+      autoTable(doc, {
+        head: [['Emb Party', 'Lots', 'Total Pcs', 'Share %']],
+        body: pBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col2X, right: pageW - (col2X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 3, bottom: 3.5, left: 3 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [30, 64, 175], // Royal Blue
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 9,
+          halign: 'center',
+          cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
+        },
+        columnStyles: {
+          0: { cellWidth: 145, halign: 'left' },
+          1: { cellWidth: 60, halign: 'center' },
+          2: { cellWidth: 100, halign: 'right' },
+          3: { cellWidth: 65, halign: 'center' },
+        },
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            if (data.row.index === pBody.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY2 = doc.lastAutoTable.finalY;
+
+      // Column 3 Table: SLA & Days Aging Breakdown
+      autoTable(doc, {
+        head: [['Aging Status', 'Lots', 'Total Pcs', 'Share %']],
+        body: aBody,
+        startY: tableStartY,
+        tableWidth: colWidth,
+        margin: { left: col3X, right: pageW - (col3X + colWidth) },
+        theme: "grid",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: { top: 3.5, right: 3, bottom: 3.5, left: 3 },
+          overflow: "linebreak",
+          valign: 'middle',
+          halign: 'center',
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.3,
+        },
+        headStyles: {
+          fillColor: [180, 83, 9], // Amber
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 9,
+          halign: 'center',
+          cellPadding: { top: 4, right: 3, bottom: 4, left: 3 },
+        },
+        columnStyles: {
+          0: { cellWidth: 145, halign: 'left' },
+          1: { cellWidth: 60, halign: 'center' },
+          2: { cellWidth: 100, halign: 'right' },
+          3: { cellWidth: 65, halign: 'center' },
+        },
+        didParseCell: function (data) {
+          if (data.section === 'body') {
+            data.cell.styles.textColor = [0, 0, 0];
+            if (data.row.index === 0) {
+              data.cell.styles.fillColor = [220, 252, 231]; // Soft Green
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 1) {
+              data.cell.styles.fillColor = [254, 226, 226]; // Soft Red
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.row.index === 2) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [241, 245, 249];
+            }
+          }
+        }
+      });
+      const endY3 = doc.lastAutoTable.finalY;
+
+      const maxEndY = Math.max(endY1, endY2, endY3);
+
+      const finalY = maxEndY + 16;
+      if (finalY <= pageH - 22) {
+        doc.setDrawColor(0, 0, 0);
         doc.setLineWidth(0.5);
-        doc.line(50, finalY, pageW - 50, finalY);
+        doc.line(20, finalY, pageW - 20, finalY);
 
-        doc.setFontSize(11);
-        doc.setFont(undefined, 'italic');
-        doc.setTextColor(100, 100, 100);
-        const thankYouText = "Report Generated Successfully";
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(0, 0, 0);
+        const thankYouText = "Factory Suite Pro • Report Generated Successfully";
         const thankYouWidth = doc.getTextWidth(thankYouText);
         const thankYouX = (pageW - thankYouWidth) / 2;
-        doc.text(thankYouText, thankYouX, finalY + 20);
+        doc.text(thankYouText, thankYouX, finalY + 11);
+      }
+
+      // Page Border & Footer for ALL Pages
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.5);
+        doc.roundedRect(10, 10, pageW - 20, pageH - 20, 2, 2, "S");
+
+        doc.setFontSize(8.5);
+        doc.setTextColor(0, 0, 0);
+        doc.setFont('helvetica', 'normal');
+
+        doc.text(`Factory Suite Pro • Embroidery Challan Report`, 18, pageH - 14);
+        const label = `Page ${i} of ${totalPages}`;
+        doc.text(label, pageW / 2, pageH - 14, { align: 'center' });
+        const timeStr = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+        doc.text(`Generated: ${timeStr}`, pageW - 18, pageH - 14, { align: 'right' });
       }
 
       const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");

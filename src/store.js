@@ -1,5 +1,14 @@
 // src/store.js - Connected to Fabric App Backend
-export const BASE_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000/api';
+const resolveFabricBackendUrl = () => {
+  let url = process.env.REACT_APP_FABRIC_BACKEND_URL || 'https://fabric-app-backend-new.onrender.com/api';
+  url = url.trim().replace(/\/+$/, '');
+  if (!url.endsWith('/api')) {
+    url = `${url}/api`;
+  }
+  return url;
+};
+
+export const BASE_URL = resolveFabricBackendUrl();
 
 const getHeaders = () => {
   const token = localStorage.getItem('twms_token');

@@ -8,16 +8,23 @@ const RANGE = "A1:ZZZ";
 
 const API_URL = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${TAB_NAME}!${RANGE}?key=${API_KEY}`;
 
-// add two headers
 const DAILY_HEADERS = [
   "Lot Number",
+  "Garment Type",
+  "Style",
+  "Fabric",
+  "Brand",
+  "Challan Qty (date-wise)",
+  "Section",
+  "Season",
+  "Party Name",
+  "Direct Stitching",
+  "Printing",
   "Challan No",
   "Issue Date",
   "Receive Date",            // from embUpdatedAt
-  "Material Receive Date",   // ← NEW (from receivedDate)
-  "Printing",
-  "Shades (in challan)",     // ← NEW (CSV of all shades in this challan)
-  "Challan Qty (date-wise)", // total per challan
+  "Material Receive Date",   // from receivedDate
+  "Shades (in challan)",     // CSV of all shades in this challan
 ];
 
 
@@ -239,13 +246,21 @@ const expandedRows = useMemo(() => {
 
       out.push({
         "Lot Number": lotNo,
+        "Garment Type": r["Garment Type"] || r["Garment"] || "",
+        "Style": r["Style"] || "",
+        "Fabric": r["Fabric"] || "",
+        "Brand": r["Brand"] || "",
+        "Challan Qty (date-wise)": totalQty,
+        "Section": r["Section"] || "",
+        "Season": r["Season"] || "",
+        "Party Name": r["Party Name"] || r["Party"] || "",
+        "Direct Stitching": r["Direct Stitching"] || "",
+        Printing: printing,
         "Challan No": challanNo,
         "Issue Date": formatDisplayDate(issueDate),
         "Receive Date": formatDisplayDate(receiveDate),
-        "Material Receive Date": formatDisplayDate(materialReceiveDate), // ← NEW
-        Printing: printing,
-        "Shades (in challan)": shadesCSV,                                // ← NEW
-        "Challan Qty (date-wise)": totalQty,
+        "Material Receive Date": formatDisplayDate(materialReceiveDate),
+        "Shades (in challan)": shadesCSV,
 
         // raw fields for sorting only
         rawIssueDate: issueDate,

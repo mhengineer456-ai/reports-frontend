@@ -20,8 +20,8 @@ export const isDateToday = (dateInput) => {
     d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
   } 
   // Try DD/MM/YYYY or DD-MM-YYYY
-  else if (/^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/.test(s)) {
-    const parts = s.split(/[\/\-\.]/);
+  else if (/^\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}/.test(s)) {
+    const parts = s.split(/[/\-.]/);
     let y = parseInt(parts[2], 10);
     if (y < 100) y += 2000;
     d = new Date(y, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import * as XLSX from 'xlsx'; 
+import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 
@@ -37,65 +37,65 @@ const DailyPackingReport = () => {
     filterData();
   }, [data, filters]);
 
- const fetchData = async () => {
-  setLoading(true);
-  setError(null);
-  
-  try {
-    const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${RANGE}?key=${API_KEY}`
-    );
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
-    const result = await response.json();
-    
-    if (result.values && result.values.length > 0) {
-      const headers = result.values[0];
-      const rows = result.values.slice(1);
-      
-      const formattedData = rows
-        .filter(row => {
-          // Skip completely empty rows
-          if (!row || row.length === 0) return false;
-          
-          // Skip rows where the first column (Lot Number) is empty
-          if (!row[0] || row[0].trim() === '') return false;
-          
-          // You can add more conditions here if needed
-          // For example, skip rows where all cells are empty
-          const hasAnyData = row.some(cell => cell && cell.toString().trim() !== '');
-          return hasAnyData;
-        })
-        .map(row => {
-          const record = {};
-          headers.forEach((header, index) => {
-            record[header] = row[index] || '';
+  const fetchData = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${RANGE}?key=${API_KEY}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.values && result.values.length > 0) {
+        const headers = result.values[0];
+        const rows = result.values.slice(1);
+
+        const formattedData = rows
+          .filter(row => {
+            // Skip completely empty rows
+            if (!row || row.length === 0) return false;
+
+            // Skip rows where the first column (Lot Number) is empty
+            if (!row[0] || row[0].trim() === '') return false;
+
+            // You can add more conditions here if needed
+            // For example, skip rows where all cells are empty
+            const hasAnyData = row.some(cell => cell && cell.toString().trim() !== '');
+            return hasAnyData;
+          })
+          .map(row => {
+            const record = {};
+            headers.forEach((header, index) => {
+              record[header] = row[index] || '';
+            });
+
+            // Calculate aging
+            record['Aging'] = calculateAging(record);
+            record['Status'] = getLotStatus(record);
+
+            return record;
           });
-          
-          // Calculate aging
-          record['Aging'] = calculateAging(record);
-          record['Status'] = getLotStatus(record);
-          
-          return record;
-        });
-      
-      setData(formattedData);
+
+        setData(formattedData);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to fetch data from Google Sheets');
+      console.error('Error fetching data:', err);
+    } finally {
+      setLoading(false);
     }
-  } catch (err) {
-    setError(err.message || 'Failed to fetch data from Google Sheets');
-    console.error('Error fetching data:', err);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const getLotStatus = (record) => {
     const packingComplete = record['Packing Complete'] || '';
     const wipPacking = record['WIP Packing'] || '';
-    
+
     if (packingComplete.trim() && packingComplete !== '[]') {
       return 'Completed';
     } else if (wipPacking.trim() && wipPacking !== '[]') {
@@ -138,12 +138,12 @@ const DailyPackingReport = () => {
           endDate = today;
         }
       }
-      
+
       const diffTime = endDate.getTime() - packingDateObj.getTime();
       const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
-      
+
       if (diffDays < 0) return 0;
-      
+
       return diffDays;
 
     } catch (error) {
@@ -154,61 +154,61 @@ const DailyPackingReport = () => {
 
   // Get recent remarks from WIP Packing data
   // Get recent remarks from WIP Packing data
-const getRecentRemarks = (record) => {
-  try {
-    const wipPacking = record['WIP Packing'] || '';
-    if (wipPacking.trim() && wipPacking !== '[]') {
-      const statusData = JSON.parse(wipPacking);
-      if (statusData.length > 0) {
-        // Sort by timestamp in descending order (newest first)
-        const sortedData = statusData.sort((a, b) => 
-          new Date(b.timestamp) - new Date(a.timestamp)
-        );
-        
-        // Get the most recent entry (first after sorting)
-        const latest = sortedData[0];
-        // Return remarks or "No remarks" if empty
-        return latest.remarks || (latest.status ? latest.status : 'No remarks');
-      }
-    }
-    
-    // For completed lots, get remarks from Packing Complete
-    const packingComplete = record['Packing Complete'] || '';
-    if (packingComplete.trim() && packingComplete !== '[]') {
-      try {
-        const statusData = JSON.parse(packingComplete);
+  const getRecentRemarks = (record) => {
+    try {
+      const wipPacking = record['WIP Packing'] || '';
+      if (wipPacking.trim() && wipPacking !== '[]') {
+        const statusData = JSON.parse(wipPacking);
         if (statusData.length > 0) {
           // Sort by timestamp in descending order (newest first)
-          const sortedData = statusData.sort((a, b) => 
+          const sortedData = statusData.sort((a, b) =>
             new Date(b.timestamp) - new Date(a.timestamp)
           );
-          
+
+          // Get the most recent entry (first after sorting)
           const latest = sortedData[0];
-          return latest.remarks || 'Completed';
+          // Return remarks or "No remarks" if empty
+          return latest.remarks || (latest.status ? latest.status : 'No remarks');
         }
-      } catch (e) {
-        console.error('Error parsing packing complete remarks:', e);
       }
+
+      // For completed lots, get remarks from Packing Complete
+      const packingComplete = record['Packing Complete'] || '';
+      if (packingComplete.trim() && packingComplete !== '[]') {
+        try {
+          const statusData = JSON.parse(packingComplete);
+          if (statusData.length > 0) {
+            // Sort by timestamp in descending order (newest first)
+            const sortedData = statusData.sort((a, b) =>
+              new Date(b.timestamp) - new Date(a.timestamp)
+            );
+
+            const latest = sortedData[0];
+            return latest.remarks || 'Completed';
+          }
+        } catch (e) {
+          console.error('Error parsing packing complete remarks:', e);
+        }
+      }
+
+      return 'No remarks';
+    } catch (error) {
+      console.error('Error getting recent remarks:', error);
+      return 'Error loading remarks';
     }
-    
-    return 'No remarks';
-  } catch (error) {
-    console.error('Error getting recent remarks:', error);
-    return 'Error loading remarks';
-  }
-};
+  };
 
   // Get latest status details (for modal)
   const getLatestStatusDetails = (record) => {
     try {
       let statusData = [];
-      
+
       // Check WIP Packing first
       const wipPacking = record['WIP Packing'] || '';
       if (wipPacking.trim() && wipPacking !== '[]') {
         statusData = JSON.parse(wipPacking);
       }
-      
+
       // If no WIP data, check Packing Complete
       if (statusData.length === 0) {
         const packingComplete = record['Packing Complete'] || '';
@@ -216,7 +216,7 @@ const getRecentRemarks = (record) => {
           statusData = JSON.parse(packingComplete);
         }
       }
-      
+
       if (statusData.length > 0) {
         return statusData[statusData.length - 1];
       }
@@ -231,23 +231,23 @@ const getRecentRemarks = (record) => {
   const getAllStatusHistory = (record) => {
     try {
       let allStatuses = [];
-      
+
       // Parse WIP Packing data
       const wipPacking = record['WIP Packing'] || '';
       if (wipPacking.trim() && wipPacking !== '[]') {
         const wipData = JSON.parse(wipPacking);
         allStatuses = [...allStatuses, ...wipData];
       }
-      
+
       // Parse Packing Complete data
       const packingComplete = record['Packing Complete'] || '';
       if (packingComplete.trim() && packingComplete !== '[]') {
         const completeData = JSON.parse(packingComplete);
         allStatuses = [...allStatuses, ...completeData];
       }
-      
+
       // Sort by timestamp (most recent first)
-      return allStatuses.sort((a, b) => 
+      return allStatuses.sort((a, b) =>
         new Date(b.timestamp) - new Date(a.timestamp)
       );
     } catch (error) {
@@ -258,142 +258,143 @@ const getRecentRemarks = (record) => {
 
   const filterData = () => {
     let filtered = [...data];
-    
+
     // Apply status filter - show only active (WIP + Not Started) by default
     if (filters.status === 'active') {
       filtered = filtered.filter(item => getLotStatus(item) !== 'Completed');
     } else if (filters.status !== 'all') {
       filtered = filtered.filter(item => getLotStatus(item) === filters.status);
     }
-    
+
     // NEW: Apply Hold Lots filter
     if (filters.holdLots) {
       filtered = filtered.filter(item => isLotOnHold(item));
     }
-    
+
     // Apply other filters
     if (filters.lotNumber) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         item['Lot Number'].toLowerCase().includes(filters.lotNumber.toLowerCase())
       );
     }
-    
+
     if (filters.supervisor) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         item['Packing Supervisor'].toLowerCase().includes(filters.supervisor.toLowerCase())
       );
     }
-    
+
     if (filters.garmentType) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         item['Garment Type'].toLowerCase().includes(filters.garmentType.toLowerCase())
       );
     }
-    
+
     if (filters.fabric) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         item['Fabric'].toLowerCase().includes(filters.fabric.toLowerCase())
       );
     }
-    
+
     if (filters.style) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         item['Style']?.toLowerCase().includes(filters.style.toLowerCase())
       );
     }
-    
+
     if (filters.brand) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         item['BRAND']?.toLowerCase().includes(filters.brand.toLowerCase())
       );
     }
-    
+
     if (filters.stitchingSupervisor) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         item['STITCHING SUPERVISOR']?.toLowerCase().includes(filters.stitchingSupervisor.toLowerCase())
       );
     }
-    
+
     if (filters.minAging) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         parseInt(item['Aging']) >= parseInt(filters.minAging)
       );
     }
-    
+
     if (filters.maxAging) {
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         parseInt(item['Aging']) <= parseInt(filters.maxAging)
       );
     }
-    
+
     setFilteredData(filtered);
   };
 
   // Export to Excel Function (with status)
-// Export to Excel Function (with status) - UPDATED
-const exportToExcel = () => {
-  const exportColumns = [
-    'Lot Number', 'Fabric', 'Garment Type', 'Style', 'BRAND', 'Total Pcs', 
-    'Packing Date', 'Packing Supervisor', 'Aging', 'Status', 'Recent Remarks', 
-    'STITCHING SUPERVISOR'
-  ];
-  
-  // Sort data in ascending order by Packing Date (or another field if you prefer)
-  const sortedData = [...filteredData].sort((a, b) => {
-    // Sort by Packing Date in ascending order
-    const dateA = a['Packing Date'] ? new Date(a['Packing Date']) : new Date(0);
-    const dateB = b['Packing Date'] ? new Date(b['Packing Date']) : new Date(0);
-    return dateA - dateB;
-  });
-  
-  const dataToExport = sortedData.map(item => {
-    const row = {};
-    exportColumns.forEach(col => {
-      if (col === 'Recent Remarks') {
-        row[col] = getRecentRemarks(item);
-      } else if (col === 'Status') {
-        row[col] = getLotStatus(item);
-      } else if (col === 'Aging') {
-        row[col] = calculateAging(item);
-      } else if (col === 'Packing Date') {
-        // Format date to show only date without time
-        const dateStr = item['Packing Date'] || '';
-        if (dateStr) {
-          try {
-            // Parse the date and format it as YYYY-MM-DD or any other date-only format
-            const date = new Date(dateStr);
-            if (!isNaN(date.getTime())) {
-              // Format as YYYY-MM-DD
-              const year = date.getFullYear();
-              const month = String(date.getMonth() + 1).padStart(2, '0');
-              const day = String(date.getDate()).padStart(2, '0');
-              row[col] = `${year}-${month}-${day}`;
-            } else {
-              // If date parsing fails, keep original value
+  // Export to Excel Function (with status) - UPDATED
+  const exportToExcel = () => {
+    const exportColumns = [
+      'Lot Number', 'Garment Type', 'Style', 'Fabric', 'BRAND', 'Total Pcs',
+      'Section', 'Season', 'Party Name', 'Direct Stitching',
+      'Packing Date', 'Packing Supervisor', 'Aging', 'Status', 'Recent Remarks',
+      'STITCHING SUPERVISOR'
+    ];
+
+    // Sort data in ascending order by Packing Date (or another field if you prefer)
+    const sortedData = [...filteredData].sort((a, b) => {
+      // Sort by Packing Date in ascending order
+      const dateA = a['Packing Date'] ? new Date(a['Packing Date']) : new Date(0);
+      const dateB = b['Packing Date'] ? new Date(b['Packing Date']) : new Date(0);
+      return dateA - dateB;
+    });
+
+    const dataToExport = sortedData.map(item => {
+      const row = {};
+      exportColumns.forEach(col => {
+        if (col === 'Recent Remarks') {
+          row[col] = getRecentRemarks(item);
+        } else if (col === 'Status') {
+          row[col] = getLotStatus(item);
+        } else if (col === 'Aging') {
+          row[col] = calculateAging(item);
+        } else if (col === 'Packing Date') {
+          // Format date to show only date without time
+          const dateStr = item['Packing Date'] || '';
+          if (dateStr) {
+            try {
+              // Parse the date and format it as YYYY-MM-DD or any other date-only format
+              const date = new Date(dateStr);
+              if (!isNaN(date.getTime())) {
+                // Format as YYYY-MM-DD
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                row[col] = `${year}-${month}-${day}`;
+              } else {
+                // If date parsing fails, keep original value
+                row[col] = dateStr;
+              }
+            } catch (e) {
               row[col] = dateStr;
             }
-          } catch (e) {
-            row[col] = dateStr;
+          } else {
+            row[col] = '';
           }
         } else {
-          row[col] = '';
+          row[col] = item[col] || '';
         }
-      } else {
-        row[col] = item[col] || '';
-      }
+      });
+      return row;
     });
-    return row;
-  });
 
-  const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "PackingReport");
-  
-  // Generate filename with current date
-  const today = new Date();
-  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  XLSX.writeFile(workbook, `PackingReport_${dateStr}.xlsx`);
-};
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "PackingReport");
+
+    // Generate filename with current date
+    const today = new Date();
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    XLSX.writeFile(workbook, `PackingReport_${dateStr}.xlsx`);
+  };
 
   // Export to PDF Function
   const exportToPDF = () => {
@@ -431,18 +432,18 @@ const exportToExcel = () => {
       // White background for header area
       doc.setFillColor(255, 255, 255);
       doc.rect(0, 0, pageWidth, 25, 'F');
-      
+
       // Navy blue header bar
       doc.setFillColor(...headerColor);
       doc.rect(0, 0, pageWidth, 20, 'F');
-      
+
       // Dynamic title based on Hold Lots filter
       const title = filters.holdLots ? 'PACKING HOLD LOTS REPORT' : 'PACKING ALLOTED REPORT';
       doc.setFontSize(18);
       doc.setTextColor(255, 255, 255);
       doc.setFont('Times New Roman', 'bold');
       doc.text(title, pageWidth / 2, 12, { align: 'center' });
-      
+
       // Date
       doc.setFontSize(9);
       doc.setFont('helvetica', 'normal');
@@ -452,7 +453,7 @@ const exportToExcel = () => {
         day: 'numeric'
       });
       doc.text(`Date: ${reportDate}`, margin, 25);
-      
+
       // Page info
       doc.setFontSize(8);
       doc.setTextColor(100, 100, 100);
@@ -469,7 +470,7 @@ const exportToExcel = () => {
       month: '2-digit',
       day: '2-digit'
     });
-    
+
     // Helper function to extract date from timestamp or packing date
     const extractDate = (record) => {
       // First try to get the timestamp
@@ -482,7 +483,7 @@ const exportToExcel = () => {
           return `${parts[1]}/${parts[0]}/${parts[2]}`;
         }
       }
-      
+
       // Fallback to packing date
       return record['Packing Date'] || '';
     };
@@ -490,24 +491,24 @@ const exportToExcel = () => {
     // Helper function to find the most common manpower value (mode)
     const findMostCommonManpower = (manpowerValues) => {
       if (manpowerValues.length === 0) return 0;
-      
+
       // Count frequency of each manpower value
       const frequency = {};
       manpowerValues.forEach(value => {
         frequency[value] = (frequency[value] || 0) + 1;
       });
-      
+
       // Find the most common value
       let mostCommon = manpowerValues[0];
       let maxCount = 0;
-      
+
       Object.entries(frequency).forEach(([value, count]) => {
         if (count > maxCount) {
           maxCount = count;
           mostCommon = parseInt(value);
         }
       });
-      
+
       return mostCommon;
     };
 
@@ -518,7 +519,7 @@ const exportToExcel = () => {
       const manpower = parseInt(item['Total Manpower']) || 0;
       const recordDate = extractDate(item);
       const isToday = recordDate === todayDisplay;
-      
+
       if (!acc[supervisor]) {
         acc[supervisor] = {
           totalPieces: 0,
@@ -529,10 +530,10 @@ const exportToExcel = () => {
           otherDates: new Set()
         };
       }
-      
+
       acc[supervisor].totalPieces += pieces;
       acc[supervisor].lotCount += 1;
-      
+
       // Store manpower value with its date
       if (isToday) {
         acc[supervisor].todayManpowerValues.push(manpower);
@@ -544,21 +545,21 @@ const exportToExcel = () => {
         });
         acc[supervisor].otherDates.add(recordDate);
       }
-      
+
       return acc;
     }, {});
 
     // Determine the manpower to show for each supervisor
     Object.keys(supervisorSummary).forEach(supervisor => {
       const summary = supervisorSummary[supervisor];
-      
+
       // Try to get today's manpower
       if (summary.todayManpowerValues.length > 0) {
         // Find the most common manpower value for today
         summary.displayManpower = findMostCommonManpower(summary.todayManpowerValues);
         summary.manpowerSource = 'today';
         summary.manpowerDate = Array.from(summary.todayDates)[0] || todayDisplay;
-      } 
+      }
       // If no today's data, look for most recent data
       else if (summary.recentManpowerValues.length > 0) {
         // Group by date to find the most recent date with data
@@ -569,14 +570,14 @@ const exportToExcel = () => {
           }
           groupedByDate[item.date].push(item.manpower);
         });
-        
+
         // Sort dates (most recent first)
         const sortedDates = Object.keys(groupedByDate).sort((a, b) => {
           const dateA = parseDate(a);
           const dateB = parseDate(b);
           return dateB - dateA;
         });
-        
+
         // Get most recent date
         const mostRecentDate = sortedDates[0];
         if (mostRecentDate && groupedByDate[mostRecentDate]) {
@@ -599,7 +600,7 @@ const exportToExcel = () => {
     // Helper function to parse date string to Date object
     function parseDate(dateStr) {
       if (!dateStr) return new Date(0);
-      
+
       try {
         // Format: mm/dd/yyyy
         if (dateStr.includes('/')) {
@@ -608,7 +609,7 @@ const exportToExcel = () => {
             return new Date(parts[2], parts[1] - 1, parts[0]);
           }
         }
-        
+
         // Format: yyyy-mm-dd
         if (dateStr.includes('-')) {
           const parts = dateStr.split('-');
@@ -616,7 +617,7 @@ const exportToExcel = () => {
             return new Date(parts[0], parts[1] - 1, parts[2]);
           }
         }
-        
+
         return new Date(dateStr);
       } catch (error) {
         console.error('Error parsing date:', dateStr, error);
@@ -632,93 +633,99 @@ const exportToExcel = () => {
     const totalPiecesAll = sortedSupervisors.reduce((total, [supervisor, data]) => {
       return total + data.totalPieces;
     }, 0);
-    
+
     // Count total manpower (using display manpower per supervisor)
     const totalManpowerAll = sortedSupervisors.reduce((total, [supervisor, data]) => {
       return total + data.displayManpower;
     }, 0);
 
     // ===================== MAIN DATA TABLE =====================
-    
-    // Calculate column widths to use full page width
+
+    // Calculate proportional column widths
     const columnWidths = {
-      0: 17,   // Lot # - 17mm
-      1: 35,   // Fabric - 35mm
-      2: 25,   // Garment - 25mm
-      3: 35,   // Style - 35mm
-      4: 23,   // Brand - 23mm
-      5: 15,   // Pcs - 15mm
-      6: 25,   // Issue Date - 25mm (Changed header from Packing Date)
-      7: 30,   // Supervisor - 30mm
-      8: 15,   // Aging - 15mm
-      9: 37,   // Remarks - 37mm
-      10: 20   // Stitching Sup - 20mm
+      0: 16,  // Lot #
+      1: 18,  // Garment
+      2: 18,  // Style
+      3: 18,  // Fabric
+      4: 15,  // Brand
+      5: 14,  // Pcs
+      6: 12,  // Section
+      7: 12,  // Season
+      8: 16,  // Party
+      9: 12,  // Direct
+      10: 16, // Issue Date
+      11: 18, // Supervisor
+      12: 12, // Aging
+      13: 14, // Status
+      14: 35, // Remarks
+      15: 16  // Stitching Sup
     };
 
     // Verify total width fits page
     const totalWidth = Object.values(columnWidths).reduce((a, b) => a + b, 0);
-    // Adjust if total width is less than content width
-    if (totalWidth < contentWidth) {
-      const extraSpace = contentWidth - totalWidth;
-      // Distribute extra space to wider columns
-      columnWidths[9] += Math.floor(extraSpace * 0.4); // 40% to Remarks
-      columnWidths[3] += Math.floor(extraSpace * 0.3); // 30% to Style
-      columnWidths[1] += Math.floor(extraSpace * 0.2); // 20% to Fabric
-      columnWidths[10] += Math.floor(extraSpace * 0.1); // 10% to Stitching Sup
-    }
+    const scaleFactor = contentWidth / totalWidth;
+    Object.keys(columnWidths).forEach(k => {
+      columnWidths[k] = columnWidths[k] * scaleFactor;
+    });
 
     // Prepare table headers with fixed width styling
-    // CHANGED: "PACKING DATE" to "ISSUE DATE" in header
     const headers = [
       [
         { content: 'LOT #', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[0], halign: 'center' } },
-        { content: 'FABRIC', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[1], halign: 'center' } },
-        { content: 'GARMENT', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[2], halign: 'center' } },
-        { content: 'STYLE', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[3], halign: 'center' } },
+        { content: 'GARMENT', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[1], halign: 'center' } },
+        { content: 'STYLE', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[2], halign: 'center' } },
+        { content: 'FABRIC', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[3], halign: 'center' } },
         { content: 'BRAND', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[4], halign: 'center' } },
         { content: 'PCS', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[5], halign: 'center' } },
-        // CHANGED: Header text from "PACKING DATE" to "ISSUE DATE"
-        { content: 'ISSUE DATE', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[6], halign: 'center' } },
-        { content: 'SUPERVISOR', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[7], halign: 'center' } },
-        { content: 'AGING', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[8], halign: 'center' } },
-        { content: 'REMARKS', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[9], halign: 'center' } },
-        { content: 'STITCHING SUP', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[10], halign: 'center' } }
+        { content: 'SECTION', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[6], halign: 'center' } },
+        { content: 'SEASON', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[7], halign: 'center' } },
+        { content: 'PARTY', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[8], halign: 'center' } },
+        { content: 'DIRECT', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[9], halign: 'center' } },
+        { content: 'ISSUE DATE', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[10], halign: 'center' } },
+        { content: 'SUPERVISOR', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[11], halign: 'center' } },
+        { content: 'AGING', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[12], halign: 'center' } },
+        { content: 'STATUS', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[13], halign: 'center' } },
+        { content: 'REMARKS', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[14], halign: 'center' } },
+        { content: 'STITCHING SUP', styles: { fontStyle: 'bold', fillColor: headerColor, textColor: [255, 255, 255], cellWidth: columnWidths[15], halign: 'center' } }
       ]
     ];
 
     // Prepare table body with proper formatting
-    // Note: Still using 'Packing Date' data but header shows as 'Issue Date'
     const body = filteredData.map(item => [
-      { content: item['Lot Number'] || 'N/A', styles: { cellWidth: columnWidths[0], fontStyle: 'bold', fontSize: 9, halign: 'center',textColor: 'red' } },
-      { content: item['Fabric'] || 'N/A', styles: { cellWidth: columnWidths[1], fontSize: 9, halign: 'center' } },
-      { content: item['Garment Type'] || 'N/A', styles: { cellWidth: columnWidths[2], fontSize: 9, halign: 'center' } },
-      { content: item['Style'] || 'N/A', styles: { cellWidth: columnWidths[3], fontSize: 9, halign: 'center' } },
-      { content: item['BRAND'] || 'N/A', styles: { cellWidth: columnWidths[4], fontSize: 9, halign: 'center' } },
-      { content: item['Total Pcs'] || '0', styles: { cellWidth: columnWidths[5], halign: 'center', fontSize: 10 ,fontStyle: ' bold', textColor:'blue'} },
-      // Data still comes from 'Packing Date' field
-      { content: item['Packing Date'] || 'N/A', styles: { cellWidth: columnWidths[6], fontSize: 9, halign: 'center' } },
-      { content: item['Packing Supervisor'] || 'N/A', styles: { cellWidth: columnWidths[7], fontSize: 9, halign: 'center' } },
-      { 
-        content: item['Aging'] || '0', 
-        styles: { 
-          cellWidth: columnWidths[8],
+      { content: item['Lot Number'] || 'N/A', styles: { cellWidth: columnWidths[0], fontStyle: 'bold', fontSize: 8, halign: 'center', textColor: 'red' } },
+      { content: item['Garment Type'] || 'N/A', styles: { cellWidth: columnWidths[1], fontSize: 7.5, halign: 'center' } },
+      { content: item['Style'] || 'N/A', styles: { cellWidth: columnWidths[2], fontSize: 7.5, halign: 'center' } },
+      { content: item['Fabric'] || 'N/A', styles: { cellWidth: columnWidths[3], fontSize: 7.5, halign: 'center' } },
+      { content: item['BRAND'] || 'N/A', styles: { cellWidth: columnWidths[4], fontSize: 7.5, halign: 'center' } },
+      { content: item['Total Pcs'] || '0', styles: { cellWidth: columnWidths[5], halign: 'center', fontSize: 8, fontStyle: 'bold', textColor: 'blue' } },
+      { content: item['Section'] || '—', styles: { cellWidth: columnWidths[6], fontSize: 7.5, halign: 'center' } },
+      { content: item['Season'] || '—', styles: { cellWidth: columnWidths[7], fontSize: 7.5, halign: 'center' } },
+      { content: item['Party Name'] || '—', styles: { cellWidth: columnWidths[8], fontSize: 7.5, halign: 'center' } },
+      { content: item['Direct Stitching'] || '—', styles: { cellWidth: columnWidths[9], fontSize: 7.5, halign: 'center' } },
+      { content: item['Packing Date'] || 'N/A', styles: { cellWidth: columnWidths[10], fontSize: 7.5, halign: 'center' } },
+      { content: item['Packing Supervisor'] || 'N/A', styles: { cellWidth: columnWidths[11], fontSize: 7.5, halign: 'center' } },
+      {
+        content: item['Aging'] || '0',
+        styles: {
+          cellWidth: columnWidths[12],
           halign: 'center',
           fontStyle: 'bold',
-          fontSize: 9,
+          fontSize: 7.5,
           textColor: getAgingPDFColor(item['Aging'])
         }
       },
-      { 
-        content: getRecentRemarks(item).substring(0, 30) || 'No remarks', 
-        styles: { 
-          cellWidth: columnWidths[9],
-          fontSize: 8,
+      { content: getLotStatus(item), styles: { cellWidth: columnWidths[13], fontSize: 7, halign: 'center' } },
+      {
+        content: getRecentRemarks(item).substring(0, 30) || 'No remarks',
+        styles: {
+          cellWidth: columnWidths[14],
+          fontSize: 7,
           halign: 'center',
           fontStyle: 'bold',
-          textColor: remarksColor // RED TEXT FOR REMARKS
+          textColor: remarksColor
         }
       },
-      { content: item['STITCHING SUPERVISOR'] || 'N/A', styles: { cellWidth: columnWidths[10], fontSize: 9, halign: 'center' } }
+      { content: item['STITCHING SUPERVISOR'] || 'N/A', styles: { cellWidth: columnWidths[15], fontSize: 7.5, halign: 'center' } }
     ]);
 
     // Track the Y position manually
@@ -782,12 +789,12 @@ const exportToExcel = () => {
       rowPageBreak: 'avoid',
       tableLineWidth: 0.5,
       tableLineColor: borderColor,
-      didDrawPage: function(data) {
+      didDrawPage: function (data) {
         // Draw header on every page
         if (data.pageNumber > 1) {
           drawHeader();
         }
-        
+
         // Add page number at bottom
         const pageCount = doc.internal.getNumberOfPages();
         doc.setFontSize(8);
@@ -798,7 +805,7 @@ const exportToExcel = () => {
           pageHeight - 5,
           { align: 'center' }
         );
-        
+
         // Add record count on first page
         if (data.pageNumber === 1) {
           doc.setFontSize(8);
@@ -810,7 +817,7 @@ const exportToExcel = () => {
             { align: 'right' }
           );
         }
-        
+
         // Update last Y position
         if (data.cursor && data.cursor.y) {
           lastAutoTableY = data.cursor.y;
@@ -819,55 +826,55 @@ const exportToExcel = () => {
     });
 
     // ===================== PROFESSIONAL SUPERVISOR SUMMARY =====================
-    
+
     // Add supervisor summary section after the table
     let summaryStartY = lastAutoTableY + 15;
-    
+
     // Check if we need a new page
     if (summaryStartY > pageHeight - 50) {
       doc.addPage();
       summaryStartY = 30;
       drawHeader();
     }
-    
+
     // Summary Section Header
     doc.setFontSize(13);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...headerColor);
     doc.text('SUPERVISOR WORKLOAD DISTRIBUTION', pageWidth / 2, summaryStartY, { align: 'center' });
-    
+
     // Today's date note
     doc.setFontSize(8);
     doc.setFont('helvetica', 'italic');
     doc.setTextColor(100, 100, 100);
-    
+
     // Add note about manpower calculation
     const manpowerNote = "*Manpower shown per supervisor (most common value) | Pcs/Man = Total Pieces ÷ Manpower";
     doc.text(manpowerNote, pageWidth / 2, summaryStartY + 4, { align: 'center' });
-    
+
     // Subtle underline
     doc.setLineWidth(0.5);
     doc.setDrawColor(220, 220, 220);
     doc.line(pageWidth / 2 - 80, summaryStartY + 6, pageWidth / 2 + 80, summaryStartY + 6);
-    
+
     let y = summaryStartY + 12;
-    
+
     // Prepare summary body data WITH PCS/MAN column
     const summaryBody = sortedSupervisors.map(([supervisor, data], index) => {
       const percentage = totalPiecesAll > 0 ? ((data.totalPieces / totalPiecesAll) * 100).toFixed(1) : '0.0';
-      
+
       // Get manpower display information
       let manpowerDisplay = data.displayManpower > 0 ? data.displayManpower.toString() : '-';
       let manpowerColor = textColor;
       let manpowerNote = '';
-      
+
       // Calculate Pcs/Man (only if we have valid manpower)
       let pcsPerMan = '-';
       let pcsPerManColor = textColor;
       if (data.displayManpower > 0) {
         const pcsPerManValue = Math.round(data.totalPieces / data.displayManpower);
         pcsPerMan = pcsPerManValue.toLocaleString();
-        
+
         // Color coding based on productivity
         if (pcsPerManValue > 500) {
           pcsPerManColor = [16, 185, 129]; // Green for high productivity
@@ -877,7 +884,7 @@ const exportToExcel = () => {
           pcsPerManColor = [239, 68, 68]; // Red for low productivity
         }
       }
-      
+
       if (data.displayManpower > 0) {
         if (data.manpowerSource === 'today') {
           manpowerColor = accentColor;
@@ -890,7 +897,7 @@ const exportToExcel = () => {
         manpowerColor = [150, 150, 150]; // Gray for no data
         manpowerNote = '(No data)';
       }
-      
+
       // Determine row background color
       let rowBackground = [255, 255, 255];
       if (data.totalPieces === Math.max(...sortedSupervisors.map(([, d]) => d.totalPieces))) {
@@ -898,7 +905,7 @@ const exportToExcel = () => {
       } else if (index % 2 === 0) {
         rowBackground = [250, 250, 250]; // Light gray for even rows
       }
-      
+
       // Determine text color for percentage
       let percentageColor = textColor;
       const percentageNum = parseFloat(percentage);
@@ -907,78 +914,78 @@ const exportToExcel = () => {
       } else if (percentageNum > 15) {
         percentageColor = [245, 158, 11]; // Orange for medium percentage
       }
-      
+
       return [
-        { 
-          content: supervisor, 
-          styles: { 
-            halign: 'left', 
-            fontSize: 9, 
+        {
+          content: supervisor,
+          styles: {
+            halign: 'left',
+            fontSize: 9,
             fillColor: rowBackground,
             cellPadding: { top: 4, right: 4, bottom: 4, left: 4 },
             fontStyle: 'bold'
-          } 
+          }
         },
-        { 
-          content: data.lotCount.toString(), 
-          styles: { 
-            halign: 'center', 
-            fontSize: 9, 
+        {
+          content: data.lotCount.toString(),
+          styles: {
+            halign: 'center',
+            fontSize: 9,
             fillColor: rowBackground,
             cellPadding: { top: 4, right: 4, bottom: 4, left: 4 },
             fontStyle: 'bold'
-          } 
+          }
         },
-        { 
-          content: data.totalPieces.toLocaleString(), 
-          styles: { 
-            halign: 'center', 
-            fontSize: 10, 
-            fontStyle: 'bold', 
+        {
+          content: data.totalPieces.toLocaleString(),
+          styles: {
+            halign: 'center',
+            fontSize: 10,
+            fontStyle: 'bold',
             fillColor: rowBackground,
             cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-        } 
+          }
         },
-        { 
-          content: manpowerDisplay, 
-          styles: { 
-            halign: 'center', 
-            fontSize: 10, 
-            fillColor: rowBackground, 
+        {
+          content: manpowerDisplay,
+          styles: {
+            halign: 'center',
+            fontSize: 10,
+            fillColor: rowBackground,
             fontStyle: 'bold',
             textColor: manpowerColor,
             cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-          } 
+          }
         },
         // NEW: PCS/MAN column
-        { 
-          content: pcsPerMan, 
-          styles: { 
-            halign: 'center', 
-            fontSize: 10, 
-            fillColor: rowBackground, 
+        {
+          content: pcsPerMan,
+          styles: {
+            halign: 'center',
+            fontSize: 10,
+            fillColor: rowBackground,
             fontStyle: 'bold',
             textColor: pcsPerManColor,
             cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-          } 
+          }
         },
-        { 
-          content: `${percentage}%`, 
-          styles: { 
-            halign: 'center', 
-            fontSize: 10, 
-            fontStyle: 'bold', 
-            fillColor: rowBackground, 
+        {
+          content: `${percentage}%`,
+          styles: {
+            halign: 'center',
+            fontSize: 10,
+            fontStyle: 'bold',
+            fillColor: rowBackground,
             textColor: percentageColor,
             cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-          } 
+          }
         }
       ];
     });
 
     // Add total row
     const totalRowBackground = [240, 240, 240];
-    
+
     // Calculate overall Pcs/Man for total row
     const overallPcsPerMan = totalManpowerAll > 0 ? Math.round(totalPiecesAll / totalManpowerAll) : '-';
     let overallPcsPerManColor = textColor;
@@ -991,70 +998,70 @@ const exportToExcel = () => {
         overallPcsPerManColor = [239, 68, 68];
       }
     }
-    
+
     summaryBody.push([
-      { 
-        content: 'TOTAL', 
-        styles: { 
-          halign: 'left', 
-          fontSize: 11, 
-          fontStyle: 'bold', 
+      {
+        content: 'TOTAL',
+        styles: {
+          halign: 'left',
+          fontSize: 11,
+          fontStyle: 'bold',
           fillColor: totalRowBackground,
           cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-        } 
+        }
       },
-      { 
-        content: filteredData.length.toString(), 
-        styles: { 
-          halign: 'center', 
-          fontSize: 11, 
-          fontStyle: 'bold', 
+      {
+        content: filteredData.length.toString(),
+        styles: {
+          halign: 'center',
+          fontSize: 11,
+          fontStyle: 'bold',
           fillColor: totalRowBackground,
           cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-        } 
+        }
       },
-      { 
-        content: totalPiecesAll.toLocaleString(), 
-        styles: { 
-          halign: 'center', 
-          fontSize: 11, 
-          fontStyle: 'bold', 
+      {
+        content: totalPiecesAll.toLocaleString(),
+        styles: {
+          halign: 'center',
+          fontSize: 11,
+          fontStyle: 'bold',
           fillColor: totalRowBackground,
           cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-        } 
+        }
       },
-      { 
-        content: totalManpowerAll > 0 ? totalManpowerAll.toString() : '-', 
-        styles: { 
-          halign: 'center', 
-          fontSize: 11, 
-          fontStyle: 'bold', 
-          fillColor: totalRowBackground, 
+      {
+        content: totalManpowerAll > 0 ? totalManpowerAll.toString() : '-',
+        styles: {
+          halign: 'center',
+          fontSize: 11,
+          fontStyle: 'bold',
+          fillColor: totalRowBackground,
           textColor: totalManpowerAll > 0 ? accentColor : [150, 150, 150],
           cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-        } 
+        }
       },
       // NEW: Total Pcs/Man column
-      { 
-        content: overallPcsPerMan !== '-' ? overallPcsPerMan.toLocaleString() : '-', 
-        styles: { 
-          halign: 'center', 
-          fontSize: 11, 
-          fontStyle: 'bold', 
+      {
+        content: overallPcsPerMan !== '-' ? overallPcsPerMan.toLocaleString() : '-',
+        styles: {
+          halign: 'center',
+          fontSize: 11,
+          fontStyle: 'bold',
           fillColor: totalRowBackground,
           textColor: overallPcsPerManColor,
           cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-        } 
+        }
       },
-      { 
-        content: '100%', 
-        styles: { 
-          halign: 'center', 
-          fontSize: 11, 
-          fontStyle: 'bold', 
+      {
+        content: '100%',
+        styles: {
+          halign: 'center',
+          fontSize: 11,
+          fontStyle: 'bold',
           fillColor: totalRowBackground,
           cellPadding: { top: 4, right: 4, bottom: 4, left: 4 }
-        } 
+        }
       }
     ]);
 
@@ -1147,7 +1154,7 @@ const exportToExcel = () => {
       rowPageBreak: 'avoid',
       tableLineWidth: 0.5,
       tableLineColor: borderColor,
-      didDrawPage: function(data) {
+      didDrawPage: function (data) {
         // Update last Y position
         if (data.cursor && data.cursor.y) {
           lastAutoTableY = data.cursor.y;
@@ -1157,44 +1164,44 @@ const exportToExcel = () => {
 
     // Add final insights
     const finalY = lastAutoTableY + 10;
-    
+
     if (finalY < pageHeight - 20) {
       doc.setFontSize(9);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(100, 100, 100);
-      
+
       // Overall statistics
       const avgPiecesPerLot = totalPiecesAll > 0 ? (totalPiecesAll / filteredData.length).toFixed(0) : 0;
       const supervisorsWithManpower = sortedSupervisors.filter(([_, data]) => data.displayManpower > 0).length;
-      
+
       // Calculate average Pcs/Man (excluding supervisors without manpower)
       let avgPcsPerMan = '-';
       if (supervisorsWithManpower > 0) {
         const totalPcsForSupervisorsWithManpower = sortedSupervisors
           .filter(([_, data]) => data.displayManpower > 0)
           .reduce((total, [_, data]) => total + data.totalPieces, 0);
-        
+
         const totalManpowerForSupervisorsWithManpower = sortedSupervisors
           .filter(([_, data]) => data.displayManpower > 0)
           .reduce((total, [_, data]) => total + data.displayManpower, 0);
-        
+
         if (totalManpowerForSupervisorsWithManpower > 0) {
           avgPcsPerMan = Math.round(totalPcsForSupervisorsWithManpower / totalManpowerForSupervisorsWithManpower);
         }
       }
-      
+
       const summaryText = `${sortedSupervisors.length} supervisors • ${supervisorsWithManpower} with manpower data • ${filteredData.length} lots • ${totalPiecesAll.toLocaleString()} total pieces • ${totalManpowerAll} total manpower`;
       doc.text(summaryText, pageWidth / 2, finalY, { align: 'center' });
-      
+
       // Highlight top performers
       if (sortedSupervisors.length > 0) {
         const topSupervisor = sortedSupervisors[0];
         const topPercentage = ((topSupervisor[1].totalPieces / totalPiecesAll) * 100).toFixed(1);
-        
+
         // Find supervisor with highest Pcs/Man (productivity)
         let mostProductiveSupervisor = null;
         let highestPcsPerMan = 0;
-        
+
         sortedSupervisors.forEach(([name, data]) => {
           if (data.displayManpower > 0) {
             const pcsPerMan = Math.round(data.totalPieces / data.displayManpower);
@@ -1204,21 +1211,21 @@ const exportToExcel = () => {
             }
           }
         });
-        
+
         doc.setFont('helvetica', 'italic');
         doc.setTextColor(...headerColor);
-        doc.text(`Top Material Holder: ${topSupervisor[0]} - ${topPercentage}% of total pieces`, 
-                 pageWidth / 2, finalY + 7, { align: 'center' });
-        
+        doc.text(`Top Material Holder: ${topSupervisor[0]} - ${topPercentage}% of total pieces`,
+          pageWidth / 2, finalY + 7, { align: 'center' });
+
         if (mostProductiveSupervisor) {
-          doc.text(`Most Productive: ${mostProductiveSupervisor.name} - ${mostProductiveSupervisor.pcsPerMan.toLocaleString()} pcs/man`, 
-                   pageWidth / 2, finalY + 14, { align: 'center' });
+          doc.text(`Most Productive: ${mostProductiveSupervisor.name} - ${mostProductiveSupervisor.pcsPerMan.toLocaleString()} pcs/man`,
+            pageWidth / 2, finalY + 14, { align: 'center' });
         }
       }
     }
-    
+
     // Save with proper filename
-    const fileName = filters.holdLots 
+    const fileName = filters.holdLots
       ? `Packing_Hold_Lots_${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}.pdf`
       : `Packing_Report_${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}.pdf`;
     doc.save(fileName);
@@ -1237,12 +1244,12 @@ const exportToExcel = () => {
     const uniqueSupervisors = new Set(
       filteredData.map(item => item['Packing Supervisor']).filter(Boolean)
     );
-    
+
     return {
       totalLots: filteredData.length,
       totalPieces: filteredData.reduce((sum, item) => sum + (parseInt(item['Total Pcs']) || 0), 0),
       totalSupervisors: uniqueSupervisors.size, // NEW: Count of unique supervisors
-      avgAging: filteredData.length > 0 ? 
+      avgAging: filteredData.length > 0 ?
         (filteredData.reduce((sum, item) => sum + parseInt(item['Aging']), 0) / filteredData.length).toFixed(1) : 0
     };
   };
@@ -1292,7 +1299,7 @@ const exportToExcel = () => {
   };
 
   const getStatusColor = (status) => {
-    switch(status) {
+    switch (status) {
       case 'Completed': return '#10B981';
       case 'WIP': return '#3B82F6';
       case 'Not Started': return '#6B7280';
@@ -1972,7 +1979,7 @@ const exportToExcel = () => {
           }
         `}
       </style>
-      
+
       {/* Row Details Modal */}
       {modalOpen && selectedRow && (
         <div className="modal-overlay" onClick={closeModal}>
@@ -2007,10 +2014,10 @@ const exportToExcel = () => {
                   <div className="detail-label">Packing Date</div>
                   <div className="detail-value">{selectedRow['Packing Date']}</div>
                 </div>
-                <div className="detail-card">
+                {/* <div className="detail-card">
                   <div className="detail-label">Total Pieces</div>
                   <div className="detail-value">{selectedRow['Total Pcs']}</div>
-                </div>
+                </div> */}
                 <div className="detail-card">
                   <div className="detail-label">Manpower</div>
                   <div className="detail-value">{selectedRow['Total Manpower'] || '0'}</div>
@@ -2029,7 +2036,7 @@ const exportToExcel = () => {
                 </div>
                 <div className="detail-card">
                   <div className="detail-label">Status</div>
-                  <div className="detail-value" style={{ 
+                  <div className="detail-value" style={{
                     color: getStatusColor(selectedRow['Status']),
                     fontWeight: 'bold'
                   }}>
@@ -2042,7 +2049,7 @@ const exportToExcel = () => {
                 </div>
                 <div className="detail-card">
                   <div className="detail-label">Hold Status</div>
-                  <div className="detail-value" style={{ 
+                  <div className="detail-value" style={{
                     color: isLotOnHold(selectedRow) ? '#EF4444' : '#10B981',
                     fontWeight: 'bold'
                   }}>
@@ -2050,7 +2057,7 @@ const exportToExcel = () => {
                   </div>
                 </div>
               </div>
-              
+
               {/* Status History Section */}
               <div className="status-section">
                 <h3 className="section-title">Status History</h3>
@@ -2101,7 +2108,7 @@ const exportToExcel = () => {
           </div>
         </div>
       )}
-      
+
       <div className="wip-report-container">
         {/* Header */}
         <div className="header">
@@ -2113,32 +2120,32 @@ const exportToExcel = () => {
               </span>
             </h1>
             <div className="header-controls">
-                <button 
-    className="icon-btn" 
-    style={{ backgroundColor: '#6B7280', color: 'white' }}
-    onClick={() => window.history.back()}
-    title="Go Back"
-  >
-    ←
-  </button>
-              <button 
-                className="icon-btn" 
+              <button
+                className="icon-btn"
+                style={{ backgroundColor: '#6B7280', color: 'white' }}
+                onClick={() => window.history.back()}
+                title="Go Back"
+              >
+                ←
+              </button>
+              <button
+                className="icon-btn"
                 style={{ backgroundColor: '#10B981', color: 'white' }}
-                onClick={exportToExcel} 
+                onClick={exportToExcel}
                 title="Download as Excel (with Status column)"
               >
                 <span style={{ fontSize: '20px' }}>📊</span>
               </button>
-              
-              <button 
-                className="icon-btn" 
+
+              <button
+                className="icon-btn"
                 style={{ backgroundColor: '#EF4444', color: 'white' }}
-                onClick={exportToPDF} 
+                onClick={exportToPDF}
                 title="Download as PDF (without Status column)"
               >
                 <span style={{ fontSize: '20px' }}>📄</span>
               </button>
-              
+
               <button className="icon-btn refresh-btn" onClick={fetchData} title="Refresh data">
                 ↻
               </button>
@@ -2147,7 +2154,7 @@ const exportToExcel = () => {
               </button>
             </div>
           </div>
-          
+
           {/* Summary Cards - CHANGED: Total Manpower card replaced with Total Packing Supervisor card */}
           <div className="summary-cards">
             <div className="summary-card total-lots">
@@ -2156,21 +2163,21 @@ const exportToExcel = () => {
               </div>
               <p className="card-value">{totals.totalLots}</p>
             </div>
-            
+
             <div className="summary-card total-pieces">
               <div className="card-label">
                 <span>👕</span> Total Pieces
               </div>
               <p className="card-value">{totals.totalPieces.toLocaleString()}</p>
             </div>
-            
+
             <div className="summary-card total-supervisors">
               <div className="card-label">
                 <span>👤</span> Packing Supervisors
               </div>
               <p className="card-value">{totals.totalSupervisors}</p>
             </div>
-            
+
             <div className="summary-card avg-aging">
               <div className="card-label">
                 <span>📅</span> Average Aging (Days)
@@ -2193,7 +2200,7 @@ const exportToExcel = () => {
               )}
             </span>
           </div>
-          
+
           <div className="filters-grid">
             <div className="filter-group">
               <label className="filter-label">Lot Number</label>
@@ -2205,7 +2212,7 @@ const exportToExcel = () => {
                 onChange={(e) => handleFilterChange('lotNumber', e.target.value)}
               />
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Packing Supervisor</label>
               <select
@@ -2221,7 +2228,7 @@ const exportToExcel = () => {
                 ))}
               </select>
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Garment Type</label>
               <select
@@ -2237,7 +2244,7 @@ const exportToExcel = () => {
                 ))}
               </select>
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Fabric</label>
               <select
@@ -2253,7 +2260,7 @@ const exportToExcel = () => {
                 ))}
               </select>
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Style</label>
               <select
@@ -2269,7 +2276,7 @@ const exportToExcel = () => {
                 ))}
               </select>
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Brand</label>
               <select
@@ -2285,7 +2292,7 @@ const exportToExcel = () => {
                 ))}
               </select>
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Stitching Supervisor</label>
               <select
@@ -2301,7 +2308,7 @@ const exportToExcel = () => {
                 ))}
               </select>
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Status</label>
               <select
@@ -2316,7 +2323,7 @@ const exportToExcel = () => {
                 <option value="Not Started">Not Started Only</option>
               </select>
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Min Aging (Days)</label>
               <input
@@ -2327,7 +2334,7 @@ const exportToExcel = () => {
                 onChange={(e) => handleFilterChange('minAging', e.target.value)}
               />
             </div>
-            
+
             <div className="filter-group">
               <label className="filter-label">Max Aging (Days)</label>
               <input
@@ -2338,7 +2345,7 @@ const exportToExcel = () => {
                 onChange={(e) => handleFilterChange('maxAging', e.target.value)}
               />
             </div>
-            
+
             {/* NEW: Hold Lots filter */}
             <div className={`checkbox-filter ${filters.holdLots ? 'active' : ''}`}>
               <input
@@ -2354,10 +2361,10 @@ const exportToExcel = () => {
                 </span>
               </label>
             </div>
-            
+
           </div>
         </div>
-        
+
         {/* Main Table with Navy Blue Headers */}
         <div className="table-card">
           <div className="table-header">
@@ -2376,17 +2383,21 @@ const exportToExcel = () => {
               </span>
             </span>
           </div>
-          
+
           <div className="table-container">
             <table className="data-table">
               <thead>
                 <tr>
                   <th>Lot #</th>
-                  <th>Fabric</th>
                   <th>Garment Type</th>
                   <th>Style</th>
+                  <th>Fabric</th>
                   <th>Brand</th>
                   <th>Total Pcs</th>
+                  <th>Section</th>
+                  <th>Season</th>
+                  <th>Party Name</th>
+                  <th>Direct Stitching</th>
                   <th>Packing Date</th>
                   <th>Packing Supervisor</th>
                   <th>Aging (Days)</th>
@@ -2402,39 +2413,43 @@ const exportToExcel = () => {
                     return (
                       <tr key={index} onClick={() => openRowDetails(item)}>
                         <td>{item['Lot Number']}</td>
-                        <td>{item['Fabric']}</td>
                         <td>{item['Garment Type']}</td>
                         <td>{item['Style']}</td>
+                        <td>{item['Fabric']}</td>
                         <td>
                           {item['BRAND'] && (
                             <span className="brand-tag">{item['BRAND']}</span>
                           )}
                         </td>
                         <td>{item['Total Pcs']}</td>
+                        <td>{item['Section'] || '—'}</td>
+                        <td>{item['Season'] || '—'}</td>
+                        <td>{item['Party Name'] || '—'}</td>
+                        <td>{item['Direct Stitching'] || '—'}</td>
                         <td>{item['Packing Date']}</td>
                         <td><span className="supervisor-tag">{item['Packing Supervisor']}</span></td>
                         <td>
-                          <span 
-                            className="aging-badge" 
+                          <span
+                            className="aging-badge"
                             style={{ backgroundColor: getAgingColor(item['Aging']) }}
                           >
                             {item['Aging']}
                           </span>
                         </td>
                         <td>
-                          <span 
-                            className="status-badge" 
-                            style={{ 
-                              backgroundColor: `${getStatusColor(item['Status'])}1A`, 
-                              color: getStatusColor(item['Status']) 
+                          <span
+                            className="status-badge"
+                            style={{
+                              backgroundColor: `${getStatusColor(item['Status'])}1A`,
+                              color: getStatusColor(item['Status'])
                             }}
                           >
                             {item['Status']}
                           </span>
                         </td>
                         <td>
-                          <div 
-                            className={`remarks-cell ${isHold ? 'hold' : ''}`} 
+                          <div
+                            className={`remarks-cell ${isHold ? 'hold' : ''}`}
                             title={getRecentRemarks(item)}
                           >
                             {isHold && <span style={{ color: '#EF4444', fontWeight: 'bold' }}>⏸️ </span>}
