@@ -18,6 +18,96 @@ export const WEBHOOK_URL =
   'https://script.google.com/macros/s/AKfycbyMDwX4P8mUmpkodGdoHQQvFMqW4z0LWvqeWFByh4pAF3GFDXrlLpGV9M7dHqHLB-bZ/exec';
 
 /**
+ * Recursively parses and cleans any remark value (JSON array, JSON object, stringified JSON, or plain text)
+ * to extract ONLY the latest single human-readable remark/status string.
+ */
+export const formatLatestRemark = (rawVal, fallback = "—") => {
+  if (rawVal === null || rawVal === undefined) return fallback;
+
+  let val = rawVal;
+
+  // 1. If it's a string, clean and test if it's stringified JSON
+  if (typeof val === "string") {
+    val = val.trim();
+    if (!val || val === "—" || val === "N/A" || val === "-" || val === "null" || val === "undefined") {
+      return fallback;
+    }
+
+    // Try parsing if it looks like JSON array or object
+    if ((val.startsWith("[") && val.endsWith("]")) || (val.startsWith("{") && val.endsWith("}"))) {
+      try {
+        val = JSON.parse(val);
+      } catch {
+        try {
+          val = JSON.parse(val.replace(/\\"/g, '"'));
+        } catch {
+          const matchRemark = val.match(/"(?:remarks|text|status|updateType)"\s*:\s*"([^"]+)"/i);
+          if (matchRemark && matchRemark[1]) {
+            return formatLatestRemark(matchRemark[1], fallback);
+          }
+        }
+      }
+    }
+  }
+
+  // 2. If it's an Array of items/updates/remarks
+  if (Array.isArray(val)) {
+    if (val.length === 0) return fallback;
+
+    const validItems = val.filter((item) => item !== null && item !== undefined && item !== "");
+    if (validItems.length === 0) return fallback;
+
+    const hasTimestamp = validItems.some((item) => item && typeof item === "object" && item.timestamp);
+    let sorted = validItems;
+    if (hasTimestamp) {
+      sorted = [...validItems].sort((a, b) => {
+        const timeA = a?.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const timeB = b?.timestamp ? new Date(b.timestamp).getTime() : 0;
+        if (!isNaN(timeA) && !isNaN(timeB) && (timeA > 0 || timeB > 0)) {
+          return timeB - timeA;
+        }
+        return 0;
+      });
+    }
+
+    const latestItem = (hasTimestamp && sorted[0]?.timestamp && !isNaN(new Date(sorted[0].timestamp).getTime()))
+      ? sorted[0]
+      : validItems[validItems.length - 1];
+
+    return formatLatestRemark(latestItem, fallback);
+  }
+
+  // 3. If it's an Object (single update or remark object)
+  if (val && typeof val === "object") {
+    const rem = (val.remarks ?? val.remark ?? val.userRemarks ?? val.text ?? val.note ?? val.comment ?? "").toString().trim();
+    const st = (val.status ?? val.wipStatus ?? val.updateType ?? val.compStatus ?? val.state ?? "").toString().trim();
+
+    if (rem && rem !== "—" && rem !== "N/A" && rem !== "-") {
+      return formatLatestRemark(rem, fallback);
+    }
+    if (st && st !== "—" && st !== "N/A" && st !== "-") {
+      return formatLatestRemark(st, fallback);
+    }
+    for (const v of Object.values(val)) {
+      if (typeof v === "string" && v.trim() && v !== "—" && v !== "N/A" && v !== "-") {
+        return formatLatestRemark(v, fallback);
+      }
+    }
+    return fallback;
+  }
+
+  // 4. Plain string value
+  let finalStr = String(val).trim();
+  if (!finalStr || finalStr === "—" || finalStr === "N/A" || finalStr === "-" || finalStr === "null" || finalStr === "undefined") {
+    return fallback;
+  }
+  if (finalStr.includes("_")) {
+    finalStr = finalStr.replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  return finalStr;
+};
+
+/**
  * Fetch remarks directly from Google Spreadsheet and fallback to localStorage cache.
  * Returns pure remark data keyed by Lot Number.
  */
@@ -44,21 +134,32 @@ export const fetchRemarksForTab = async (tabType) => {
         const lotNumber = String(row[0] || '').trim();
         if (!lotNumber) return;
 
-        const latestRemark = String(row[5] || '').trim();
+        const latestRemarkRaw = String(row[5] || '').trim();
         const historyJson = String(row[6] || '').trim();
         const updatedAt = String(row[7] || '').trim();
 
         let history = [];
         if (historyJson) {
           try {
-            history = JSON.parse(historyJson);
+            const parsed = JSON.parse(historyJson);
+            if (Array.isArray(parsed)) {
+              history = parsed.map((item) => {
+                if (typeof item === 'object' && item !== null) {
+                  return {
+                    ...item,
+                    text: formatLatestRemark(item.text || item.remarks || item.status || item, '')
+                  };
+                }
+                return { text: formatLatestRemark(item, ''), timestamp: updatedAt || new Date().toLocaleString() };
+              });
+            }
           } catch {
-            if (latestRemark) {
-              history = [{ text: latestRemark, timestamp: updatedAt || new Date().toLocaleString() }];
+            if (latestRemarkRaw) {
+              history = [{ text: formatLatestRemark(latestRemarkRaw, ''), timestamp: updatedAt || new Date().toLocaleString() }];
             }
           }
-        } else if (latestRemark) {
-          history = [{ text: latestRemark, timestamp: updatedAt || new Date().toLocaleString() }];
+        } else if (latestRemarkRaw) {
+          history = [{ text: formatLatestRemark(latestRemarkRaw, ''), timestamp: updatedAt || new Date().toLocaleString() }];
         }
 
         freshMap[lotNumber] = history;

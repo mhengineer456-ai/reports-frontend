@@ -344,6 +344,29 @@ const Navbar = () => {
         >
           📦⚡ Lot Tracker
         </button>
+
+        {/* ✨ Standalone AI Assistant Window Launcher */}
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent("open-factory-ai"))}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%)",
+            color: "#ffffff",
+            border: "1.5px solid #f472b6",
+            padding: "8px 16px",
+            borderRadius: "10px",
+            fontSize: "0.85rem",
+            fontWeight: "800",
+            cursor: "pointer",
+            boxShadow: "0 4px 14px rgba(168, 85, 247, 0.35)",
+            transition: "all 0.2s ease"
+          }}
+          title="Open Factory AI Assistant Pop-up Window"
+        >
+          ✨ Ask AI
+        </button>
       </div>
 
       {/* Right Controls */}

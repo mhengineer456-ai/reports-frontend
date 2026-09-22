@@ -52,6 +52,8 @@ import LotTimelineReport from './LotTimelineReport';
 import CancelledLotsReport from './CancelledLotsReport';
 import HoldLotManager from './HoldLotManager';
 import HoldLotsReport from './HoldLotsReport';
+import CriticalVarianceCombineReport from './CriticalVarianceCombineReport';
+import AiReportCopilot from './AiReportCopilot';
 
 function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -135,12 +137,17 @@ function App() {
         <ProtectedRoute path="/daily-elastic-report" component={ElasticReport} />
         <ProtectedRoute path="/lot-timeline" component={LotTimelineReport} />
         <ProtectedRoute path="/lot-tracking" component={LotTimelineReport} />
+        <ProtectedRoute path="/critical-variance-report" component={CriticalVarianceCombineReport} />
+        <ProtectedRoute path="/variance-combine-report" component={CriticalVarianceCombineReport} />
 
 
         <Route path="*">
           <Redirect to="/" />
         </Route>
       </Switch>
+
+      {/* Global Standalone Factory AI Assistant Pop-up Window */}
+      <AiReportCopilot />
     </Router>
   );
 }

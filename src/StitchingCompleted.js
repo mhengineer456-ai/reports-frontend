@@ -5,6 +5,7 @@ import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend, BACKEND_URL } from './config';
+import { formatLatestRemark } from './embPrintRemarksService';
 
 const getDirectImageUrl = (url) => {
   if (!url) return '';
@@ -665,20 +666,9 @@ const StitchingCompleteLot = () => {
 
     return supervisorLatestManpower;
   }, [parseDateOfIssue, normalizeText]);
+
   const cleanRemarkUnderscores = useCallback((val) => {
-    if (!val || val === 'N/A' || val === '-' || val === '—') return 'N/A';
-    let str = String(val).trim();
-    if (str.includes('_')) {
-      str = str.replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
-      return str.split(' ').map(w => {
-        if (!w) return '';
-        if (w.startsWith('(')) {
-          return '(' + w.slice(1, 2).toUpperCase() + w.slice(2);
-        }
-        return w.charAt(0).toUpperCase() + w.slice(1);
-      }).join(' ');
-    }
-    return str;
+    return formatLatestRemark(val, 'N/A');
   }, []);
 
   // Get Pintu status for a specific lot (for PDF only)
@@ -1064,36 +1054,7 @@ const StitchingCompleteLot = () => {
       return 'N/A';
     }
 
-    try {
-      if (typeof wipStatus === 'string' && !wipStatus.startsWith('[')) {
-        return wipStatus;
-      }
-
-      const statusArray = JSON.parse(wipStatus);
-
-      if (!Array.isArray(statusArray) || statusArray.length === 0) {
-        return 'N/A';
-      }
-
-      const sortedStatuses = [...statusArray].sort((a, b) => {
-        const dateA = new Date(a.timestamp).getTime();
-        const dateB = new Date(b.timestamp).getTime();
-        return dateB - dateA;
-      });
-
-      const latestStatus = sortedStatuses[0];
-
-      if (latestStatus.remarks && latestStatus.remarks.trim() !== '') {
-        return latestStatus.remarks;
-      } else if (latestStatus.status && latestStatus.status.trim() !== '') {
-        return latestStatus.status;
-      } else {
-        return 'N/A';
-      }
-    } catch (error) {
-      console.error('Error parsing WIP Status for remarks:', error);
-      return wipStatus;
-    }
+    return formatLatestRemark(wipStatus, 'N/A');
   }, []);
 
   // Calculate stitching days - For completed lots: Completion Date - Date of Issue
@@ -1354,34 +1315,46 @@ const StitchingCompleteLot = () => {
             let eaStatus = 'N/A';
 
             try {
-              const history = JSON.parse(updateHistory);
+              const history = typeof updateHistory === 'string' && (updateHistory.startsWith('[') || updateHistory.startsWith('{'))
+                ? JSON.parse(updateHistory)
+                : updateHistory;
+
               if (Array.isArray(history)) {
                 // Get latest Pintu status
                 const pintuUpdates = history.filter(h =>
-                  h.updatedBy?.toLowerCase() === 'pintu'
+                  h && h.updatedBy?.toLowerCase() === 'pintu'
                 );
                 if (pintuUpdates.length > 0) {
                   const latestPintu = pintuUpdates[pintuUpdates.length - 1];
-                  pintuStatus = latestPintu.updateType || latestPintu.remarks || 'Updated';
+                  pintuStatus = formatLatestRemark(latestPintu.remarks || latestPintu.updateType || latestPintu.status || latestPintu, 'Updated');
                 }
 
                 // Get latest EA/WA status
                 const eaUpdates = history.filter(h =>
-                  h.updatedBy?.toLowerCase() === 'ea' ||
-                  h.updatedBy?.toLowerCase() === 'wa'
+                  h && (h.updatedBy?.toLowerCase() === 'ea' || h.updatedBy?.toLowerCase() === 'wa')
                 );
                 if (eaUpdates.length > 0) {
                   const latestEA = eaUpdates[eaUpdates.length - 1];
-                  eaStatus = latestEA.updateType || latestEA.remarks || 'Updated';
+                  eaStatus = formatLatestRemark(latestEA.remarks || latestEA.updateType || latestEA.status || latestEA, 'Updated');
                 }
+
+                // Fallback: If neither was tagged, extract general latest status
+                if (pintuStatus === 'N/A' && eaStatus === 'N/A') {
+                  const general = formatLatestRemark(history, 'N/A');
+                  if (general && general !== 'N/A') {
+                    pintuStatus = general;
+                  }
+                }
+              } else if (typeof updateHistory === 'string' && updateHistory) {
+                pintuStatus = formatLatestRemark(updateHistory, 'N/A');
               }
             } catch (e) {
               console.error('Error parsing update history for lot:', lotNumber, e);
             }
 
             updatesMap.set(lotNumber.trim(), {
-              pintuStatus,
-              eaStatus
+              pintuStatus: formatLatestRemark(pintuStatus, 'N/A'),
+              eaStatus: formatLatestRemark(eaStatus, 'N/A')
             });
           }
         }
@@ -1603,12 +1576,17 @@ const StitchingCompleteLot = () => {
         };
 
         processedData.forEach(item => {
-          const lotKey = String(item.lotNumber || '').trim().toUpperCase();
-          const joSec = sectionMap ? sectionMap.get(lotKey) : null;
-          if (joSec) {
-            item.section = joSec;
-          } else if (!item.section || item.section === 'N/A') {
-            item.section = getSectionFromMwk(item.mwk) || '—';
+          const mwkSec = getSectionFromMwk(item.mwk);
+          if (mwkSec && mwkSec !== 'N/A' && mwkSec !== '—') {
+            item.section = mwkSec;
+          } else {
+            const lotKey = String(item.lotNumber || '').trim().toUpperCase();
+            const joSec = sectionMap ? sectionMap.get(lotKey) : null;
+            if (joSec) {
+              item.section = joSec;
+            } else if (!item.section || item.section === 'N/A') {
+              item.section = '—';
+            }
           }
         });
       } catch (err) {
@@ -2457,9 +2435,9 @@ const StitchingCompleteLot = () => {
         const pintuValue = getPintuStatusForPDF ? getPintuStatusForPDF(item.lotNumber) : '';
         const eaValue = getEAStatusForPDF ? getEAStatusForPDF(item.lotNumber) : '';
 
-        const sectionVal = (item.section && item.section !== 'N/A' && item.section !== '—')
-          ? item.section
-          : (abbreviateMWK(item.mwk) === 'K' ? 'KIDS' : abbreviateMWK(item.mwk) === 'M' ? 'GENTS' : abbreviateMWK(item.mwk) === 'W' ? 'WOMEN' : '—');
+        const mwkAbbr = abbreviateMWK(item.mwk);
+        const derivedSection = mwkAbbr === 'M' ? 'GENTS' : mwkAbbr === 'W' ? 'WOMEN' : mwkAbbr === 'K' ? 'KIDS' : mwkAbbr === 'G' ? 'GIRLS' : mwkAbbr === 'B' ? 'BOYS' : '';
+        const sectionVal = derivedSection || ((item.section && item.section !== 'N/A' && item.section !== '—') ? item.section : '—');
 
         const rowValues = [
           index + 1,
@@ -3230,18 +3208,7 @@ const StitchingCompleteLot = () => {
         const cleanCellText = (text) => {
           if (text == null || text === '' || text === '-') return '—';
           if (text === 'N/A') return 'N/A';
-          let str = String(text).trim();
-          if (str.includes('_')) {
-            str = str.replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
-            return str.split(' ').map(w => {
-              if (!w) return '';
-              if (w.startsWith('(')) {
-                return '(' + w.slice(1, 2).toUpperCase() + w.slice(2);
-              }
-              return w.charAt(0).toUpperCase() + w.slice(1);
-            }).join(' ');
-          }
-          return str;
+          return formatLatestRemark(text, '—');
         };
 
         return activeCols.map((col, colIdx) => {
@@ -3334,9 +3301,9 @@ const StitchingCompleteLot = () => {
             };
           }
           if (col.id === 'section') {
-            const sectionVal = item.section && item.section !== 'N/A' && item.section !== '—'
-              ? item.section
-              : (abbreviateMWK(item.mwk) === 'K' ? 'KIDS' : abbreviateMWK(item.mwk) === 'M' ? 'GENTS' : abbreviateMWK(item.mwk) === 'W' ? 'WOMEN' : '—');
+            const mwkAbbr = abbreviateMWK(item.mwk);
+            const derivedSection = mwkAbbr === 'M' ? 'GENTS' : mwkAbbr === 'W' ? 'WOMEN' : mwkAbbr === 'K' ? 'KIDS' : mwkAbbr === 'G' ? 'GIRLS' : mwkAbbr === 'B' ? 'BOYS' : '';
+            const sectionVal = derivedSection || ((item.section && item.section !== 'N/A' && item.section !== '—') ? item.section : '—');
             return {
               content: cleanCellText(sectionVal),
               styles: { cellWidth, fontSize: fontSz, halign: 'center', fontStyle: 'bold', fillColor: rowBgColor, textColor: [0, 0, 0], cellPadding: cellPad }
@@ -5041,9 +5008,11 @@ const StitchingCompleteLot = () => {
 
                         {/* 9. Section */}
                         <td className="text-center font-medium">
-                          {item.section && item.section !== 'N/A' && item.section !== '—'
-                            ? item.section
-                            : (abbreviateMWK(item.mwk) === 'K' ? 'KIDS' : abbreviateMWK(item.mwk) === 'M' ? 'GENTS' : abbreviateMWK(item.mwk) === 'W' ? 'WOMEN' : '—')}
+                          {(() => {
+                            const mwkAbbr = abbreviateMWK(item.mwk);
+                            const derivedSection = mwkAbbr === 'M' ? 'GENTS' : mwkAbbr === 'W' ? 'WOMEN' : mwkAbbr === 'K' ? 'KIDS' : mwkAbbr === 'G' ? 'GIRLS' : mwkAbbr === 'B' ? 'BOYS' : '';
+                            return derivedSection || ((item.section && item.section !== 'N/A' && item.section !== '—') ? item.section : '—');
+                          })()}
                         </td>
 
                         {/* 10. Season */}

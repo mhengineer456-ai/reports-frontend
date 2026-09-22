@@ -1418,6 +1418,61 @@ export default function Dashboard() {
                   bannerGradient="linear-gradient(90deg, #dc2626 0%, #ea580c 35%, #ec4899 70%, #4f46e5 100%)"
                 />
 
+                {/* Master Combined Variance Spotlight Banner */}
+                <div
+                  onClick={() => history.push("/critical-variance-report")}
+                  style={{
+                    width: "100%",
+                    background: "linear-gradient(135deg, #7f1d1d 0%, #991b1b 50%, #dc2626 100%)",
+                    borderRadius: "18px",
+                    padding: "18px 24px",
+                    marginBottom: "20px",
+                    color: "#ffffff",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: "14px",
+                    boxShadow: "0 10px 25px rgba(220, 38, 38, 0.25)",
+                    cursor: "pointer",
+                    transition: "transform 0.2s ease, box-shadow 0.2s ease",
+                    boxSizing: "border-box",
+                    border: "1px solid rgba(255, 255, 255, 0.2)"
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "translateY(-3px)";
+                    e.currentTarget.style.boxShadow = "0 14px 32px rgba(220, 38, 38, 0.35)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "0 10px 25px rgba(220, 38, 38, 0.25)";
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+                    <div style={{ width: "48px", height: "48px", borderRadius: "12px", background: "rgba(255,255,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", backdropFilter: "blur(6px)" }}>
+                      🚨
+                    </div>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "1.1rem", fontWeight: 900, letterSpacing: "-0.01em" }}>
+                          Critical Red Zone & Variance Combined Report
+                        </span>
+                        <span style={{ background: "#fef2f2", color: "#991b1b", fontSize: "0.68rem", fontWeight: 900, padding: "2px 8px", borderRadius: "10px", textTransform: "uppercase" }}>
+                          Unified Aggregator
+                        </span>
+                      </div>
+                      <p style={{ margin: "3px 0 0", fontSize: "0.82rem", color: "#fecaca" }}>
+                        Aggregates all Red Zone & Pending Lots across all 6 Most Critical Reports with live variance audits & aging alerts.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "#ffffff", color: "#991b1b", padding: "10px 18px", borderRadius: "10px", fontSize: "0.84rem", fontWeight: 900, boxShadow: "0 4px 12px rgba(0,0,0,0.1)" }}>
+                    <span>Launch Combined Report</span>
+                    <span>➔</span>
+                  </div>
+                </div>
+
                 {/* Workflow Sequence Indicator (Colorful) */}
                 <div
                   style={{

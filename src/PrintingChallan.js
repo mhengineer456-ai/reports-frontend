@@ -1156,31 +1156,60 @@ const getLatestPrintingUpdatedAtObj = (challanHistoryJson) => {
 /* ======= dates + day-diff ======= */
 function parseDateSafe(input) {
   if (!input) return null;
-  if (input instanceof Date && !isNaN(input)) return input;
+  if (input instanceof Date && !isNaN(input.getTime())) return input;
   const s = String(input).trim();
-  if (!s) return null;
+  if (!s || s === "N/A" || s === "—" || s === "undefined" || s === "null") return null;
 
+  // 1. Match DD-Mon-YYYY (e.g. "3 Aug 2026", "03-Aug-2026", "03 Aug 2026", "3-AUG-26")
+  const textMatch = s.match(/^(\d{1,2})[-\s/]([a-zA-Z]{3,})[-\s/](\d{2,4})/);
+  if (textMatch) {
+    const [, dayStr, monStr, yearStr] = textMatch;
+    const monthMap = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    const m = monthMap[monStr.toLowerCase().slice(0, 3)];
+    if (m !== undefined) {
+      let y = parseInt(yearStr, 10);
+      if (y < 100) y += (y < 50 ? 2000 : 1900);
+      const dt = new Date(y, m, parseInt(dayStr, 10));
+      if (!isNaN(dt.getTime())) return dt;
+    }
+  }
+
+  // 2. Match "Wed Aug 03 2026" or "Aug 03 2026"
+  const textMatch2 = s.match(/([a-zA-Z]{3,})\s+(\d{1,2})\s+(\d{4})/);
+  if (textMatch2) {
+    const [, monStr, dayStr, yearStr] = textMatch2;
+    const monthMap = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    const m = monthMap[monStr.toLowerCase().slice(0, 3)];
+    if (m !== undefined) {
+      const dt = new Date(parseInt(yearStr, 10), m, parseInt(dayStr, 10));
+      if (!isNaN(dt.getTime())) return dt;
+    }
+  }
+
+  // 3. Match ISO YYYY-MM-DD or YYYY/MM/DD
+  const isoMatch = s.match(/^(\d{4})[-\/\.](\d{1,2})[-\/\.](\d{1,2})/);
+  if (isoMatch) {
+    const [, yyyy, mm, dd] = isoMatch;
+    const dt = new Date(parseInt(yyyy, 10), parseInt(mm, 10) - 1, parseInt(dd, 10));
+    if (!isNaN(dt.getTime())) return dt;
+  }
+
+  // 4. Match Indian standard DD/MM/YYYY or DD-MM-YYYY (priority over MM/DD/YYYY)
+  const slashParts = s.split(/[\/\-\.]/);
+  if (slashParts.length >= 3) {
+    const p0 = parseInt(slashParts[0], 10);
+    const p1 = parseInt(slashParts[1], 10);
+    const p2 = parseInt(slashParts[2].split(" ")[0], 10);
+    if (!isNaN(p0) && !isNaN(p1) && !isNaN(p2)) {
+      const yr = p2 > 100 ? p2 : (p2 < 50 ? 2000 + p2 : 1900 + p2);
+      const dt = new Date(yr, p1 - 1, p0);
+      if (!isNaN(dt.getTime())) return dt;
+    }
+  }
+
+  // 5. Fallback standard Date parse
   const d1 = new Date(s);
-  if (!isNaN(d1)) return d1;
-
-  const m1 = s.match(/^(\d{1,2})[\/](\d{1,2})[\/](\d{2,4})$/);
-  if (m1) {
-    const [_, dd, mm, yyyy] = m1;
-    const y = Number(yyyy.length === 2 ? (Number(yyyy) + 2000) : yyyy);
-    const d = new Date(y, Number(mm) - 1, Number(dd));
-    return isNaN(d) ? null : d;
-  }
-
-  const m2 = s.match(/^(\d{1,2})[- ]([A-Za-z]{3})[- ](\d{2,4})$/);
-  if (m2) {
-    const monMap = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-    const dd = Number(m2[1]);
-    const mon = monMap[m2[2].toLowerCase()];
-    let y = Number(m2[3]);
-    if (y < 100) y += 2000;
-    const d = new Date(y, mon, dd);
-    return isNaN(d) ? null : d;
-  }
+  if (!isNaN(d1.getTime())) return d1;
 
   return null;
 }
@@ -1250,11 +1279,11 @@ const downloadBlob = (blob, filename) => {
 
 /* ================== NEW HELPER FUNCTIONS ================== */
 // Function to map Section values to M/W/K
-const mapSectionValue = (section) => {
-  if (!section) return "";
-  const sectionStr = String(section).trim().toLowerCase();
-  if (sectionStr.includes("gent") || sectionStr === "m") return "M";
-  if (sectionStr.includes("girl") || sectionStr.includes("wom") || sectionStr === "w") return "W";
+const mapSectionValue = (sectionStr) => {
+  if (!sectionStr) return "";
+  sectionStr = String(sectionStr).trim().toLowerCase();
+  if (sectionStr.includes("men") || sectionStr === "m") return "M";
+  if (sectionStr.includes("women") || sectionStr === "w") return "W";
   if (sectionStr.includes("kid") || sectionStr === "k") return "K";
   return sectionStr.toUpperCase().substring(0, 1);
 };
@@ -1263,18 +1292,14 @@ const mapSectionValue = (section) => {
 const abbreviatePartyName = (partyName) => {
   if (!partyName) return "";
   const name = String(partyName).trim();
-
   const cleanName = name
     .replace(/\b(pvt|ltd|limited|llp|inc|corporation|corp)\b/gi, '')
     .replace(/[^\w\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-
   const words = cleanName.split(/\s+/);
   if (words.length === 0) return name.substring(0, 3).toUpperCase();
-
   const initials = words.map(word => word.charAt(0).toUpperCase()).join('');
-
   if (initials.length <= 1) return name.substring(0, 3).toUpperCase();
   if (initials.length <= 4) return initials;
   return initials.substring(0, 3);
@@ -1287,17 +1312,7 @@ const getFinancialYearFromDate = (dateStr) => {
   if (dateStr instanceof Date) {
     d = dateStr;
   } else if (typeof dateStr === "string") {
-    const s = dateStr.trim();
-    if (!s) return null;
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-      const parts = s.split("-");
-      d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-    } else if (/^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}/.test(s)) {
-      const parts = s.split(/[\/\-\.]/);
-      d = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-    } else {
-      d = new Date(s);
-    }
+    d = parseDateSafe(dateStr);
   }
   if (!d || isNaN(d.getTime())) return null;
   const month = d.getMonth();
