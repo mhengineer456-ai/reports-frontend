@@ -746,10 +746,11 @@ const StitchingCompleteLot = () => {
 
     const value = mwkValue.trim().toLowerCase();
 
-    if (value.includes('gents') || value === 'm' || value === 'mens') return 'M';
-    if (value.includes('kids') || value === 'k') return 'K';
-    if (value.includes('girls') || value === 'g' || value.includes('girlish') || value.includes('girls')) return 'G';
-    if (value.includes('women') || value.includes('womens') || value === 'w' || value.includes('women')) return 'W';
+    if (value.includes('gent') || value.includes('man') || value.includes('men') || value === 'm') return 'M';
+    if (value.includes('kid') || value === 'k') return 'K';
+    if (value.includes('girl') || value === 'g') return 'G';
+    if (value.includes('women') || value.includes('lady') || value.includes('ladies') || value === 'w') return 'W';
+    if (value.includes('boy') || value === 'b') return 'B';
 
     // Return first letter if no match
     return value.charAt(0).toUpperCase();
@@ -853,6 +854,29 @@ const StitchingCompleteLot = () => {
       return String(dateString);
     }
   }, []);
+
+  const formatDeptCompletionDate = useCallback((rawCompDate) => {
+    if (!rawCompDate) return '';
+    let str = String(rawCompDate).trim();
+    if (!str || str === '-' || str === 'N/A' || str === '[]') return '';
+
+    if (str.startsWith('[') || str.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(str);
+        const arr = Array.isArray(parsed) ? parsed : [parsed];
+        if (arr.length > 0) {
+          for (let i = arr.length - 1; i >= 0; i--) {
+            const entry = arr[i];
+            if (entry) {
+              if (entry.date) return formatDateToDDMMYY(entry.date);
+              if (entry.timestamp) return formatDateToDDMMYY(entry.timestamp);
+            }
+          }
+        }
+      } catch (e) {}
+    }
+    return formatDateToDDMMYY(str);
+  }, [formatDateToDDMMYY]);
 
   const getCompletedStatusText = useCallback((completedStatus) => {
     if (!completedStatus || completedStatus.trim() === '') {
@@ -1417,6 +1441,7 @@ const StitchingCompleteLot = () => {
           { keys: ['StartRow', 'Start Row'], target: 'startRow' },
           { keys: ['NumRows', 'Num Rows'], target: 'numRows' },
           { keys: ['Manpower', 'MANPOWER', 'Man Power', 'manpower'], target: 'manpower' },
+          { keys: ['Total PCS', 'TotalPCS', 'Total Pcs', 'Total Pcs.', 'QTY', 'Qty', 'Pieces', 'Total Qty', 'CUTTING QTY', 'Cutting Qty'], target: 'totalPCSFromSheet' },
           { keys: ['SECTION', 'Section', 'sec'], target: 'section' },
           { keys: ['Sizes'], target: 'sizes' }
         ];
@@ -1480,17 +1505,19 @@ const StitchingCompleteLot = () => {
           }
         });
 
-        // Calculate total PCS from cutting sheet
+        // Calculate total PCS from cutting sheet or fallback to sheet quantity
+        const parsedSheetQty = parseInt(String(item.totalPCSFromSheet || '').replace(/,/g, ''), 10);
+        const validSheetQty = !isNaN(parsedSheetQty) && parsedSheetQty > 0 ? parsedSheetQty : 0;
         if (cuttingData.length > 0 && item.startRow > 0 && item.numRows > 0) {
           try {
             const totalPCS = calculateTotalPCS(cuttingData, item.startRow, item.numRows, item.sizes);
-            item['totalPCS'] = totalPCS;
+            item['totalPCS'] = totalPCS > 0 ? totalPCS : validSheetQty;
           } catch (error) {
             console.error(`Error calculating PCS for lot ${item.lotNumber}:`, error);
-            item['totalPCS'] = 0;
+            item['totalPCS'] = validSheetQty;
           }
         } else {
-          item['totalPCS'] = 0;
+          item['totalPCS'] = validSheetQty;
         }
 
         return item;
@@ -1567,11 +1594,11 @@ const StitchingCompleteLot = () => {
         const getSectionFromMwk = (mwk) => {
           if (!mwk) return '';
           const m = String(mwk).trim().toUpperCase();
-          if (m.startsWith('K') || m === 'KIDS') return 'KIDS';
-          if (m.startsWith('M') || m === 'MEN' || m === 'MAN') return 'GENTS';
-          if (m.startsWith('W') || m === 'WOMEN' || m === 'LADIES') return 'WOMEN';
-          if (m.startsWith('G') || m === 'GIRLS') return 'GIRLS';
-          if (m.startsWith('B') || m === 'BOYS') return 'BOYS';
+          if (m.includes('GENT') || m === 'M' || m === 'MEN' || m === 'MAN' || m === 'MENS') return 'GENTS';
+          if (m.includes('KID') || m === 'K') return 'KIDS';
+          if (m.includes('WOMEN') || m.includes('LADY') || m.includes('LADIES') || m === 'W') return 'WOMEN';
+          if (m.includes('GIRL') || m === 'G') return 'GIRLS';
+          if (m.includes('BOY') || m === 'B') return 'BOYS';
           return m;
         };
 
@@ -2093,7 +2120,7 @@ const StitchingCompleteLot = () => {
   const abbreviateMWKForPDF = useCallback((mwkValue) => {
     if (!mwkValue || typeof mwkValue !== 'string') return 'N/A';
     const value = mwkValue.trim().toLowerCase();
-    if (value.includes('gents') || value === 'm' || value === 'mens') return 'M';
+    if (value.includes('gent') || value.includes('man') || value.includes('men') || value === 'm') return 'M';
     if (value.includes('kids') || value === 'k') return 'K';
     if (value.includes('girls') || value === 'g' || value.includes('girlish')) return 'G';
     if (value.includes('women') || value.includes('womens') || value === 'w') return 'W';
@@ -2461,7 +2488,7 @@ const StitchingCompleteLot = () => {
         activeDepts.forEach(deptId => {
           const deptInfo = findDeptLotInfo(deptId, item.lotNumber);
           const deptIssue = deptInfo?.issueDate ? formatDateToDDMMYY(deptInfo.issueDate) : '—';
-          const deptComp = deptInfo?.completionDate && deptInfo.completionDate !== '-' && deptInfo.completionDate !== 'N/A' ? formatDateToDDMMYY(deptInfo.completionDate) : '—';
+          const deptComp = deptInfo?.completionDate && deptInfo.completionDate !== '-' && deptInfo.completionDate !== 'N/A' ? (formatDeptCompletionDate(deptInfo.completionDate) || '—') : '—';
           rowValues.push(deptIssue);
           rowValues.push(deptComp);
         });
@@ -5071,7 +5098,7 @@ const StitchingCompleteLot = () => {
                           const deptInfo = deptLotsMap[lotKey] || null;
                           const deptIssueDate = deptInfo?.issueDate ? formatDateToDDMMYY(deptInfo.issueDate) : '';
                           const isDeptCompleted = deptInfo?.status === 'Completed' || (deptInfo?.completionDate && deptInfo.completionDate !== '-');
-                          const deptCompDate = deptInfo?.completionDate ? formatDateToDDMMYY(deptInfo.completionDate) : '';
+                          const deptCompDate = deptInfo?.completionDate ? formatDeptCompletionDate(deptInfo.completionDate) : '';
 
                           // Check for issue: department sheet remarks, hold sheet, or Index WIP remarks
                           const rawIndexWip = getLatestWipRemarks(item.wipStatus, false);

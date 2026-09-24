@@ -1360,57 +1360,42 @@ export default function AiReportCopilot({
       content: m.text
     }));
 
-    // Try Python FastAPI microservice first, then Node.js backend
+    // Query AI Model (n8n Workflow Webhook / Gemini API / Built-in Engine via Express Backend)
     try {
-      // 1. Try Python FastAPI microservice (port 8000)
-      const pyRes = await fetch("http://127.0.0.1:8000/api/ai/query", {
+      const backendUrl = BACKEND_API_BASE_URL || "http://localhost:5000";
+      const savedKey = localStorage.getItem("FACTORY_AI_GEMINI_KEY") || "";
+      const savedN8nUrl = localStorage.getItem("FACTORY_AI_N8N_URL") || process.env.REACT_APP_N8N_WEBHOOK_URL || "";
+
+      const res = await fetch(`${backendUrl}/api/ai/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: qText, history: historyPayload, department: selectedDept })
-      });
-      if (pyRes.ok) {
-        const pyJson = await pyRes.json();
-        if (pyJson && pyJson.answer) {
-          responseText = pyJson.answer;
-        }
-      } else {
-        throw new Error("Python microservice responded with error");
-      }
-    } catch (pyErr) {
-      // 2. Fallback to Node.js backend (port 5000)
-      try {
-        const backendUrl = BACKEND_API_BASE_URL || "http://localhost:5000";
-        const savedKey = localStorage.getItem("FACTORY_AI_GEMINI_KEY") || "";
-        const res = await fetch(`${backendUrl}/api/ai/query`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt: qText,
-            apiKey: savedKey,
-            context: {
-              activeStage,
-              department: selectedDept,
-              totalLotsCount: activeLots.length,
-              summaryKPIs: {
-                matchedLotsCount: localAnalysis.totalLots,
-                matchedTotalQty: localAnalysis.totalQty,
-                avgDays: localAnalysis.avgDays
-              },
-              sampleLots: localAnalysis.matchedLots.slice(0, 40),
-              history: historyPayload
-            }
-          })
-        });
-
-        if (res.ok) {
-          const json = await res.json();
-          if (json && json.answer) {
-            responseText = json.answer;
+        body: JSON.stringify({
+          prompt: qText,
+          apiKey: savedKey,
+          n8nWebhookUrl: savedN8nUrl,
+          context: {
+            activeStage,
+            department: selectedDept,
+            totalLotsCount: activeLots.length,
+            summaryKPIs: {
+              matchedLotsCount: localAnalysis.totalLots,
+              matchedTotalQty: localAnalysis.totalQty,
+              avgDays: localAnalysis.avgDays
+            },
+            sampleLots: localAnalysis.matchedLots.slice(0, 40),
+            history: historyPayload
           }
+        })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.answer) {
+          responseText = json.answer;
         }
-      } catch (nodeErr) {
-        // Fallback already in responseText
       }
+    } catch (nodeErr) {
+      console.warn("AI Backend query error:", nodeErr);
     }
 
     const botMessage = {
