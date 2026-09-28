@@ -5,7 +5,7 @@ import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, fetchSheetDataFromBackend, BACKEND_URL } from './config';
-import { formatLatestRemark } from './embPrintRemarksService';
+import { formatLatestRemark, formatLatestRemarkWithDate, formatDateToDDMMYYYY } from './embPrintRemarksService';
 
 const getDirectImageUrl = (url) => {
   if (!url) return '';
@@ -249,6 +249,7 @@ const StitchingCompleteLot = () => {
   const [error, setError] = useState(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [workingUpdatesMap, setWorkingUpdatesMap] = useState(new Map());
+  const workingUpdatesRef = useRef(new Map());
   const [viewImageSrc, setViewImageSrc] = useState(null);
 
   // Department data states - supports multi-select
@@ -674,16 +675,16 @@ const StitchingCompleteLot = () => {
   // Get Pintu status for a specific lot (for PDF only)
   const getPintuStatusForPDF = useCallback((lotNumber) => {
     if (!lotNumber) return 'N/A';
-    const updates = workingUpdatesMap.get(lotNumber.trim());
+    const updates = (workingUpdatesRef.current?.size ? workingUpdatesRef.current : workingUpdatesMap).get(lotNumber.trim());
     return cleanRemarkUnderscores(updates?.pintuStatus);
-  }, [workingUpdatesMap, cleanRemarkUnderscores]);
+  }, [cleanRemarkUnderscores]);
 
   // Get EA status for a specific lot (for PDF only)
   const getEAStatusForPDF = useCallback((lotNumber) => {
     if (!lotNumber) return 'N/A';
-    const updates = workingUpdatesMap.get(lotNumber.trim());
+    const updates = (workingUpdatesRef.current?.size ? workingUpdatesRef.current : workingUpdatesMap).get(lotNumber.trim());
     return cleanRemarkUnderscores(updates?.eaStatus);
-  }, [workingUpdatesMap, cleanRemarkUnderscores]);
+  }, [cleanRemarkUnderscores]);
 
   const normalizeAndCapitalize = useCallback((text) => {
     if (!text || text.trim() === '') return '';
@@ -1068,18 +1069,28 @@ const StitchingCompleteLot = () => {
     return totalQty;
   };
 
-  const getLatestWipRemarks = useCallback((wipStatus, isCompleted = false) => {
+  const getLatestWipRemarks = useCallback((wipStatus, isCompleted = false, item = null) => {
     // If the lot is completed, always return "Done"
     if (isCompleted) {
+      const compDate = item ? getCompletionDate(item.completedStatus) : null;
+      const formattedCompDate = formatDateToDDMMYYYY(compDate);
+      if (formattedCompDate) {
+        return `Done (${formattedCompDate})`;
+      }
       return 'Done';
     }
 
-    if (!wipStatus || wipStatus.trim() === '') {
+    const map = workingUpdatesRef.current?.size ? workingUpdatesRef.current : workingUpdatesMap; const workingUpdate = (item?.lotNumber && map) ? map.get(String(item.lotNumber).trim()) : null;
+    const workingDate = workingUpdate?.lastUpdated || null;
+    const savedDate = item?.savedAt || null;
+    const fallbackDate = workingDate || savedDate || null;
+
+    if (!wipStatus || (typeof wipStatus === 'string' && wipStatus.trim() === '')) {
       return 'N/A';
     }
 
-    return formatLatestRemark(wipStatus, 'N/A');
-  }, []);
+    return formatLatestRemarkWithDate(wipStatus, 'N/A', fallbackDate);
+  }, [getCompletionDate]);
 
   // Calculate stitching days - For completed lots: Completion Date - Date of Issue
   // For pending lots: Today's Date - Date of Issue
@@ -1241,7 +1252,7 @@ const StitchingCompleteLot = () => {
       Object.keys(options).forEach(key => {
         if (key === 'wipStatus') {
           const isCompleted = isLotCompleted(item.completedStatus);
-          const latestRemarks = getLatestWipRemarks(item[key], isCompleted);
+          const latestRemarks = getLatestWipRemarks(item[key], isCompleted, item);
           if (latestRemarks && latestRemarks.trim() !== '' && latestRemarks !== 'N/A') {
             const normalizedValue = normalizeAndCapitalize(latestRemarks);
             optionSets[key].add(normalizedValue);
@@ -1378,13 +1389,14 @@ const StitchingCompleteLot = () => {
 
             updatesMap.set(lotNumber.trim(), {
               pintuStatus: formatLatestRemark(pintuStatus, 'N/A'),
-              eaStatus: formatLatestRemark(eaStatus, 'N/A')
+              eaStatus: formatLatestRemark(eaStatus, 'N/A'),
+              lastUpdated: row[5] || ''
             });
           }
         }
       });
 
-      setWorkingUpdatesMap(updatesMap);
+      workingUpdatesRef.current = updatesMap; setWorkingUpdatesMap(updatesMap);
       return updatesMap;
     } catch (err) {
       console.error('Error fetching working updates data:', err);
@@ -1438,6 +1450,7 @@ const StitchingCompleteLot = () => {
           { keys: ['M/W/K', 'MWK'], target: 'mwk' },
           { keys: ['WIP Status', 'WIPStatus'], target: 'wipStatus' },
           { keys: ['Completed Status', 'CompletedStatus'], target: 'completedStatus' },
+          { keys: ['Saved At', 'SavedAt', 'savedAt', 'Last Updated', 'LastUpdated'], target: 'savedAt' },
           { keys: ['StartRow', 'Start Row'], target: 'startRow' },
           { keys: ['NumRows', 'Num Rows'], target: 'numRows' },
           { keys: ['Manpower', 'MANPOWER', 'Man Power', 'manpower'], target: 'manpower' },
@@ -1695,7 +1708,7 @@ const StitchingCompleteLot = () => {
 
           // Also search in WIP Status remarks
           const isCompleted = isLotCompleted(item.completedStatus);
-          const wipRemarks = getLatestWipRemarks(item.wipStatus, isCompleted);
+          const wipRemarks = getLatestWipRemarks(item.wipStatus, isCompleted, item);
           const wipMatch = wipRemarks && wipRemarks !== 'N/A' ?
             normalizeText(wipRemarks).includes(searchTerm) : false;
 
@@ -1790,7 +1803,7 @@ const StitchingCompleteLot = () => {
 
             if (key === 'wipStatus') {
               const isCompleted = isLotCompleted(item.completedStatus);
-              const latestRemarks = getLatestWipRemarks(item[key], isCompleted);
+              const latestRemarks = getLatestWipRemarks(item[key], isCompleted, item);
               const remarkNorm = normalizeText(latestRemarks);
               return value.some(v => remarkNorm.includes(normalizeText(v)));
             }
@@ -1841,7 +1854,7 @@ const StitchingCompleteLot = () => {
           // Handle wipStatus filter (single string fallback)
           if (key === 'wipStatus') {
             const isCompleted = isLotCompleted(item.completedStatus);
-            const latestRemarks = getLatestWipRemarks(item[key], isCompleted);
+            const latestRemarks = getLatestWipRemarks(item[key], isCompleted, item);
             return normalizeText(latestRemarks).includes(filterValue);
           }
 
@@ -1895,7 +1908,7 @@ const StitchingCompleteLot = () => {
     };
 
     loadInitialData();
-  }, [fetchDataForSupervisor, fetchWorkingUpdatesData, extractFilterOptions, isLotCompleted, sortDataByCompletionDate]);
+  }, []); // Run only on initial mount
 
   const handleFilterChange = useCallback(async (e) => {
     const { name, value, type, checked } = e.target;
@@ -2241,24 +2254,52 @@ const StitchingCompleteLot = () => {
       return false;
     }
     try {
-      if (typeof wipStatus === 'string' && !wipStatus.startsWith('[')) {
-        return false;
+      if (typeof wipStatus === 'string' && !wipStatus.trim().startsWith('[') && !wipStatus.trim().startsWith('{') && !wipStatus.trim().startsWith('"[') && !wipStatus.trim().startsWith('"{')) {
+        const today = new Date();
+        const dd = String(today.getDate()).padStart(2, '0');
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const yyyy = today.getFullYear();
+        return wipStatus.includes(`${dd}-${mm}-${yyyy}`) || wipStatus.includes(`${dd}/${mm}/${yyyy}`) || wipStatus.includes(`${yyyy}-${mm}-${dd}`);
       }
-      const statusArray = JSON.parse(wipStatus);
+
+
+      let statusArray = null;
+      let parsed = wipStatus;
+      if (typeof parsed === 'string') {
+        try {
+          parsed = JSON.parse(parsed.trim());
+        } catch (e) {
+          try {
+            parsed = JSON.parse(parsed.trim().replace(/\\"/g, '"'));
+          } catch (e2) {}
+        }
+      }
+      if (typeof parsed === 'string' && (parsed.startsWith('[') || parsed.startsWith('{'))) {
+        try {
+          parsed = JSON.parse(parsed.trim());
+        } catch (e) {}
+      }
+      if (Array.isArray(parsed)) {
+        statusArray = parsed;
+      } else if (parsed && typeof parsed === 'object') {
+        statusArray = [parsed];
+      }
       if (!Array.isArray(statusArray) || statusArray.length === 0) {
         return false;
       }
       const sortedStatuses = [...statusArray].sort((a, b) => {
-        const dateA = new Date(a.timestamp).getTime();
-        const dateB = new Date(b.timestamp).getTime();
+        const dateA = new Date(a?.timestamp || a?.date || a?.updatedAt || 0).getTime();
+        const dateB = new Date(b?.timestamp || b?.date || b?.updatedAt || 0).getTime();
         return dateB - dateA;
       });
       const latestStatus = sortedStatuses[0];
-      if (!latestStatus || !latestStatus.timestamp) {
+      const statusTimestamp = latestStatus?.timestamp || latestStatus?.date || latestStatus?.updatedAt;
+      if (!statusTimestamp) {
         return false;
       }
       const today = new Date();
-      const statusDate = new Date(latestStatus.timestamp);
+      const statusDate = new Date(statusTimestamp);
+      if (isNaN(statusDate.getTime())) return false;
       return statusDate.toDateString() === today.toDateString();
     } catch (error) {
       return false;
@@ -2458,7 +2499,7 @@ const StitchingCompleteLot = () => {
         const days = calculateStitchingDays(item.dateOfIssue);
         const embPrintDate = getEmbPrintDate(item.challanHistory);
         const completionDate = getCompletionDateFormatted(item.completedStatus);
-        const wipValue = isCompleted ? 'Done' : getLatestWipRemarks(item.wipStatus, false);
+        const wipValue = getLatestWipRemarks(item.wipStatus, isCompleted, item);
         const pintuValue = getPintuStatusForPDF ? getPintuStatusForPDF(item.lotNumber) : '';
         const eaValue = getEAStatusForPDF ? getEAStatusForPDF(item.lotNumber) : '';
 
@@ -2669,7 +2710,7 @@ const StitchingCompleteLot = () => {
             }
           }
           if (!deptStageFound) {
-            const wipRemarks = getLatestWipRemarks(item.wipStatus, false);
+            const wipRemarks = getLatestWipRemarks(item.wipStatus, false, item);
             stage = extractStageFromStatus(wipRemarks);
           }
         }
@@ -3195,7 +3236,7 @@ const StitchingCompleteLot = () => {
         const isCompleted = isLotCompleted(item.completedStatus);
         const stitchingDays = calculateStitchingDays(item.dateOfIssue, item.completedStatus, isCompleted);
         const stitchingDaysColor = getStitchingDaysColor(stitchingDays);
-        const wipRemarks = getLatestWipRemarks(item.wipStatus);
+        const wipRemarks = getLatestWipRemarks(item.wipStatus, isCompleted, item);
         const embPrintDate = getEmbPrintDate(item.challanHistory);
         const abbreviatedParty = abbreviatePartyName(item.partyName);
         const abbreviatedSeason = abbreviateSeason(item.season);
@@ -3206,9 +3247,7 @@ const StitchingCompleteLot = () => {
         const eaValue = getEAStatusForPDF ? getEAStatusForPDF(item.lotNumber) : '';
 
         const isUpdatedToday = isStatusUpdatedToday(item.wipStatus, item.completedStatus);
-        const wipDisplayValue = isCompleted
-          ? 'Done'
-          : (isUpdatedToday ? wipRemarks : 'Not updated');
+        const wipDisplayValue = wipRemarks && wipRemarks !== 'N/A' && wipRemarks !== '-' ? wipRemarks : '—';
 
         const lotStatus = isCompleted ? 'Completed' : 'Pending';
         const issueDate = formatDateOfIssue(item.dateOfIssue);
@@ -3384,8 +3423,16 @@ const StitchingCompleteLot = () => {
           }
           if (col.id === 'wipStatus') {
             return {
-              content: cleanCellText(wipDisplayValue),
-              styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: !isCompleted && !isUpdatedToday ? [255, 235, 235] : rowBgColor, fontStyle: isCompleted ? 'bold' : (wipRemarks !== 'N/A' ? 'bold' : 'normal'), textColor: [0, 0, 0], cellPadding: cellPad }
+              content: wipDisplayValue,
+              styles: {
+                cellWidth,
+                fontSize: fontSz,
+                halign: 'center',
+                fillColor: !isCompleted && !isUpdatedToday ? [255, 235, 235] : rowBgColor,
+                fontStyle: isCompleted ? 'bold' : (wipDisplayValue !== '—' ? 'bold' : 'normal'),
+                textColor: !isCompleted && !isUpdatedToday ? [185, 28, 28] : [0, 0, 0],
+                cellPadding: cellPad
+              }
             };
           }
           if (col.id === 'pintu') {
@@ -3458,7 +3505,7 @@ const StitchingCompleteLot = () => {
               }
             }
             if (!deptStageFound) {
-              const wipRemarks = getLatestWipRemarks(item.wipStatus);
+              const wipRemarks = getLatestWipRemarks(item.wipStatus, false, item);
               stage = extractStageFromStatus(wipRemarks);
             }
           }
@@ -5101,7 +5148,7 @@ const StitchingCompleteLot = () => {
                           const deptCompDate = deptInfo?.completionDate ? formatDeptCompletionDate(deptInfo.completionDate) : '';
 
                           // Check for issue: department sheet remarks, hold sheet, or Index WIP remarks
-                          const rawIndexWip = getLatestWipRemarks(item.wipStatus, false);
+                          const rawIndexWip = getLatestWipRemarks(item.wipStatus, false, item);
                           const indexWipLower = (rawIndexWip || '').toLowerCase();
                           const targetDeptNorm = deptId.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -5202,10 +5249,14 @@ const StitchingCompleteLot = () => {
                         {/* WIP Status - ALWAYS INCLUDED, with "Done" for completed lots */}
                         <td className="text-center">
                           <span className="wip-status" style={{
-                            color: isCompleted ? '#10b981' : '#475569',
+                            color: isCompleted ? '#10b981' : (!isStatusUpdatedToday(item.wipStatus, item.completedStatus) ? '#b91c1c' : '#334155'),
+                            background: !isCompleted && !isStatusUpdatedToday(item.wipStatus, item.completedStatus) ? '#fee2e2' : 'transparent',
+                            padding: !isCompleted && !isStatusUpdatedToday(item.wipStatus, item.completedStatus) ? '3px 8px' : '0',
+                            borderRadius: '4px',
+                            display: 'inline-block',
                             fontWeight: isCompleted ? 'bold' : '500'
                           }}>
-                            {isCompleted ? 'Done' : getLatestWipRemarks(item.wipStatus, false)}
+                            {getLatestWipRemarks(item.wipStatus, isCompleted, item)}
                           </span>
                         </td>
 

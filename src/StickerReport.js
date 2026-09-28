@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { formatLatestRemarkWithDate, formatDateToDDMMYYYY } from './embPrintRemarksService';
 
 const StickerReport = () => {
   // Data states
@@ -511,46 +512,24 @@ const formatDateToDDMMYY = useCallback((dateString) => {
     return totalQty;
   };
 
-const getLatestWipRemarks = useCallback((wipStatus, isCompleted = false) => {
-  // If the lot is completed, always return "Done"
+const getLatestWipRemarks = useCallback((wipStatus, isCompleted = false, item = null) => {
+  const compDate = item ? (item.completionDate || item.completedDate || null) : null;
+  const issueDate = item?.dateOfIssue || null;
+  const fallbackDate = compDate || issueDate || null;
+
   if (isCompleted) {
+    const formattedCompDate = formatDateToDDMMYYYY(compDate);
+    if (formattedCompDate) {
+      return `Done (${formattedCompDate})`;
+    }
     return 'Done';
   }
-  
-  if (!wipStatus || wipStatus.trim() === '') {
+
+  if (!wipStatus || (typeof wipStatus === 'string' && wipStatus.trim() === '')) {
     return 'N/A';
   }
-  
-  try {
-    if (typeof wipStatus === 'string' && !wipStatus.startsWith('[')) {
-      return wipStatus;
-    }
-    
-    const statusArray = JSON.parse(wipStatus);
-    
-    if (!Array.isArray(statusArray) || statusArray.length === 0) {
-      return 'N/A';
-    }
-    
-    const sortedStatuses = [...statusArray].sort((a, b) => {
-      const dateA = new Date(a.timestamp).getTime();
-      const dateB = new Date(b.timestamp).getTime();
-      return dateB - dateA;
-    });
-    
-    const latestStatus = sortedStatuses[0];
-    
-    if (latestStatus.remarks && latestStatus.remarks.trim() !== '') {
-      return latestStatus.remarks;
-    } else if (latestStatus.status && latestStatus.status.trim() !== '') {
-      return latestStatus.status;
-    } else {
-      return 'N/A';
-    }
-  } catch (error) {
-    console.error('Error parsing WIP Status for remarks:', error);
-    return wipStatus;
-  }
+
+  return formatLatestRemarkWithDate(wipStatus, 'N/A', fallbackDate);
 }, []);
 
   // Calculate stitching days - memoized
@@ -3325,7 +3304,7 @@ PDF_HEADERS.forEach((_, index) => {
             color: isCompleted ? '#10b981' : '#475569',
             fontWeight: isCompleted ? 'bold' : '500'
           }}>
-            {isCompleted ? 'Done' : getLatestWipRemarks(item.wipStatus, false)}
+            {getLatestWipRemarks(item.wipStatus, isCompleted, item)}
           </span>
         </td>
         <td className="text-center">

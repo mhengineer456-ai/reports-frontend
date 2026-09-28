@@ -256,6 +256,42 @@ export default function Dashboard() {
       department: "Executive & Analytics",
       features: ["Cutting vs Packed Pcs", "Factory Yield %", "Loss & Rejection Audit", "Style-Wise P&L"],
       lastUpdated: "Real-time"
+    },
+    {
+      id: "crit-11",
+      step: 11,
+      title: "Not Updation Report",
+      emoji: "⚠️",
+      path: "/daily-stitching-report-not-updation",
+      section: "critical",
+      gradient: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
+      glowColor: "rgba(239, 68, 68, 0.45)",
+      badgeColor: "#dc2626",
+      accentBg: "#fef2f2",
+      accentBorder: "#fecaca",
+      description: "Identify line reports requiring updates, pending supervisor updates, or missing daily production entries.",
+      whyEssential: "Ensures every supervisor submits daily line entries and flags lines with zero or missing production updates.",
+      department: "Stitching",
+      features: ["Missing Entries", "Supervisor WIP", "Due Reports", "Line Pending"],
+      lastUpdated: "Real-time"
+    },
+    {
+      id: "crit-12",
+      step: 12,
+      title: "EMB / PRINT REMARKS Hub",
+      emoji: "📝💬",
+      path: "/emb-print-remarks",
+      section: "critical",
+      gradient: "linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%)",
+      glowColor: "rgba(139, 92, 246, 0.45)",
+      badgeColor: "#7c3aed",
+      accentBg: "#f5f3ff",
+      accentBorder: "#ddd6fe",
+      description: "Live remarks tracker for pending Embroidery & Printing batches, thread shortages, and screen updates.",
+      whyEssential: "Captures on-the-ground operational delay notes directly into centralized production sheets in real time.",
+      department: "Embroidery & Printing",
+      features: ["Live Remarks", "Pending Lots", "Issue Updates", "Real-Time Sync"],
+      lastUpdated: "Real-time"
     }
   ], []);
 
@@ -396,6 +432,57 @@ export default function Dashboard() {
       department: "Vendor Partner",
       features: ["Live Sheet Sync", "Pending Pieces", "SLA Aging Days", "Done Verification"],
       lastUpdated: "Live Google Sheet"
+    },
+    {
+      id: "dept-9",
+      title: "Not Updation Report",
+      emoji: "⚠️",
+      path: "/daily-stitching-report-not-updation",
+      section: "departments",
+      gradient: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)",
+      glowColor: "rgba(220, 38, 38, 0.45)",
+      badgeColor: "#dc2626",
+      accentBg: "#fef2f2",
+      accentBorder: "#fecaca",
+      description: "Identify line reports requiring updates, pending supervisor updates, or missing daily production entries.",
+      whyEssential: "Ensures every supervisor submits daily line entries and flags lines with zero or missing production updates.",
+      department: "Stitching Operations",
+      features: ["Missing Entries", "Supervisor WIP", "Due Reports", "Line Pending"],
+      lastUpdated: "Real-time"
+    },
+    {
+      id: "dept-10",
+      title: "Daily Stitching Updation Report",
+      emoji: "📋",
+      path: "/daily-stitching-report",
+      section: "departments",
+      gradient: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+      glowColor: "rgba(37, 99, 235, 0.45)",
+      badgeColor: "#2563eb",
+      accentBg: "#eff6ff",
+      accentBorder: "#bfdbfe",
+      description: "Daily stitching status tracking per supervisor & garment type with line production totals.",
+      whyEssential: "Provides a comprehensive daily breakdown of supervisor stitching progress and garment type allocations.",
+      department: "Stitching Operations",
+      features: ["Supervisor Summary", "Garment Type Wise", "Line Status", "Daily Tally"],
+      lastUpdated: "Daily"
+    },
+    {
+      id: "dept-11",
+      title: "EMB / PRINT REMARKS Hub",
+      emoji: "📝💬",
+      path: "/emb-print-remarks",
+      section: "departments",
+      gradient: "linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%)",
+      glowColor: "rgba(139, 92, 246, 0.45)",
+      badgeColor: "#7c3aed",
+      accentBg: "#f5f3ff",
+      accentBorder: "#ddd6fe",
+      description: "Live remarks tracker for pending Embroidery & Printing batches, thread shortages, and screen updates.",
+      whyEssential: "Captures on-the-ground operational delay notes directly into centralized production sheets in real time.",
+      department: "Embroidery & Printing",
+      features: ["Live Remarks", "Pending Lots", "Issue Updates", "Real-Time Sync"],
+      lastUpdated: "Real-time"
     }
   ], []);
 
@@ -885,6 +972,40 @@ export default function Dashboard() {
       department: "Materials & Inventory",
       features: ["Dori Inventory", "Aglet Specs", "Color Matching", "Consumption Log"],
       lastUpdated: "Live"
+    },
+    {
+      id: "other-25",
+      title: "Not Updation Report",
+      emoji: "⚠️",
+      path: "/daily-stitching-report-not-updation",
+      section: "other",
+      gradient: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)",
+      glowColor: "rgba(220, 38, 38, 0.45)",
+      badgeColor: "#dc2626",
+      accentBg: "#fef2f2",
+      accentBorder: "#fecaca",
+      description: "Identify line reports requiring updates, pending supervisor updates, or missing daily production entries.",
+      whyEssential: "Ensures every supervisor submits daily line entries and flags lines with zero or missing production updates.",
+      department: "Stitching Operations",
+      features: ["Missing Entries", "Supervisor WIP", "Due Reports", "Line Pending"],
+      lastUpdated: "Real-time"
+    },
+    {
+      id: "other-26",
+      title: "Daily Stitching Updation Report",
+      emoji: "📋",
+      path: "/daily-stitching-report",
+      section: "other",
+      gradient: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+      glowColor: "rgba(37, 99, 235, 0.45)",
+      badgeColor: "#2563eb",
+      accentBg: "#eff6ff",
+      accentBorder: "#bfdbfe",
+      description: "Daily stitching status tracking per supervisor & garment type with line production totals.",
+      whyEssential: "Provides a comprehensive daily breakdown of supervisor stitching progress and garment type allocations.",
+      department: "Stitching Operations",
+      features: ["Supervisor Summary", "Garment Type Wise", "Line Status", "Daily Tally"],
+      lastUpdated: "Daily"
     }
   ], []);
 

@@ -7,7 +7,7 @@ import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 import { GOOGLE_API_KEY, SPREADSHEET_IDS, SHEET_NAMES, fetchSheetDataFromBackend } from "./config";
 import { getCurrentUser, logoutUser } from "./auth";
-import { fetchRemarksForTab } from "./embPrintRemarksService";
+import { fetchRemarksForTab, formatLatestRemarkWithDate, formatDateToDDMMYYYY } from "./embPrintRemarksService"; import { store } from "./store";
 
 /**
  * Factory Suite Pro - Critical Red Zone & Variance Combined Report
@@ -760,10 +760,7 @@ const getEmbPrintDate = (challanHistory) => {
   }
 };
 
-const getLatestWipRemarks = (wipStatus, isCompleted = false) => {
-  if (isCompleted) return "Done";
-  return formatLatestRemark(wipStatus, "WIP");
-};
+const getLatestWipRemarks = (wipStatus, isCompleted = false, fallbackDate = null) => { if (isCompleted) { const compD = fallbackDate ? formatDateToDDMMYYYY(fallbackDate) : ''; return compD ? ('Done (' + compD + ')') : 'Done'; } return formatLatestRemarkWithDate(wipStatus, 'WIP', fallbackDate); }; const isStatusUpdatedToday = (wipStatus, status) => { if (status === 'Completed' || (typeof status === 'string' && status.toLowerCase().includes('complete'))) return true; if (!wipStatus || typeof wipStatus !== 'string' || wipStatus.trim() === '' || wipStatus === '—' || wipStatus === 'N/A' || wipStatus === 'WIP') return false; try { const today = new Date(); const dd = String(today.getDate()).padStart(2, '0'); const mm = String(today.getMonth() + 1).padStart(2, '0'); const yyyy = today.getFullYear(); const todayDash = dd + '-' + mm + '-' + yyyy; const todaySlash = dd + '/' + mm + '/' + yyyy; const todayIso = yyyy + '-' + mm + '-' + dd; if (!wipStatus.trim().startsWith('[') && !wipStatus.trim().startsWith('{') && !wipStatus.trim().startsWith('"[') && !wipStatus.trim().startsWith('"{')) { return wipStatus.includes(todayDash) || wipStatus.includes(todaySlash) || wipStatus.includes(todayIso); } let parsed = wipStatus; if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed.trim()); } catch (e) { try { parsed = JSON.parse(parsed.trim().replace(/\\"/g, '"')); } catch (e2) {} } } if (typeof parsed === 'string' && (parsed.startsWith('[') || parsed.startsWith('{'))) { try { parsed = JSON.parse(parsed.trim()); } catch (e) {} } const statusArray = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : null); if (!statusArray || statusArray.length === 0) { return wipStatus.includes(todayDash) || wipStatus.includes(todaySlash) || wipStatus.includes(todayIso); } const sorted = [...statusArray].sort((a, b) => new Date(b?.timestamp || b?.date || b?.updatedAt || 0).getTime() - new Date(a?.timestamp || a?.date || a?.updatedAt || 0).getTime()); const ts = sorted[0]?.timestamp || sorted[0]?.date || sorted[0]?.updatedAt; if (!ts) return false; const d = new Date(ts); if (isNaN(d.getTime())) return false; return d.toDateString() === today.toDateString(); } catch { return false; } }; const sliceCuttingMatrix = (bigValues, startRow, numRows) => { if (!Array.isArray(bigValues) || bigValues.length === 0) return []; if (!(startRow > 0 && numRows > 0)) return []; const r0 = Math.max(0, startRow - 1); const r1 = Math.min(bigValues.length - 1, r0 + numRows - 1); return bigValues.slice(r0, r1 + 1); }; const findCuttingHeaderRowIndex = (windowValues, expectedSizesNorm) => { const hasSizeToken = (rowSet) => expectedSizesNorm.some((sz) => rowSet.has(sz)); for (let i = 0; i < windowValues.length; i++) { const row = windowValues[i] || []; const set = new Set(row.map((c) => norm(c))); const hasShadeHeader = set.has("color") || set.has("shade") || set.has("shades"); if (hasShadeHeader && hasSizeToken(set)) return i; } for (let i = 0; i < windowValues.length; i++) { const row = windowValues[i] || []; const set = new Set(row.map((c) => norm(c))); let matches = 0; expectedSizesNorm.forEach((sz) => { if (set.has(sz)) matches++; }); if (matches >= 2) return i; } return 0; }; const computeCuttingTotalsAndPending = (windowValues, sizes = [], shades = []) => { if (!windowValues || windowValues.length === 0) { return { totalQty: 0, pendingShadeKeys: new Set((shades || []).map(norm)) }; } const normalizedSizes = Array.from(new Set((sizes || []).map(norm).filter(Boolean))); const headerRowIdx = findCuttingHeaderRowIndex(windowValues, normalizedSizes); const header = windowValues[headerRowIdx] || []; const hIdx = {}; header.forEach((h, i) => { const k = norm(h); if (k && !(k in hIdx)) hIdx[k] = i; }); const shadeColIndex = hIdx["color"] ?? hIdx["shade"] ?? hIdx["shades"] ?? 0; const nonSizeCols = new Set(["color", "shade", "shades", "cuttingtable", "cutting", "table", "total", "totalpcs", "totals", "grandtotal", "sum", "lot", "style", "fabric", "garment", "partyname", "brand", "section", "season"]); let sizeColIndices = []; header.forEach((h, i) => { const nh = norm(h); if (nh && !nonSizeCols.has(nh)) sizeColIndices.push(i); }); if (sizeColIndices.length === 0) { normalizedSizes.forEach((ns) => { if (ns in hIdx) sizeColIndices.push(hIdx[ns]); }); if (sizeColIndices.length === 0) { const ct = hIdx["cuttingtable"]; if (ct != null && ct >= 0) { const guessStart = ct + 1; const guessed = []; for (let k = 0; k < (normalizedSizes.length || 5); k++) guessed.push(guessStart + k); sizeColIndices = Array.from(new Set(guessed.filter((g) => g < header.length))); } } } if (sizeColIndices.length === 0) return { totalQty: 0, pendingShadeKeys: new Set((shades || []).map(norm)) }; const shadeStats = new Map(); let totalQty = 0; for (let r = headerRowIdx + 1; r < windowValues.length; r++) { const row = windowValues[r] || []; const rawShade = String(row[shadeColIndex] || "").trim(); const shadeKey = norm(rawShade); if (!shadeKey || shadeKey === "total" || shadeKey === "totals" || shadeKey === "grandtotal") continue; let hasPositiveData = false; let hasAnyData = false; let rowTotal = 0; sizeColIndices.forEach((c) => { const raw = row[c]; if (raw != null && raw !== "") { hasAnyData = true; const n = parseFloat(String(raw).replace(/,/g, "")); if (!isNaN(n)) { rowTotal += n; if (n > 0) hasPositiveData = true; } } }); if (hasAnyData) { if (hasPositiveData) { shadeStats.set(shadeKey, "found-with-data"); totalQty += rowTotal; } else { if (!shadeStats.has(shadeKey) || shadeStats.get(shadeKey) === "not-found") shadeStats.set(shadeKey, "found-all-zero"); } } else { if (!shadeStats.has(shadeKey)) shadeStats.set(shadeKey, "found-no-data"); } } let expectedShadeKeys = (shades || []).map(norm).filter(Boolean); if (expectedShadeKeys.length === 0 && shadeStats.size > 0) expectedShadeKeys = Array.from(shadeStats.keys()); const pendingShadeKeys = new Set(); expectedShadeKeys.forEach((key) => { const status = shadeStats.get(key) || "not-found"; if (status !== "found-with-data") pendingShadeKeys.add(key); }); return { totalQty, pendingShadeKeys }; };
 
 const calculateStitchingDays = (dateOfIssue, completedStatus, isCompleted = false) => {
   if (!dateOfIssue || typeof dateOfIssue !== "string" || dateOfIssue.trim() === "" || dateOfIssue === "-" || dateOfIssue === "—" || dateOfIssue === "N/A") return 0;
@@ -1063,7 +1060,7 @@ export default function CriticalVarianceCombineReport() {
   const [filterSeasons, setFilterSeasons] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [minVariancePcs, setMinVariancePcs] = useState("");
-  const [minAgingDays, setMinAgingDays] = useState("");
+  const [minAgingDays, setMinAgingDays] = useState(""); const [cuttingSubFilter, setCuttingSubFilter] = useState("all");
 
   // Pagination & Sorting
   const [sortConfig, setSortConfig] = useState({ key: "agingDays", direction: "desc" });
@@ -1105,7 +1102,7 @@ export default function CriticalVarianceCombineReport() {
         printRemarksMap,
         pendingStitchingRemarksMap,
         packingRemarksMap,
-        ...processSheetResults
+        cuttingRes, fabricRes, ...processSheetResults
       ] = await Promise.all([
         fetchSheetDataFromBackend(SPREADSHEET_IDS.JOBORDER, "JobOrder!A1:AZ20000"),
         fetchSheetDataFromBackend(SPREADSHEET_IDS.MAIN, "Index!A:AG"),
@@ -1116,7 +1113,7 @@ export default function CriticalVarianceCombineReport() {
         fetchRemarksForTab("EMB").catch(() => ({})),
         fetchRemarksForTab("PRINT").catch(() => ({})),
         fetchRemarksForTab("PENDING_STITCHING").catch(() => ({})),
-        fetchRemarksForTab("PACKING").catch(() => ({})),
+        fetchRemarksForTab("PACKING").catch(() => ({})), fetchSheetDataFromBackend(SPREADSHEET_IDS.MAIN, "Cutting!A1:ZZ400000").catch(() => ({ values: [] })), store.getDailyFabricIssuanceReport("2025-01-01", "").catch(() => store.getDailyFabricIssuanceReport("", "").catch(() => null)),
         ...FINISHING_PROCESS_SHEETS.map((sheetName) =>
           fetchSheetDataFromBackend(SPREADSHEET_IDS.DAILY_STITCHING, `'${sheetName}'!A:Z`).catch(() => ({ values: [] }))
         )
@@ -1174,10 +1171,7 @@ export default function CriticalVarianceCombineReport() {
             }
           } catch { }
 
-          workingUpdatesMap.set(norm(lotNumber), {
-            pintuStatus: formatLatestRemark(pintuStatus, "—"),
-            eaStatus: formatLatestRemark(eaStatus, "—")
-          });
+          let lastUpd = clean(row[5] || ""); if (!lastUpd && Array.isArray(history) && history.length > 0) { const latestH = history[history.length - 1]; lastUpd = clean(latestH?.timestamp || latestH?.date || latestH?.updatedAt || ""); } workingUpdatesMap.set(norm(lotNumber), { pintuStatus: formatLatestRemark(pintuStatus, "—"), eaStatus: formatLatestRemark(eaStatus, "—"), lastUpdated: lastUpd });
         });
       }
 
@@ -1308,7 +1302,7 @@ export default function CriticalVarianceCombineReport() {
           { keys: ["SECTION", "Section", "section", "sec"], target: "section" },
           { keys: ["SEASON", "Season", "season", "seasontype"], target: "season" },
           { keys: ["PARTY NAME", "Party Name", "PartyName", "party name", "party", "vendor"], target: "partyName" },
-          { keys: ["Priority", "priority", "prioirty", "special"], target: "priority" }
+          { keys: ["Priority", "priority", "prioirty", "special"], target: "priority" }, { keys: ["StartRow", "Start Row", "startrow", "start row"], target: "startRow" }, { keys: ["NumRows", "Num Rows", "numrows", "num rows"], target: "numRows" }, { keys: ["Sizes", "sizes"], target: "sizes" }, { keys: ["Shades", "shades", "Colors", "colors"], target: "shades" }
         ];
 
         const colMap = {};
@@ -1400,7 +1394,7 @@ export default function CriticalVarianceCombineReport() {
             season: clean(colMap.season !== undefined ? row[colMap.season] : ""),
             partyName: clean(colMap.partyName !== undefined ? row[colMap.partyName] : ""),
             priority: clean(colMap.priority !== undefined ? row[colMap.priority] : ""),
-            isCuttingDone,
+            isCuttingDone, startRow: parseInt(colMap.startRow !== undefined ? row[colMap.startRow] : "0", 10) || 0, numRows: parseInt(colMap.numRows !== undefined ? row[colMap.numRows] : "0", 10) || 0, sizes: String(colMap.sizes !== undefined ? (row[colMap.sizes] || "") : "").split(",").map(s => s.trim()).filter(Boolean), shades: String(colMap.shades !== undefined ? (row[colMap.shades] || "") : "").split(",").map(s => s.trim()).filter(Boolean),
             isStitchingIssued,
             isStitchingDone
           };
@@ -1425,22 +1419,22 @@ export default function CriticalVarianceCombineReport() {
       setLoadingMessage("Evaluating Red Zone Bottlenecks across all 6 Departments...");
 
       // 5. MASTER BOTTLENECK EVALUATION ENGINE
-      const bottlenecks = [];
+      const bottlenecks = []; const bigCuttingValues = cuttingRes?.values || []; let fabricIssuances = []; if (Array.isArray(fabricRes)) { fabricIssuances = fabricRes; } else if (fabricRes && Array.isArray(fabricRes.data)) { fabricIssuances = fabricRes.data; } else if (fabricRes && fabricRes.success && Array.isArray(fabricRes.data)) { fabricIssuances = fabricRes.data; } const fabricIssuedMap = new Map(); fabricIssuances.forEach((item) => { const rawLot = String(item.lotNumber || item.lotNo || item.lot || "").trim(); if (!rawLot) return; const keyNorm = norm(rawLot); const keyLower = rawLot.toLowerCase(); const rawDate = item.date || item.issueDate || item.createdAt || item.timestamp || ""; const formattedDate = rawDate ? (String(rawDate).slice(0, 10)) : ""; const dataObj = { lotNumber: rawLot, issueDate: formattedDate, rawDate: rawDate, fabric: item.fabric || item.fabricDescription || item.fabricName || '—', tableNumber: item.tableNumber || item.table || item.tableName || item.tableNo || item.section || '—', rolls: item.rolls || 1, weight: item.weight || 0 }; if (!fabricIssuedMap.has(keyNorm)) fabricIssuedMap.set(keyNorm, dataObj); if (!fabricIssuedMap.has(keyLower)) fabricIssuedMap.set(keyLower, dataObj); });
 
       // =======================================================================
       // ✂️ STAGE 1: Cutting Report (Pending if Cutting NOT Done, Red Zone if > 2 Days)
       // Matches exact logic and schema of Cuttingreport.js
       // =======================================================================
-      jobMasterMap.forEach((job) => {
+      const processedCuttingLots = new Set(); jobMasterMap.forEach((job) => { processedCuttingLots.add(norm(job.lot));
         if (String(job.status || "").toLowerCase().includes("cancel")) return;
         const idx = idxMap.get(norm(job.lot));
-        const isCuttingDone = idx ? idx.isCuttingDone : false;
+        const fabricInfo = fabricIssuedMap.get(norm(job.lot)) || fabricIssuedMap.get(String(job.lot).toLowerCase()); const hasFabricIssued = Boolean(fabricInfo); let isColourPending = false; let pendingShadesList = []; if (idx && idx.startRow > 0 && idx.numRows > 0 && bigCuttingValues.length > 0) { const window = sliceCuttingMatrix(bigCuttingValues, idx.startRow, idx.numRows); const { totalQty: cutPcs, pendingShadeKeys } = computeCuttingTotalsAndPending(window, idx.sizes, idx.shades); if (pendingShadeKeys && pendingShadeKeys.size > 0) { isColourPending = true; const shadeKeyToOriginal = new Map((idx.shades || []).map((sh) => [norm(sh), sh])); pendingShadesList = Array.from(pendingShadeKeys).map((k) => shadeKeyToOriginal.get(k) || k); } } const pendingShadeText = String(job.pendingShade || idx?.pendingShade || "").trim(); if (pendingShadeText && pendingShadeText !== "—" && pendingShadeText !== "-" && !pendingShadeText.toLowerCase().includes("no colour")) { isColourPending = true; if (pendingShadesList.length === 0) pendingShadesList.push(pendingShadeText); } const isCuttingDone = idx ? (idx.isCuttingDone && !isColourPending) : false;
 
-        if (!isCuttingDone && job.parsedJobDate) {
-          const agingDays = calcDaysDiff(job.parsedJobDate);
+        const parsedCutJobDate = isColourPending && idx?.parsedCutDate ? idx.parsedCutDate : ((hasFabricIssued && fabricInfo?.rawDate ? parseAnyDate(fabricInfo.rawDate) : null) || job.parsedJobDate); if ((!isCuttingDone || isColourPending || (hasFabricIssued && !idx?.isCuttingDone)) && parsedCutJobDate) {
+          const agingDays = calcDaysDiff(parsedCutJobDate);
           if (agingDays > 2) {
             const severity = agingDays >= 5 ? "CRITICAL" : "HIGH";
-            const rowFY = getFinancialYearFromDate(job.jobDate);
+            const rowFY = getFinancialYearFromDate(job.jobDate || fabricInfo?.issueDate); let cuttingCategory = isColourPending ? "Colour Pending" : (hasFabricIssued ? "Fabric Issued" : "Cutting Pending"); let reasonText = isColourPending ? ("Colour Pending (" + (pendingShadesList.join(", ") || "Pending Shades") + " • " + agingDays + "d)") : (hasFabricIssued ? ("Fabric Issued but Not Cut (" + (fabricInfo.issueDate || "Issued") + " • " + agingDays + "d)") : ("Cutting Pending (PO Issued " + agingDays + "d ago > 2d Standard)")); let pendingShadeDisplay = isColourPending ? ("Colour Pending: " + (pendingShadesList.join(", ") || "Pending")) : (hasFabricIssued ? ("Fabric Issued (" + (fabricInfo.issueDate || "Issued") + ")") : (job.pendingShade || idx?.pendingShade || "—")); let cuttingDateDisplay = isColourPending ? (idx?.savedAt || job.cuttingDate || "Cutting In-Progress") : (hasFabricIssued ? ("Fabric Issued: " + (fabricInfo.issueDate || "—")) : (idx?.savedAt || job.cuttingDate || "—"));
             const latestUserRemark = extractLatestRemark(cuttingRemarksMap, job.lot, job.userRemarks || "");
 
             bottlenecks.push({
@@ -1450,7 +1444,7 @@ export default function CriticalVarianceCombineReport() {
               stageId: "cutting",
               stageName: "✂️ Cutting",
               stageRoute: "/cutting-report",
-              reason: `Cutting Pending (PO Issued ${agingDays}d ago > 2d Standard)`,
+              cuttingCategory, reason: reasonText,
               severity,
               agingDays,
               garmentType: job.garmentType || idx?.garmentType || "—",
@@ -1468,15 +1462,15 @@ export default function CriticalVarianceCombineReport() {
               variancePcs: job.quantity,
               variancePct: 100,
               stageDate: job.jobDate,
-              pendingShade: job.pendingShade || idx?.pendingShade || "—",
-              cuttingDate: idx?.savedAt || job.cuttingDate || "—",
+              pendingShade: pendingShadeDisplay,
+              cuttingDate: cuttingDateDisplay,
               cuttingScanned: idx?.cuttingScanned || job.cuttingScanned || "—",
               userRemarks: latestUserRemark || "—",
-              details: `PO Qty: ${job.quantity.toLocaleString()} Pcs • Job Date: ${formatDisplayDate(job.jobDate)} • Days: ${agingDays}d`
+              details: isColourPending ? ('Colour Pending (' + (pendingShadesList.join(', ') || 'Shades') + ') • Started: ' + formatDisplayDate(idx?.savedAt || job.jobDate) + ' • Days: ' + agingDays + 'd') : (hasFabricIssued ? ('Fabric Issued on ' + (fabricInfo.issueDate || '—') + ' • Table: ' + (fabricInfo.tableNumber || '—') + ' • Days: ' + agingDays + 'd') : ('PO Qty: ' + (job.quantity || 0).toLocaleString() + ' Pcs • Job Date: ' + formatDisplayDate(job.jobDate) + ' • Days: ' + agingDays + 'd'))
             });
           }
         }
-      });
+      }); indexLotList.forEach((idx) => { const keyNorm = norm(idx.lot); if (processedCuttingLots.has(keyNorm)) return; if (idx.startRow > 0 && idx.numRows > 0 && bigCuttingValues.length > 0) { const window = sliceCuttingMatrix(bigCuttingValues, idx.startRow, idx.numRows); const { totalQty: cutPcs, pendingShadeKeys } = computeCuttingTotalsAndPending(window, idx.sizes, idx.shades); if (pendingShadeKeys && pendingShadeKeys.size > 0) { processedCuttingLots.add(keyNorm); const shadeKeyToOriginal = new Map((idx.shades || []).map((sh) => [norm(sh), sh])); const pendingShadesList = Array.from(pendingShadeKeys).map((k) => shadeKeyToOriginal.get(k) || k); const agingDays = idx.parsedCutDate ? calcDaysDiff(idx.parsedCutDate) : 3; if (agingDays > 2) { const severity = agingDays >= 5 ? "CRITICAL" : "HIGH"; const rowFY = getFinancialYearFromDate(idx.savedAt); const latestUserRemark = extractLatestRemark(cuttingRemarksMap, idx.lot, ""); bottlenecks.push({ id: idx.lot + "-cutting-colour-pending", lotNumber: idx.lot, financialYear: rowFY, stageId: "cutting", stageName: "✂️ Cutting", stageRoute: "/cutting-report", cuttingCategory: "Colour Pending", reason: "Colour Pending (" + (pendingShadesList.join(", ") || "Pending Shades") + " • " + agingDays + "d)", severity, agingDays, garmentType: idx.garmentType || "—", style: idx.style || "—", fabric: idx.fabric || "—", brand: idx.brand || "—", section: idx.section || "—", season: idx.season || "—", partyName: idx.partyName || "—", directStitching: idx.isDirect ? "Yes" : "No", jobOrderNo: "—", poQty: idx.cuttingQty || cutPcs || 0, stageDoneQty: cutPcs, pendingQty: idx.cuttingQty || cutPcs || 0, variancePcs: idx.cuttingQty || cutPcs || 0, variancePct: 100, stageDate: idx.savedAt || "—", pendingShade: "Colour Pending: " + (pendingShadesList.join(", ") || "Pending"), cuttingDate: idx.savedAt || "Cutting In-Progress", cuttingScanned: idx.cuttingScanned || "—", userRemarks: latestUserRemark || "—", details: "Colour Pending (" + (pendingShadesList.join(', ') || 'Shades') + ") • Started: " + formatDisplayDate(idx.savedAt) + " • Days: " + agingDays + "d" }); } } } }); fabricIssuedMap.forEach((fabricInfo, keyNorm) => { const idx = idxMap.get(keyNorm); if (idx && idx.isCuttingDone) return; if (processedCuttingLots.has(keyNorm)) return; const parsedFabDate = parseAnyDate(fabricInfo.rawDate || fabricInfo.issueDate); const agingDays = parsedFabDate ? calcDaysDiff(parsedFabDate) : 3; if (agingDays > 2) { processedCuttingLots.add(keyNorm); const severity = agingDays >= 5 ? "CRITICAL" : "HIGH"; const rowFY = getFinancialYearFromDate(fabricInfo.issueDate); const latestUserRemark = extractLatestRemark(cuttingRemarksMap, fabricInfo.lotNumber, ""); bottlenecks.push({ id: fabricInfo.lotNumber + "-fabric-issued", lotNumber: fabricInfo.lotNumber, financialYear: rowFY, stageId: "cutting", stageName: "✂️ Cutting", stageRoute: "/cutting-report", cuttingCategory: "Fabric Issued", reason: "Fabric Issued but Not Cut (" + (fabricInfo.issueDate || "Issued") + " • " + agingDays + "d)", severity, agingDays, garmentType: idx?.garmentType || "—", style: idx?.style || "—", fabric: fabricInfo.fabric || idx?.fabric || "—", brand: idx?.brand || "—", section: idx?.section || "—", season: idx?.season || "—", partyName: idx?.partyName || "—", directStitching: idx?.isDirect ? "Yes" : "No", jobOrderNo: "—", poQty: 0, stageDoneQty: 0, pendingQty: 0, variancePcs: 0, variancePct: 100, stageDate: fabricInfo.issueDate || "—", pendingShade: "Fabric Issued (" + (fabricInfo.issueDate || "Issued") + ")", cuttingDate: "Fabric Issued: " + (fabricInfo.issueDate || "—"), cuttingScanned: "—", userRemarks: latestUserRemark || "—", details: "Fabric Issued on " + (fabricInfo.issueDate || "—") + " • Table: " + (fabricInfo.tableNumber || "—") + " • Rolls: " + (fabricInfo.rolls || 1) + " • Days: " + agingDays + "d" }); } });
 
       // =======================================================================
       // 🧵 STAGE 2: Embroidery Report (Pending if EMB NOT Done, Red Zone if > 5 Days)
@@ -1689,7 +1683,7 @@ export default function CriticalVarianceCombineReport() {
 
           const mwkFormatted = abbreviateMWK(idx.mwk || idx.section || job.section);
           const formattedIssueDate = formatDateToDDMMYY(idx.issueDate);
-          const latestWipRemark = getLatestWipRemarks(idx.wipStatus, false);
+          const fallbackDate = wu?.lastUpdated || idx.savedAt || idx.issueDate || null; const latestWipRemark = getLatestWipRemarks(idx.wipStatus, false, fallbackDate);
 
           bottlenecks.push({
             id: `${idx.lot}-stitching-wip`,
@@ -1714,7 +1708,7 @@ export default function CriticalVarianceCombineReport() {
             dateOfIssue: formattedIssueDate,
             stitchingDays: stitchAging,
             embPrintDate: embPrintDateFormatted,
-            wipStatus: formatLatestRemark(latestWipRemark, "WIP"),
+            wipStatus: latestWipRemark || "WIP",
             pintu: formatLatestRemark(
               (wu.pintuStatus && wu.pintuStatus !== "—" && wu.pintuStatus !== "N/A" ? wu.pintuStatus : "") ||
               extractLatestRemark(pendingStitchingRemarksMap, idx.lot, ""),
@@ -1880,6 +1874,11 @@ export default function CriticalVarianceCombineReport() {
       list = list.filter((r) => r.stageId === activeStageTab);
     }
 
+    // Filter by Cutting Sub-Category
+    if (activeStageTab === "cutting" && cuttingSubFilter !== "all") {
+      list = list.filter((r) => r.cuttingCategory === cuttingSubFilter);
+    }
+
     // Filter by Severity
     if (filterSeverity !== "all") {
       list = list.filter((r) => r.severity === filterSeverity);
@@ -1954,8 +1953,19 @@ export default function CriticalVarianceCombineReport() {
     minAgingDays,
     minVariancePcs,
     searchTerm,
-    sortConfig
+    sortConfig,
+    cuttingSubFilter
   ]);
+
+  const cuttingCategoryCounts = useMemo(() => {
+    const cuttingRows = fyBaseRows.filter((r) => r.stageId === "cutting");
+    return {
+      all: cuttingRows.length,
+      colourPending: cuttingRows.filter((r) => r.cuttingCategory === "Colour Pending").length,
+      fabricIssued: cuttingRows.filter((r) => r.cuttingCategory === "Fabric Issued").length,
+      cuttingPending: cuttingRows.filter((r) => r.cuttingCategory === "Cutting Pending" || !r.cuttingCategory).length,
+    };
+  }, [fyBaseRows]);
 
   /* ---------- Executive Analytics KPI Calculations ---------- */
   const analytics = useMemo(() => {
@@ -3001,7 +3011,7 @@ export default function CriticalVarianceCombineReport() {
         issueDate: r.dateOfIssue || r.stageDate || '—',
         days: days !== null ? `${days} days` : '—',
         embDate: r.embPrintDate || '—',
-        wipStatus: formatLatestRemark(r.wipStatus, 'WIP'),
+        wipStatus: r.wipStatus || 'WIP',
         pintu: formatLatestRemark(r.pintu, '—'),
         ea: formatLatestRemark(r.ea, '—'),
         status: r.status || 'Pending'
@@ -4921,32 +4931,28 @@ export default function CriticalVarianceCombineReport() {
     };
 
     const isStatusUpdatedToday = (wipStatus, status) => {
-      if (status === 'Completed') {
-        return true;
-      }
-      if (!wipStatus || wipStatus.trim() === '') {
-        return false;
-      }
+      if (status === 'Completed') return true;
+      if (!wipStatus || typeof wipStatus !== 'string' || wipStatus.trim() === '' || wipStatus === '—' || wipStatus === 'N/A' || wipStatus === 'WIP') return false;
       try {
-        if (typeof wipStatus === 'string' && !wipStatus.startsWith('[')) {
-          return false;
+        const today = new Date();
+        const dd = String(today.getDate()).padStart(2, '0');
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const yyyy = today.getFullYear();
+        const todayDash = `${dd}-${mm}-${yyyy}`;
+        const todaySlash = `${dd}/${mm}/${yyyy}`;
+        const todayIso = `${yyyy}-${mm}-${dd}`;
+        if (!wipStatus.trim().startsWith('[') && !wipStatus.trim().startsWith('{')) {
+          return wipStatus.includes(todayDash) || wipStatus.includes(todaySlash) || wipStatus.includes(todayIso);
         }
         const statusArray = JSON.parse(wipStatus);
         if (!Array.isArray(statusArray) || statusArray.length === 0) {
-          return false;
+          return wipStatus.includes(todayDash) || wipStatus.includes(todaySlash) || wipStatus.includes(todayIso);
         }
-        const sortedStatuses = [...statusArray].sort((a, b) => {
-          const dateA = new Date(a.timestamp).getTime();
-          const dateB = new Date(b.timestamp).getTime();
-          return dateB - dateA;
-        });
+        const sortedStatuses = [...statusArray].sort((a, b) => new Date(b?.timestamp || b?.date || 0).getTime() - new Date(a?.timestamp || a?.date || 0).getTime());
         const latestStatus = sortedStatuses[0];
-        if (!latestStatus || !latestStatus.timestamp) {
-          return false;
-        }
-        const today = new Date();
-        const statusDate = new Date(latestStatus.timestamp);
-        return statusDate.toDateString() === today.toDateString();
+        const ts = latestStatus?.timestamp || latestStatus?.date;
+        if (!ts) return false;
+        return new Date(ts).toDateString() === today.toDateString();
       } catch {
         return false;
       }
@@ -5060,9 +5066,9 @@ export default function CriticalVarianceCombineReport() {
       const eaValue = formatLatestRemark(item.ea, '—');
 
       const isUpdatedToday = isStatusUpdatedToday(item.wipStatus, isCompleted ? 'Completed' : 'Pending');
-      const wipDisplayValue = isCompleted
-        ? 'Done'
-        : (isUpdatedToday ? wipRemarks : 'Not updated');
+      const wipDisplayValue = isCompleted ? 'Done' : (item.wipStatus && item.wipStatus !== 'N/A' && item.wipStatus !== '-' ? item.wipStatus : '—');
+        // ? 'Done'
+        // : (isUpdatedToday ? wipRemarks : 'Not updated');
 
       const lotStatus = isCompleted ? 'Completed' : 'Pending';
       const issueDate = formatDateOfIssue(item.dateOfIssue || item.stageDate);
@@ -5191,7 +5197,7 @@ export default function CriticalVarianceCombineReport() {
         }
         if (col.id === 'wipStatus') {
           return {
-            content: cleanCellText(wipDisplayValue),
+            content: wipDisplayValue,
             styles: { cellWidth, fontSize: fontSz, halign: 'center', fillColor: !isCompleted && !isUpdatedToday ? [255, 235, 235] : rowBgColor, fontStyle: isCompleted ? 'bold' : (wipRemarks !== 'N/A' ? 'bold' : 'normal'), textColor: [0, 0, 0], cellPadding: cellPad }
           };
         }
@@ -7933,6 +7939,74 @@ export default function CriticalVarianceCombineReport() {
               <span style={{ background: "#dc2626", color: "#ffffff", fontSize: "0.74rem", fontWeight: 800, padding: "3px 10px", borderRadius: "12px" }}>
                 {filteredRows.length} Red Zone Lots
               </span>
+              {activeStageTab === "cutting" && (
+                <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", marginLeft: "8px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => setCuttingSubFilter("all")}
+                    style={{
+                      background: cuttingSubFilter === "all" ? "#0f172a" : "#f1f5f9",
+                      color: cuttingSubFilter === "all" ? "#ffffff" : "#475569",
+                      border: "1px solid " + (cuttingSubFilter === "all" ? "#0f172a" : "#cbd5e1"),
+                      padding: "3px 10px",
+                      borderRadius: "14px",
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      cursor: "pointer"
+                    }}
+                  >
+                    All ({cuttingCategoryCounts.all})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCuttingSubFilter("Colour Pending")}
+                    style={{
+                      background: cuttingSubFilter === "Colour Pending" ? "#d97706" : "#fef3c7",
+                      color: cuttingSubFilter === "Colour Pending" ? "#ffffff" : "#92400e",
+                      border: "1px solid " + (cuttingSubFilter === "Colour Pending" ? "#d97706" : "#fde68a"),
+                      padding: "3px 10px",
+                      borderRadius: "14px",
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      cursor: "pointer"
+                    }}
+                  >
+                    🎨 Colour Pending ({cuttingCategoryCounts.colourPending})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCuttingSubFilter("Fabric Issued")}
+                    style={{
+                      background: cuttingSubFilter === "Fabric Issued" ? "#059669" : "#ecfdf5",
+                      color: cuttingSubFilter === "Fabric Issued" ? "#ffffff" : "#065f46",
+                      border: "1px solid " + (cuttingSubFilter === "Fabric Issued" ? "#059669" : "#a7f3d0"),
+                      padding: "3px 10px",
+                      borderRadius: "14px",
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      cursor: "pointer"
+                    }}
+                  >
+                    🧵 Fabric Issued ({cuttingCategoryCounts.fabricIssued})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCuttingSubFilter("Cutting Pending")}
+                    style={{
+                      background: cuttingSubFilter === "Cutting Pending" ? "#475569" : "#f8fafc",
+                      color: cuttingSubFilter === "Cutting Pending" ? "#ffffff" : "#64748b",
+                      border: "1px solid " + (cuttingSubFilter === "Cutting Pending" ? "#475569" : "#cbd5e1"),
+                      padding: "3px 10px",
+                      borderRadius: "14px",
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      cursor: "pointer"
+                    }}
+                  >
+                    ✂️ Cutting Pending ({cuttingCategoryCounts.cuttingPending})
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Quick Department Export Buttons */}
@@ -8346,7 +8420,7 @@ export default function CriticalVarianceCombineReport() {
                           <td style={{ padding: "10px 8px", textAlign: "center", background: "#fee2e2", color: "#dc2626", fontWeight: 900, fontSize: "0.85rem", borderLeft: "2px solid #f87171", borderRight: "2px solid #f87171" }}>
                             {r.agingDays}d
                           </td>
-                          <td style={{ padding: "10px 10px", color: "#475569", fontSize: "0.78rem" }}>{r.pendingShade || "—"}</td>
+                          <td style={{ padding: "10px 10px", fontSize: "0.78rem" }}>{r.cuttingCategory === "Colour Pending" ? (<span style={{ display: "inline-flex", alignItems: "center", gap: "4px", background: "#fef3c7", color: "#92400e", padding: "3px 8px", borderRadius: "6px", fontWeight: 700, border: "1px solid #fde68a" }}>🎨 {r.pendingShade || "Colour Pending"}</span>) : r.cuttingCategory === "Fabric Issued" ? (<span style={{ display: "inline-flex", alignItems: "center", gap: "4px", background: "#ecfdf5", color: "#065f46", padding: "3px 8px", borderRadius: "6px", fontWeight: 700, border: "1px solid #a7f3d0" }}>🧵 {r.pendingShade || "Fabric Issued"}</span>) : (<span style={{ color: "#64748b" }}>{r.pendingShade || "—"}</span>)}</td>
                           <td style={{ padding: "10px 10px", textAlign: "center", color: "#64748b", fontSize: "0.78rem" }}>{r.cuttingDate || "—"}</td>
                           <td style={{ padding: "10px 10px", textAlign: "center", color: "#64748b", fontSize: "0.78rem" }}>{r.cuttingScanned || "—"}</td>
                           <td style={{ padding: "10px 10px", fontSize: "0.75rem", maxWidth: "200px" }}>
@@ -8604,7 +8678,7 @@ export default function CriticalVarianceCombineReport() {
                             {r.agingDays}d
                           </td>
                           <td style={{ padding: "10px 10px", textAlign: "center", color: "#64748b", fontSize: "0.78rem" }}>{r.embPrintDate || "—"}</td>
-                          <td style={{ padding: "10px 10px", fontWeight: 600, color: "#475569", fontSize: "0.78rem" }}>{formatLatestRemark(r.wipStatus, "WIP")}</td>
+                          <td style={{ padding: "10px 10px", fontSize: "0.78rem" }}><span style={{ display: "inline-block", fontWeight: 600, color: !isStatusUpdatedToday(r.wipStatus, r.status) ? "#b91c1c" : "#334155", background: !isStatusUpdatedToday(r.wipStatus, r.status) ? "#fee2e2" : "transparent", padding: !isStatusUpdatedToday(r.wipStatus, r.status) ? "3px 8px" : "0", borderRadius: "6px" }}>{r.wipStatus || "WIP"}</span></td>
                           <td style={{ padding: "10px 10px", fontSize: "0.75rem", maxWidth: "160px" }}>
                             {formatLatestRemark(r.pintu, "—") !== "—" ? (
                               <span style={{ display: "inline-block", background: "#f3e8ff", color: "#7c3aed", padding: "3px 7px", borderRadius: "6px", fontWeight: 700 }}>

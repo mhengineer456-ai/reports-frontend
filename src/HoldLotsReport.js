@@ -340,6 +340,7 @@ export default function HoldLotsReport() {
                   shade: getVal(row, "Shade") || getVal(row, "Color") || row[12] || "—",
                   size: getVal(row, "Size") || row[13] || "—",
                   reason: getVal(row, "Hold Reason") || getVal(row, "Reason") || getVal(row, "Remarks") || row[14] || "Under Review",
+                  holdUntilDate: getVal(row, "Hold Until Date") || getVal(row, "Hold Till Date") || getVal(row, "Target Release Date") || getVal(row, "Hold Till") || "",
                   location: location || "—",
                   holdBy: holdBy || "—",
                   approvedBy: approvedBy || "—",
@@ -1339,7 +1340,8 @@ export default function HoldLotsReport() {
                     <th>Priority</th>
                     <th>Department</th>
                     <th>Location</th>
-                    <th>Hold Reason</th>
+                    <th>Hold Reason & Remarks</th>
+                    <th>Hold Till Date</th>
                     <th>Job Order</th>
                     <th>Hold By</th>
                     <th>Approved By</th>
@@ -1397,8 +1399,17 @@ export default function HoldLotsReport() {
                             <span style={{ color: "#94a3b8" }}>—</span>
                           )}
                         </td>
-                        <td style={{ textAlign: "left", maxWidth: "220px", fontSize: "0.82rem", fontWeight: 600, color: "#991b1b" }}>
+                        <td style={{ textAlign: "left", maxWidth: "240px", fontSize: "0.82rem", fontWeight: 600, color: "#991b1b" }}>
                           {item.reason}
+                        </td>
+                        <td>
+                          {item.holdUntilDate ? (
+                            <span style={{ background: "#fffbeb", color: "#b45309", padding: "2px 8px", borderRadius: "6px", fontWeight: 800, fontSize: "0.78rem", border: "1px solid #fde68a", whiteSpace: "nowrap" }}>
+                              📅 {item.holdUntilDate}
+                            </span>
+                          ) : (
+                            <span style={{ color: "#94a3b8" }}>—</span>
+                          )}
                         </td>
                         <td>{item.jobOrderNo || "—"}</td>
                         <td style={{ fontSize: "0.82rem" }}>{item.holdBy || "—"}</td>

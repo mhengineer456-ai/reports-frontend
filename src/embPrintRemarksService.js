@@ -57,12 +57,12 @@ export const formatLatestRemark = (rawVal, fallback = "—") => {
     const validItems = val.filter((item) => item !== null && item !== undefined && item !== "");
     if (validItems.length === 0) return fallback;
 
-    const hasTimestamp = validItems.some((item) => item && typeof item === "object" && item.timestamp);
+    const hasTimestamp = validItems.some((item) => item && typeof item === "object" && (item.timestamp || item.date));
     let sorted = validItems;
     if (hasTimestamp) {
       sorted = [...validItems].sort((a, b) => {
-        const timeA = a?.timestamp ? new Date(a.timestamp).getTime() : 0;
-        const timeB = b?.timestamp ? new Date(b.timestamp).getTime() : 0;
+        const timeA = a?.timestamp ? new Date(a.timestamp).getTime() : (a?.date ? new Date(a.date).getTime() : 0);
+        const timeB = b?.timestamp ? new Date(b.timestamp).getTime() : (b?.date ? new Date(b.date).getTime() : 0);
         if (!isNaN(timeA) && !isNaN(timeB) && (timeA > 0 || timeB > 0)) {
           return timeB - timeA;
         }
@@ -72,7 +72,7 @@ export const formatLatestRemark = (rawVal, fallback = "—") => {
 
     const latestItem = (hasTimestamp && sorted[0]?.timestamp && !isNaN(new Date(sorted[0].timestamp).getTime()))
       ? sorted[0]
-      : validItems[validItems.length - 1];
+      : (hasTimestamp && sorted[0]?.date && !isNaN(new Date(sorted[0].date).getTime()) ? sorted[0] : validItems[0]);
 
     return formatLatestRemark(latestItem, fallback);
   }
@@ -82,14 +82,22 @@ export const formatLatestRemark = (rawVal, fallback = "—") => {
     const rem = (val.remarks ?? val.remark ?? val.userRemarks ?? val.text ?? val.note ?? val.comment ?? "").toString().trim();
     const st = (val.status ?? val.wipStatus ?? val.updateType ?? val.compStatus ?? val.state ?? "").toString().trim();
 
-    if (rem && rem !== "—" && rem !== "N/A" && rem !== "-") {
-      return formatLatestRemark(rem, fallback);
+    const isClean = (str) => str && str !== "—" && str !== "N/A" && str !== "-" && str !== "null" && str !== "undefined";
+
+    if (isClean(st) && isClean(rem)) {
+      if (st.toLowerCase() === rem.toLowerCase()) {
+        return formatLatestRemark(st, fallback);
+      }
+      return `${formatLatestRemark(st, fallback)} - ${formatLatestRemark(rem, fallback)}`;
     }
-    if (st && st !== "—" && st !== "N/A" && st !== "-") {
+    if (isClean(st)) {
       return formatLatestRemark(st, fallback);
     }
+    if (isClean(rem)) {
+      return formatLatestRemark(rem, fallback);
+    }
     for (const v of Object.values(val)) {
-      if (typeof v === "string" && v.trim() && v !== "—" && v !== "N/A" && v !== "-") {
+      if (isClean(v)) {
         return formatLatestRemark(v, fallback);
       }
     }
@@ -105,6 +113,131 @@ export const formatLatestRemark = (rawVal, fallback = "—") => {
     finalStr = finalStr.replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
   }
   return finalStr;
+};
+
+/** Helper function to format any date into DD-MM-YYYY */
+/** Helper function to format any date into DD-MM-YYYY */
+export const formatDateToDDMMYYYY = (dateInput) => {
+  if (!dateInput) return null;
+  const str = String(dateInput).trim();
+  if (!str || str === 'N/A' || str === '-' || str === '—' || str === 'null' || str === 'undefined') return null;
+
+  // 1. If string DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD
+  const parts = str.split(/[\/\-\.]/);
+  if (parts.length === 3) {
+    const p0 = parseInt(parts[0], 10);
+    const p1 = parseInt(parts[1], 10);
+    const p2 = parseInt(parts[2], 10);
+
+    // YYYY-MM-DD format (year first)
+    if (p0 > 1000 && !isNaN(p0) && !isNaN(p1) && !isNaN(p2)) {
+      return `${String(p2).padStart(2, '0')}-${String(p1).padStart(2, '0')}-${p0}`;
+    }
+    // DD-MM-YYYY or DD/MM/YYYY format (day first)
+    if (p2 > 1000 || p2 >= 20) {
+      const fullYear = p2 < 100 ? 2000 + p2 : p2;
+      if (!isNaN(p0) && !isNaN(p1) && !isNaN(fullYear)) {
+        return `${String(p0).padStart(2, '0')}-${String(p1).padStart(2, '0')}-${fullYear}`;
+      }
+    }
+  }
+
+  // 2. If ISO date, timestamp or standard Date string
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}-${month}-${year}`;
+  }
+
+  return null;
+};
+
+/**
+ * Extracts latest remark AND appends the date of updation formatted as "Remark Text (DD-MM-YYYY)"
+ */
+export const formatLatestRemarkWithDate = (rawVal, fallback = "—", fallbackDate = null) => {
+  const remarkText = formatLatestRemark(rawVal, fallback);
+  if (!remarkText || remarkText === fallback || remarkText === "N/A" || remarkText === "—") {
+    if (fallbackDate) {
+      const formattedFallbackDate = formatDateToDDMMYYYY(fallbackDate);
+      if (formattedFallbackDate) return `${fallback} (${formattedFallbackDate})`;
+    }
+    return fallback;
+  }
+
+  // Check if date is already in remarkText e.g. "Tailor Working (25-09-2026)" or "Tailor Working 25/09/2026"
+  const existingDateMatch = remarkText.match(/\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b/);
+  if (existingDateMatch && existingDateMatch[1]) {
+    const cleanDate = formatDateToDDMMYYYY(existingDateMatch[1]);
+    if (cleanDate) {
+      if (remarkText.includes(`(${cleanDate})`)) {
+        return remarkText;
+      }
+      const textWithoutDate = remarkText.replace(existingDateMatch[0], '').replace(/[\(\)\-\s]+$/, '').trim();
+      return `${textWithoutDate || remarkText} (${cleanDate})`;
+    }
+  }
+
+  // Try extracting date from JSON object / array inside rawVal
+  let extractedDate = null;
+  let parsed = rawVal;
+  if (typeof rawVal === "string" && (rawVal.trim().startsWith("[") || rawVal.trim().startsWith("{") || rawVal.trim().startsWith('"['))) {
+    try {
+      parsed = JSON.parse(rawVal.trim());
+    } catch (e) {
+      try {
+        parsed = JSON.parse(rawVal.trim().replace(/\\"/g, '"'));
+      } catch (e2) {}
+    }
+  }
+
+  // Handle double-stringified JSON
+  if (typeof parsed === "string" && (parsed.trim().startsWith("[") || parsed.trim().startsWith("{"))) {
+    try {
+      parsed = JSON.parse(parsed.trim());
+    } catch (e) {}
+  }
+
+  const getItemTimestamp = (item) => {
+    if (!item || typeof item !== "object") return 0;
+    const t = item.timestamp || item.date || item.updatedAt || item.time || item.created_at;
+    if (!t) return 0;
+    const time = new Date(t).getTime();
+    return isNaN(time) ? 0 : time;
+  };
+
+  if (Array.isArray(parsed) && parsed.length > 0) {
+    const validItems = parsed.filter((item) => item !== null && item !== undefined && item !== "");
+    const sorted = [...validItems].sort((a, b) => getItemTimestamp(b) - getItemTimestamp(a));
+
+    for (const item of sorted) {
+      if (item && typeof item === "object") {
+        const itemDate = item.timestamp || item.date || item.updatedAt || item.time || item.created_at;
+        if (itemDate) {
+          extractedDate = formatDateToDDMMYYYY(itemDate);
+          if (extractedDate) break;
+        }
+      }
+    }
+  } else if (parsed && typeof parsed === "object") {
+    const itemDate = parsed.timestamp || parsed.date || parsed.updatedAt || parsed.time || parsed.created_at;
+    if (itemDate) {
+      extractedDate = formatDateToDDMMYYYY(itemDate);
+    }
+  }
+
+  const finalDate = extractedDate || formatDateToDDMMYYYY(fallbackDate);
+
+  if (finalDate) {
+    if (remarkText.includes(`(${finalDate})`)) {
+      return remarkText;
+    }
+    return `${remarkText} (${finalDate})`;
+  }
+
+  return remarkText;
 };
 
 /**

@@ -56,6 +56,12 @@ export default function HoldLotManager() {
   const [location, setLocation] = useState("");
   const [holdReason, setHoldReason] = useState("Fabric Defect / Mismatch");
   const [customReason, setCustomReason] = useState("");
+  const [detailedReason, setDetailedReason] = useState("");
+  const [holdUntilDate, setHoldUntilDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    return d.toISOString().split("T")[0];
+  });
   const [priority, setPriority] = useState("High Alert");
   const [submittingHold, setSubmittingHold] = useState(false);
   const [successToast, setSuccessToast] = useState(null);
@@ -118,6 +124,7 @@ export default function HoldLotManager() {
             shade: getVal(row, "Shade") || row[12],
             size: getVal(row, "Size") || row[13],
             reason: getVal(row, "Hold Reason") || row[14],
+            holdUntilDate: getVal(row, "Hold Until Date") || getVal(row, "Hold Till Date") || getVal(row, "Target Release Date") || getVal(row, "Hold Till") || "",
             location: getVal(row, "Location") || getVal(row, "Hold Location") || getVal(row, "Placement") || row[15] || "",
             holdBy: getVal(row, "Hold By") || row[16] || row[15],
             approvedBy: getVal(row, "Approved By") || row[17] || row[16],
@@ -236,6 +243,10 @@ export default function HoldLotManager() {
     setLocation("");
     setHoldReason("Fabric Defect / Mismatch");
     setCustomReason("");
+    setDetailedReason("");
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + 3);
+    setHoldUntilDate(targetDate.toISOString().split("T")[0]);
     setPriority("High Alert");
   };
 
@@ -244,6 +255,14 @@ export default function HoldLotManager() {
     e.preventDefault();
     if (!lotDetails || !selectedDept) return;
 
+    if (!detailedReason.trim()) {
+      alert("Please enter a detailed reason / root cause for putting this lot on hold.");
+      return;
+    }
+    if (!holdUntilDate) {
+      alert("Please select the date until which this lot is on hold.");
+      return;
+    }
     if (!location.trim()) {
       alert("Please enter the location / rack / bin where this hold lot is placed.");
       return;
@@ -257,7 +276,9 @@ export default function HoldLotManager() {
       return;
     }
 
-    const finalReason = holdReason === "Other" ? (customReason.trim() || "Unspecified Hold Reason") : holdReason;
+    const cleanCategory = holdReason === "Other" ? (customReason.trim() || "Custom Hold") : holdReason;
+    const cleanDetails = detailedReason.trim();
+    const finalReason = cleanDetails ? `${cleanCategory} — ${cleanDetails}` : cleanCategory;
     const holdId = `HOLD-${Date.now().toString().slice(-6)}`;
     const nowIso = new Date().toISOString();
     const cleanLocation = location.trim();
@@ -280,6 +301,9 @@ export default function HoldLotManager() {
       shade: lotDetails.shade,
       size: lotDetails.size,
       reason: finalReason,
+      category: cleanCategory,
+      detailedReason: cleanDetails,
+      holdUntilDate: holdUntilDate,
       location: cleanLocation,
       holdBy: holdBy.trim(),
       approvedBy: approvedBy.trim(),
@@ -858,7 +882,8 @@ export default function HoldLotManager() {
                     <th>Department</th>
                     <th>Party & Style</th>
                     <th>Quantity</th>
-                    <th>Hold Reason</th>
+                    <th>Hold Reason & Remarks</th>
+                    <th>📅 Hold Till Date</th>
                     <th>📍 Location</th>
                     <th>Hold By</th>
                     <th>Approved By</th>
@@ -869,6 +894,8 @@ export default function HoldLotManager() {
                 <tbody>
                   {holdRecords.map((item) => {
                     const isReleased = String(item.status || "").toUpperCase() === "RELEASED";
+                    const isOverdue = !isReleased && item.holdUntilDate && new Date(item.holdUntilDate) < new Date().setHours(0, 0, 0, 0);
+
                     return (
                       <tr key={item.id}>
                         <td style={{ fontWeight: 800, color: "#64748b" }}>{item.id}</td>
@@ -895,10 +922,32 @@ export default function HoldLotManager() {
                         <td style={{ fontWeight: 800, color: "#d97706" }}>
                           {item.quantity} {item.unit}
                         </td>
-                        <td>
-                          <span style={{ background: "#fee2e2", color: "#991b1b", padding: "3px 8px", borderRadius: "6px", fontWeight: 700, fontSize: "11px", border: "1px solid #fecaca" }}>
+                        <td style={{ maxWidth: "240px" }}>
+                          <span style={{ background: "#fee2e2", color: "#991b1b", padding: "3px 8px", borderRadius: "6px", fontWeight: 700, fontSize: "11px", border: "1px solid #fecaca", display: "inline-block", lineHeight: "1.4" }}>
                             ⚠️ {item.reason}
                           </span>
+                        </td>
+                        <td>
+                          {item.holdUntilDate ? (
+                            <span style={{
+                              background: isReleased ? "#ecfdf5" : (isOverdue ? "#fee2e2" : "#fffbeb"),
+                              color: isReleased ? "#065f46" : (isOverdue ? "#991b1b" : "#b45309"),
+                              padding: "3px 8px",
+                              borderRadius: "6px",
+                              fontWeight: 800,
+                              fontSize: "11px",
+                              border: `1px solid ${isReleased ? "#a7f3d0" : (isOverdue ? "#fecaca" : "#fde68a")}`,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              whiteSpace: "nowrap"
+                            }}>
+                              📅 {item.holdUntilDate}
+                              {isOverdue && " 🚨 OVERDUE"}
+                            </span>
+                          ) : (
+                            <span style={{ color: "#94a3b8" }}>—</span>
+                          )}
                         </td>
                         <td>
                           <span style={{ background: "#f1f5f9", color: "#0f172a", padding: "3px 8px", borderRadius: "6px", fontWeight: 700, fontSize: "11px", border: "1px solid #cbd5e1", display: "inline-flex", alignItems: "center", gap: "4px", whiteSpace: "nowrap" }}>
@@ -981,17 +1030,44 @@ export default function HoldLotManager() {
 
                 {holdReason === "Other" && (
                   <div className="hlm-form-group">
-                    <label className="hlm-form-label">Specify Custom Reason *</label>
+                    <label className="hlm-form-label">Specify Custom Reason Category *</label>
                     <input
                       type="text"
                       value={customReason}
                       onChange={(e) => setCustomReason(e.target.value)}
-                      placeholder="Type detailed reason for hold..."
+                      placeholder="Type custom category name..."
                       className="hlm-input"
                       required
                     />
                   </div>
                 )}
+
+                {/* Proper Reason / Detailed Explanation Input */}
+                <div className="hlm-form-group">
+                  <label className="hlm-form-label">📝 Proper Reason / Detailed Explanation & Action Plan *</label>
+                  <textarea
+                    value={detailedReason}
+                    onChange={(e) => setDetailedReason(e.target.value)}
+                    placeholder="Enter detailed reason, root cause description, defect notes, or resolution required before release..."
+                    className="hlm-input"
+                    rows={3}
+                    style={{ resize: "vertical", fontFamily: "inherit" }}
+                    required
+                  />
+                </div>
+
+                {/* Hold Until Date Input */}
+                <div className="hlm-form-group">
+                  <label className="hlm-form-label">📅 Hold Till Date (Target Resolution / Expected Release Date) *</label>
+                  <input
+                    type="date"
+                    value={holdUntilDate}
+                    onChange={(e) => setHoldUntilDate(e.target.value)}
+                    className="hlm-input"
+                    style={{ fontWeight: "800", color: "#991b1b" }}
+                    required
+                  />
+                </div>
 
                 {/* Location / Placement Area */}
                 <div className="hlm-form-group">
